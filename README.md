@@ -29,6 +29,7 @@ npm run build
 - IndexedDB-backed Vault snapshot persistence and in-app Markdown note preview
 - Persistent browser directory handle with manual Vault rescan when File System Access API is available
 - Optional loopback-only local Vault adapter with 15-second revision polling and read-only Markdown access
+- Local model registry with chat-model selector and a persisted knowledge-base retrieval profile
 - Visual concept in `design/concept-desktop.png`
 
 ## Local Vault adapter
@@ -43,9 +44,13 @@ The adapter listens only on `127.0.0.1:4317`, serves Markdown files under the se
 
 Use `BIORESEARCH_VAULT_PORT` to change the port or `VITE_VAULT_API_URL` when the adapter runs at another local URL.
 
+## Model and retrieval profile
+
+The composer model selector currently stores a local profile choice without making provider calls. The `Settings` action opens the knowledge-base profile with Markdown parsing, embedding model, optional reranker, Top K, chunk size/overlap, similarity threshold, hybrid search, and citation settings. Provider connections and real vector indexing are the next integration layer.
+
 ## Next integration steps
 
-1. Add vector retrieval and source-aware answer generation.
-2. Add note editing safeguards and explicit change conflict handling.
-3. Add an MCP bridge over the same local Vault adapter.
-4. Move the stable Web app into an Electron shell with the same renderer.
+1. Connect the model registry to OpenAI-compatible, Ollama, Gemini, and other providers.
+2. Add vector retrieval and source-aware answer generation.
+3. Add note editing safeguards and explicit change conflict handling.
+4. Add an MCP bridge over the same local Vault adapter, then move the stable Web app into Electron.

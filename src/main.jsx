@@ -17,6 +17,7 @@ import {
   FileText,
   FlaskConical,
   GitBranch,
+  Info,
   Layers3,
   LoaderCircle,
   MessageSquare,
@@ -33,9 +34,11 @@ import {
   Sparkles,
   ThumbsDown,
   ThumbsUp,
+  X,
 } from 'lucide-react'
 import { buildVaultIndex, getVaultName, parseVaultDirectory, parseVaultFiles } from './vault.js'
 import { loadLocalVault } from './localVault.js'
+import { DEFAULT_MODEL_CONFIG, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
 import './styles.css'
 
@@ -121,7 +124,90 @@ function LogoMark() {
   )
 }
 
-function Sidebar({ activeSection, setActiveSection, onConnectVault, onSyncVault, vaultName, vaultNoteCount, syncState, vaultSource, localAdapterState }) {
+function ModelPicker({ selectedModel, models, onSelect, disabled = false }) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+    const handlePointerDown = (event) => {
+      if (!rootRef.current?.contains(event.target)) setOpen(false)
+    }
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    window.addEventListener('pointerdown', handlePointerDown)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [open])
+
+  return (
+    <div className="model-picker" ref={rootRef}>
+      <button className="model-select" onClick={() => setOpen(!open)} disabled={disabled} aria-haspopup="menu" aria-expanded={open}>
+        <span>{selectedModel.name}</span><ChevronDown size={14} />
+      </button>
+      {open && <div className="model-menu" role="menu" aria-label="Research model">
+        <div className="model-menu-heading">Research model</div>
+        {models.map((model) => (
+          <button className={`model-option ${model.id === selectedModel.id ? 'selected' : ''}`} key={model.id} onClick={() => { onSelect(model.id); setOpen(false) }} role="menuitem">
+            <span className="model-option-main"><strong>{model.name}</strong><small>{model.provider}</small></span>
+            <span className={`model-readiness ${model.ready ? 'ready' : ''}`}>{model.ready ? 'ready' : 'profile'}</span>
+          </button>
+        ))}
+        <div className="model-menu-note">Provider connections will be added in the next integration step.</div>
+      </div>}
+    </div>
+  )
+}
+
+function KnowledgeSettingsModal({ config, onClose, onSave }) {
+  const [draft, setDraft] = useState(config)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const embeddingModels = getModelsByRole('embedding')
+  const rerankModels = getModelsByRole('rerank')
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
+  const update = (key, value) => setDraft((current) => ({ ...current, [key]: value }))
+  const modelOption = (model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>
+
+  return (
+    <div className="settings-modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="settings-modal" role="dialog" aria-modal="true" aria-label="Knowledge base settings">
+        <header className="settings-modal-header">
+          <div><span className="settings-modal-kicker">Retrieval profile</span><h2>Knowledge base settings</h2><p>Configure how research notes become evidence for the agent.</p></div>
+          <button className="note-preview-close" onClick={onClose} aria-label="Close knowledge base settings"><X size={18} /></button>
+        </header>
+        <div className="settings-modal-body">
+          <label className="setting-field"><span>Document processing <Info size={14} /></span><select value={draft.parserId} onChange={(event) => update('parserId', event.target.value)}><option value="markdown">Markdown-aware parser</option><option value="plain-text">Plain text fallback</option></select><small>Preserves frontmatter, headings, wikilinks, formulas, and source paths.</small></label>
+          <label className="setting-field"><span>Embedding model <Info size={14} /></span><select value={draft.embeddingModelId} onChange={(event) => update('embeddingModelId', event.target.value)}><option value="none">Not configured</option>{embeddingModels.map(modelOption)}</select><small>Used when building the vector index for the connected Vault.</small></label>
+          <label className="setting-field"><span>Rerank model <Info size={14} /></span><select value={draft.rerankModelId} onChange={(event) => update('rerankModelId', event.target.value)}><option value="none">Disabled</option>{rerankModels.map(modelOption)}</select><small>Optional cross-encoder pass after the first retrieval.</small></label>
+          <label className="setting-range"><span><strong>Top K evidence chunks</strong><output>{draft.topK}</output></span><input type="range" min="1" max="50" value={draft.topK} onChange={(event) => update('topK', Number(event.target.value))} /><small><span>1</span><span>50</span></small></label>
+          <button className="advanced-toggle" onClick={() => setAdvancedOpen(!advancedOpen)}><strong>Advanced settings</strong>{advancedOpen ? <ChevronUp size={17} /> : <ChevronDown size={17} />}</button>
+          {advancedOpen && <div className="advanced-settings">
+            <label className="inline-setting"><span>Chunk size</span><input type="number" min="200" max="4000" step="50" value={draft.chunkSize} onChange={(event) => update('chunkSize', Number(event.target.value))} /></label>
+            <label className="inline-setting"><span>Chunk overlap</span><input type="number" min="0" max="1000" step="20" value={draft.chunkOverlap} onChange={(event) => update('chunkOverlap', Number(event.target.value))} /></label>
+            <label className="setting-range"><span><strong>Similarity threshold</strong><output>{draft.similarityThreshold.toFixed(2)}</output></span><input type="range" min="0" max="1" step="0.05" value={draft.similarityThreshold} onChange={(event) => update('similarityThreshold', Number(event.target.value))} /><small><span>0.00</span><span>1.00</span></small></label>
+            <label className="toggle-setting"><span><strong>Hybrid search</strong><small>Combine keyword and vector retrieval.</small></span><input type="checkbox" checked={draft.hybridSearch} onChange={(event) => update('hybridSearch', event.target.checked)} /></label>
+            <label className="toggle-setting"><span><strong>Require source citations</strong><small>Keep note paths attached to generated answers.</small></span><input type="checkbox" checked={draft.citations} onChange={(event) => update('citations', event.target.checked)} /></label>
+          </div>}
+        </div>
+        <footer className="settings-modal-footer"><button className="text-button" onClick={() => setDraft(DEFAULT_MODEL_CONFIG)}>Restore defaults</button><button className="primary-button" onClick={() => onSave(draft)}>Save settings</button></footer>
+      </section>
+    </div>
+  )
+}
+
+function Sidebar({ activeSection, setActiveSection, onConnectVault, onSyncVault, onOpenSettings, vaultName, vaultNoteCount, syncState, vaultSource, localAdapterState }) {
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -153,7 +239,7 @@ function Sidebar({ activeSection, setActiveSection, onConnectVault, onSyncVault,
         </button>
         {vaultName && <button className="settings-link sync-link" onClick={onSyncVault} disabled={syncState === 'syncing'}><RefreshCw className={syncState === 'syncing' ? 'spin' : ''} size={15} /> {syncState === 'syncing' ? 'Syncing vault' : syncState === 'needs-permission' ? 'Reconnect vault' : 'Sync vault'}</button>}
         {vaultSource === 'local-adapter' && <div className={`adapter-status ${localAdapterState}`}><Database size={14} /><span>{localAdapterState === 'ready' ? 'Local adapter online' : 'Local adapter offline'}</span>{localAdapterState === 'ready' && <small>auto sync 15s</small>}</div>}
-        <button className="settings-link"><Settings2 size={16} /> Settings</button>
+        <button className="settings-link" onClick={onOpenSettings}><Settings2 size={16} /> Settings</button>
       </div>
     </aside>
   )
@@ -227,7 +313,7 @@ function EvidenceTrail({ activeStage }) {
   )
 }
 
-function Composer({ value, setValue, onSubmit, disabled }) {
+function Composer({ value, setValue, onSubmit, disabled, selectedModel, models, onSelectModel }) {
   const textareaRef = useRef(null)
   const handleKeyDown = (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -254,7 +340,7 @@ function Composer({ value, setValue, onSubmit, disabled }) {
             <button aria-label="Insert code"><Code2 size={18} /></button>
           </div>
           <div className="composer-submit">
-            <button className="model-select">Smart (Default) <ChevronDown size={14} /></button>
+            <ModelPicker selectedModel={selectedModel} models={models} onSelect={onSelectModel} disabled={disabled} />
             <button className="send-button" onClick={onSubmit} disabled={disabled || !value.trim()} aria-label="Send question">
               {disabled ? <LoaderCircle className="spin" size={19} /> : <Send size={19} />}
             </button>
@@ -319,11 +405,11 @@ function NotePreview({ note, onClose }) {
   )
 }
 
-function RetrievalPath({ activeStage, vaultName }) {
+function RetrievalPath({ activeStage, vaultName, topK, rerankLabel }) {
   const path = [
     ['Query', 'Which spatial transcriptomics methods...', 'done'],
-    ['Vector search (top-k=50)', vaultName ? `vault: ${vaultName}` : 'vault: tumor-niche', 'done'],
-    ['Reranking', 'bge-reranker-large', 'done'],
+    [`Vector search (top-k=${topK})`, vaultName ? `vault: ${vaultName}` : 'vault: tumor-niche', 'done'],
+    ['Reranking', rerankLabel, 'done'],
     ['Selected (6 sources)', 'see sources below', 'done'],
     ['Synthesis', activeStage >= 4 ? 'Answer generated' : 'Agent working...', activeStage >= 4 ? 'done' : 'current'],
   ]
@@ -379,12 +465,12 @@ function Sources({ sources }) {
   )
 }
 
-function Inspector({ activeStage, running, onPause, linkedNotes, sources, vaultName, onOpenNote }) {
+function Inspector({ activeStage, running, onPause, linkedNotes, sources, vaultName, topK, rerankLabel, onOpenNote }) {
   return (
     <aside className="inspector">
       <div className="inspector-title"><BookOpen size={18} /> <span>Knowledge context</span><ChevronUp size={16} /></div>
       <LinkedNotes notes={linkedNotes} onOpenNote={onOpenNote} />
-      <RetrievalPath activeStage={activeStage} vaultName={vaultName} />
+      <RetrievalPath activeStage={activeStage} vaultName={vaultName} topK={topK} rerankLabel={rerankLabel} />
       <AgentStatus activeStage={activeStage} running={running} onPause={onPause} />
       <Sources sources={sources} />
     </aside>
@@ -451,9 +537,14 @@ function App() {
   const [localRevision, setLocalRevision] = useState('')
   const [syncState, setSyncState] = useState('idle')
   const [selectedNote, setSelectedNote] = useState(null)
+  const [modelConfig, setModelConfig] = useState(DEFAULT_MODEL_CONFIG)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const vaultInputRef = useRef(null)
 
   const vaultIndex = useMemo(() => buildVaultIndex(vaultNotes), [vaultNotes])
+  const chatModels = useMemo(() => getModelsByRole('chat'), [])
+  const selectedModel = useMemo(() => getModelById(modelConfig.chatModelId), [modelConfig.chatModelId])
+  const rerankModel = useMemo(() => MODEL_REGISTRY.find((model) => model.id === modelConfig.rerankModelId), [modelConfig.rerankModelId])
   const inspectorNotes = vaultIndex.notes.length ? vaultIndex.linkedNotes : sampleLinkedNotes
   const inspectorSources = vaultIndex.sources.length ? vaultIndex.sources : sampleSources
 
@@ -560,6 +651,10 @@ function App() {
   }
 
   useEffect(() => {
+    setModelConfig(loadModelConfig())
+  }, [])
+
+  useEffect(() => {
     let cancelled = false
     Promise.all([loadVaultSnapshot(), loadVaultHandle()]).then(async ([snapshot, handle]) => {
       if (cancelled) return
@@ -614,6 +709,20 @@ function App() {
     setRunning(true)
   }
 
+  const handleModelSelect = (chatModelId) => {
+    setModelConfig((current) => {
+      const next = { ...current, chatModelId }
+      saveModelConfig(next)
+      return next
+    })
+  }
+
+  const handleSettingsSave = (nextConfig) => {
+    setModelConfig(nextConfig)
+    saveModelConfig(nextConfig)
+    setSettingsOpen(false)
+  }
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -621,6 +730,7 @@ function App() {
         setActiveSection={setActiveSection}
         onConnectVault={handleConnectVault}
         onSyncVault={handleSyncVault}
+        onOpenSettings={() => setSettingsOpen(true)}
         vaultName={vaultName}
         vaultNoteCount={vaultIndex.notes.length}
         syncState={syncState}
@@ -631,7 +741,7 @@ function App() {
       <main className="main-shell">
         <header className="topbar">
           <div className="topbar-title"><MessageSquare size={21} /><span>{activeSection === 'research' ? 'Ask your research vault' : activeTitle}</span></div>
-          <div className="topbar-actions"><button className="new-chat">New chat <Plus size={17} /></button><button className="icon-button" aria-label="More options"><MoreHorizontal size={19} /></button></div>
+          <div className="topbar-actions"><button className="new-chat">New chat <Plus size={17} /></button><button className="icon-button mobile-settings-button" onClick={() => setSettingsOpen(true)} aria-label="Open knowledge settings"><Settings2 size={18} /></button><button className="icon-button" aria-label="More options"><MoreHorizontal size={19} /></button></div>
         </header>
 
         {activeSection !== 'research' ? (activeSection === 'graph' && vaultIndex.notes.length ? <KnowledgeGraphSection index={vaultIndex} onOpenNote={setSelectedNote} /> : <EmptySection section={activeSection} />) : (
@@ -641,13 +751,14 @@ function App() {
                 {messages.map((message) => message.role === 'user' ? <UserMessage text={message.text} key={message.id} /> : <AssistantMessage message={message} running={running} key={message.id} />)}
               </div>
               <EvidenceTrail activeStage={activeStage} />
-              <Composer value={input} setValue={setInput} onSubmit={submitQuestion} disabled={running} />
+              <Composer value={input} setValue={setInput} onSubmit={submitQuestion} disabled={running} selectedModel={selectedModel} models={chatModels} onSelectModel={handleModelSelect} />
             </div>
-            <Inspector activeStage={activeStage} running={running} onPause={() => setRunning(false)} linkedNotes={inspectorNotes} sources={inspectorSources} vaultName={vaultName} onOpenNote={setSelectedNote} />
+            <Inspector activeStage={activeStage} running={running} onPause={() => setRunning(false)} linkedNotes={inspectorNotes} sources={inspectorSources} vaultName={vaultName} topK={modelConfig.topK} rerankLabel={rerankModel?.name || 'Disabled by profile'} onOpenNote={setSelectedNote} />
           </div>
         )}
       </main>
       {selectedNote && <NotePreview note={selectedNote} onClose={() => setSelectedNote(null)} />}
+      {settingsOpen && <KnowledgeSettingsModal config={modelConfig} onClose={() => setSettingsOpen(false)} onSave={handleSettingsSave} />}
     </div>
   )
 }
