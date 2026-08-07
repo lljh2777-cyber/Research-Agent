@@ -1,0 +1,15 @@
+# Dependencies and local package caches
+node_modules/
+.npm-cache/
+
+# Build output
+dist/
+
+# Local QA screenshots and browser-only artifacts
+qa/
+
+# Editor and OS metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
