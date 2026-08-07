@@ -38,8 +38,10 @@ import {
 } from 'lucide-react'
 import { buildVaultIndex, getVaultName, parseVaultDirectory, parseVaultFiles } from './vault.js'
 import KnowledgeGraphSection from './KnowledgeGraph.jsx'
+import { PipelinesSection, RunsSection } from './PipelineWorkspace.jsx'
 import { loadLocalVault } from './localVault.js'
 import { chatgptCatalogToModels, DEFAULT_MODEL_CONFIG, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
+import { executePipeline, loadPipelineRuns, savePipelineRuns } from './pipelineEngine.js'
 import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources, retrieveEvidence } from './retrieval.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
 import { AUTH_SERVICE_UNAVAILABLE, getAuthStatus, getChatgptModels, logoutChatgpt, startChatgptLogin, streamChatgptResponse, waitForChatgptAuth } from './authClient.js'
@@ -509,13 +511,8 @@ function Inspector({ activeStage, running, onPause, linkedNotes, sources, vaultN
   )
 }
 
-function EmptySection({ section }) {
-  const copy = {
-    graph: ['Knowledge Graph', 'A navigable map of your papers, methods, datasets, and concepts will live here.'],
-    pipelines: ['Pipelines', 'Turn repeatable research workflows into inspectable, resumable agent runs.'],
-    runs: ['Runs', 'Every agent task will leave a trace: inputs, tools, sources, changes, and verification.'],
-  }[section]
-  return <div className="empty-section"><div className="empty-icon"><Layers3 size={26} /></div><h2>{copy[0]}</h2><p>{copy[1]}</p><button className="primary-button"><Plus size={16} /> Create workspace item</button></div>
+function EmptyGraphSection({ onConnectVault }) {
+  return <div className="empty-section"><div className="empty-icon"><Layers3 size={26} /></div><h2>Knowledge Graph</h2><p>Connect an Obsidian Vault to map papers, methods, datasets, and concepts from local wikilinks.</p><button className="primary-button" onClick={onConnectVault}><Plus size={16} /> Connect Vault</button></div>
 }
 
 function App() {
@@ -543,8 +540,12 @@ function App() {
   const [runMode, setRunMode] = useState('mock')
   const [answerMode, setAnswerMode] = useState('sample')
   const [retrievalPacket, setRetrievalPacket] = useState(null)
+  const [pipelineRuns, setPipelineRuns] = useState(loadPipelineRuns)
+  const [pipelineRunningId, setPipelineRunningId] = useState(null)
+  const [selectedPipelineRunId, setSelectedPipelineRunId] = useState(null)
   const vaultInputRef = useRef(null)
   const requestAbortRef = useRef(null)
+  const pipelineRunTimerRef = useRef(null)
 
   const vaultIndex = useMemo(() => buildVaultIndex(vaultNotes), [vaultNotes])
   const retrievalIndex = useMemo(
@@ -769,6 +770,10 @@ function App() {
     }
   }, [running, pendingQuestion, retrievalPacket, runMode])
 
+  useEffect(() => () => {
+    if (pipelineRunTimerRef.current) window.clearTimeout(pipelineRunTimerRef.current)
+  }, [])
+
   const activeTitle = useMemo(() => navItems.find((item) => item.id === activeSection)?.label || 'Research', [activeSection])
 
   const handleConnectChatgpt = async () => {
@@ -918,6 +923,50 @@ function App() {
     setSettingsOpen(false)
   }
 
+  const handleRunPipeline = useCallback((pipelineId) => {
+    if (!vaultNotes.length || pipelineRunTimerRef.current) return
+    const startedAt = new Date().toISOString()
+    setPipelineRunningId(pipelineId)
+    pipelineRunTimerRef.current = window.setTimeout(() => {
+      try {
+        const run = executePipeline(pipelineId, {
+          vaultName: vaultName || getVaultName(vaultNotes),
+          notes: vaultNotes,
+          vaultIndex,
+          retrievalIndex,
+          chunkSize: modelConfig.chunkSize,
+        }, { startedAt })
+        setPipelineRuns((current) => {
+          const next = [run, ...current]
+          savePipelineRuns(next)
+          return next
+        })
+        setSelectedPipelineRunId(run.id)
+      } finally {
+        pipelineRunTimerRef.current = null
+        setPipelineRunningId(null)
+      }
+    }, 700)
+  }, [modelConfig.chunkSize, retrievalIndex, vaultIndex, vaultName, vaultNotes])
+
+  const handleViewPipelineRun = (runId) => {
+    setSelectedPipelineRunId(runId)
+    setActiveSection('runs')
+  }
+
+  const handleNewChat = () => {
+    requestAbortRef.current?.abort()
+    setMessages([])
+    setInput('')
+    setPendingQuestion('')
+    setRetrievalPacket(null)
+    setRunning(false)
+    setAnswerMode('sample')
+    setActiveSection('research')
+  }
+
+  const ActiveSectionIcon = navItems.find((item) => item.id === activeSection)?.icon || MessageSquare
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -940,11 +989,15 @@ function App() {
       <input ref={vaultInputRef} className="visually-hidden" type="file" webkitdirectory="true" directory="true" multiple onChange={handleVaultSelection} />
       <main className="main-shell">
         <header className="topbar">
-          <div className="topbar-title"><MessageSquare size={21} /><span>{activeSection === 'research' ? 'Ask your research vault' : activeTitle}</span></div>
-          <div className="topbar-actions"><button className="new-chat">New chat <Plus size={17} /></button><button className="icon-button mobile-settings-button" onClick={() => setSettingsOpen(true)} aria-label="Open knowledge settings"><Settings2 size={18} /></button><button className="icon-button" aria-label="More options"><MoreHorizontal size={19} /></button></div>
+          <div className="topbar-title"><ActiveSectionIcon size={21} /><span>{activeSection === 'research' ? 'Ask your research vault' : activeTitle}</span></div>
+          <div className="topbar-actions"><button className="new-chat" onClick={handleNewChat}>New chat <Plus size={17} /></button><button className="icon-button mobile-settings-button" onClick={() => setSettingsOpen(true)} aria-label="Open knowledge settings"><Settings2 size={18} /></button><button className="icon-button" aria-label="More options"><MoreHorizontal size={19} /></button></div>
         </header>
 
-        {activeSection !== 'research' ? (activeSection === 'graph' && vaultIndex.notes.length ? <KnowledgeGraphSection index={vaultIndex} onOpenNote={setSelectedNote} /> : <EmptySection section={activeSection} />) : (
+        {activeSection === 'graph' ? (vaultIndex.notes.length ? <KnowledgeGraphSection index={vaultIndex} onOpenNote={setSelectedNote} /> : <EmptyGraphSection onConnectVault={handleConnectVault} />) : activeSection === 'pipelines' ? (
+          <PipelinesSection vaultName={vaultName} noteCount={vaultNotes.length} runs={pipelineRuns} runningPipelineId={pipelineRunningId} onRun={handleRunPipeline} onViewRun={handleViewPipelineRun} />
+        ) : activeSection === 'runs' ? (
+          <RunsSection runs={pipelineRuns} selectedRunId={selectedPipelineRunId} onSelectRun={setSelectedPipelineRunId} />
+        ) : (
           <div className="workspace-content">
             <div className="chat-column">
               <div className="conversation">
