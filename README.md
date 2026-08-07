@@ -31,7 +31,7 @@ npm run build
 - Persistent browser directory handle with manual Vault rescan when File System Access API is available
 - Optional loopback-only local Vault adapter with 15-second revision polling and read-only Markdown access
 - Local model registry with chat-model selector and a persisted knowledge-base retrieval profile
-- Loopback-only ChatGPT/Codex OAuth bridge with PKCE, refresh-token rotation, account status, logout, and provider request proxy
+- Loopback-only ChatGPT/Codex OAuth bridge with PKCE, refresh-token rotation, account status, logout, and streaming Responses proxy
 - Visual concept in `design/concept-desktop.png`
 
 ## ChatGPT subscription bridge
@@ -44,9 +44,12 @@ npm run auth-server
 
 It listens on `127.0.0.1:4318` for the app and temporarily uses `localhost:1455` for the OAuth callback. Credentials are stored outside the repository at `%LOCALAPPDATA%\\bioresearch-os\\auth.json` on Windows (or `$XDG_DATA_HOME/bioresearch-os/auth.json` on Linux/macOS). Override the location with `BIORESEARCH_AUTH_FILE` when needed.
 
-The browser receives only connection status. The local service keeps the OAuth access/refresh tokens, refreshes them before expiry, adds the ChatGPT account header, and routes ChatGPT subscription requests through the Codex backend. This is provider-specific and may change; it is not a general way to reuse another application's credential file. Do not enable it on a public host without replacing the loopback trust boundary with a server-side OAuth session and encrypted secret storage.
+The browser receives only connection status and streamed answer events. The local service keeps the OAuth access/refresh tokens, refreshes them before expiry, retries once after an upstream `401`, adds the Codex-specific headers, and routes ChatGPT subscription requests through the Codex backend. Requests use a Responses-style SSE stream with `store: false` and encrypted-reasoning round trips.
 
-Anthropic Claude Pro/Max subscription OAuth is intentionally not included because Anthropic's current OpenCode provider documentation says third-party use is not officially supported.
+This is a ChatGPT/Codex compatibility route, not the public OpenAI Platform API. Public API usage and ChatGPT subscriptions are separate products. The endpoint and accepted models are provider-specific and may change. Do not enable the bridge on a public host without replacing the loopback trust boundary with a server-side OAuth session and encrypted secret storage. No other subscription login is included at this stage.
+
+The implementation notes and source comparison are in [`docs/chatgpt-api-integration.md`](docs/chatgpt-api-integration.md).
+The future multi-provider protocol boundary is documented in [`docs/provider-api-architecture.md`](docs/provider-api-architecture.md); those providers are researched but not enabled.
 
 ## Local Vault adapter
 
@@ -66,7 +69,7 @@ The composer model selector stores the selected model locally and now exposes GP
 
 ## Next integration steps
 
-1. Add GitHub Copilot device OAuth and a generic provider adapter contract.
-2. Add vector retrieval and source-aware answer generation around live model responses.
+1. Add vector retrieval and source-aware answer generation around live ChatGPT responses.
+2. Persist stream state so an interrupted Web view can reattach to an active run.
 3. Add note editing safeguards and explicit change conflict handling.
 4. Add an MCP bridge over the same local Vault adapter, then move the stable Web app into Electron.

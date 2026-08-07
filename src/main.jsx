@@ -40,7 +40,7 @@ import { buildVaultIndex, getVaultName, parseVaultDirectory, parseVaultFiles } f
 import { loadLocalVault } from './localVault.js'
 import { DEFAULT_MODEL_CONFIG, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
-import { chatWithProvider, getAuthStatus, logoutProvider, startChatgptLogin, waitForAuth } from './authClient.js'
+import { getAuthStatus, logoutChatgpt, startChatgptLogin, streamChatgptResponse, waitForChatgptAuth } from './authClient.js'
 import './styles.css'
 
 const navItems = [
@@ -153,8 +153,8 @@ function ModelPicker({ selectedModel, models, onSelect, disabled = false, authSt
       {open && <div className="model-menu" role="menu" aria-label="Research model">
         <div className="model-menu-heading">Research model</div>
         {models.map((model) => {
-          const ready = model.authProvider === 'openai' ? authStatus?.connected : model.ready
-          return <button className={`model-option ${model.id === selectedModel.id ? 'selected' : ''}`} key={model.id} onClick={() => { if (model.authProvider === 'openai' && !authStatus?.connected) onConnect(); else onSelect(model.id); setOpen(false) }} role="menuitem">
+          const ready = model.authProvider === 'chatgpt' ? authStatus?.connected : model.ready
+          return <button className={`model-option ${model.id === selectedModel.id ? 'selected' : ''}`} key={model.id} onClick={() => { if (model.authProvider === 'chatgpt' && !authStatus?.connected) onConnect(); else onSelect(model.id); setOpen(false) }} role="menuitem">
             <span className="model-option-main"><strong>{model.name}</strong><small>{model.provider}</small></span>
             <span className={`model-readiness ${ready ? 'ready' : ''}`}>{ready ? 'ready' : model.authProvider ? 'connect' : 'profile'}</span>
           </button>
@@ -552,11 +552,12 @@ function App() {
   const [selectedNote, setSelectedNote] = useState(null)
   const [modelConfig, setModelConfig] = useState(DEFAULT_MODEL_CONFIG)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [authStatus, setAuthStatus] = useState({ provider: 'openai', connected: false, pending: false })
+  const [authStatus, setAuthStatus] = useState({ provider: 'chatgpt', connected: false, pending: false })
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState('')
   const [runMode, setRunMode] = useState('mock')
   const vaultInputRef = useRef(null)
+  const requestAbortRef = useRef(null)
 
   const vaultIndex = useMemo(() => buildVaultIndex(vaultNotes), [vaultNotes])
   const chatModels = useMemo(() => getModelsByRole('chat'), [])
@@ -676,7 +677,7 @@ function App() {
     getAuthStatus().then((status) => {
       if (!cancelled) setAuthStatus(status)
     }).catch(() => {
-      if (!cancelled) setAuthStatus({ provider: 'openai', connected: false, pending: false, unavailable: true })
+      if (!cancelled) setAuthStatus({ provider: 'chatgpt', connected: false, pending: false, unavailable: true })
     })
     return () => { cancelled = true }
   }, [])
@@ -734,7 +735,7 @@ function App() {
     setAuthStatus((current) => ({ ...current, pending: true }))
     try {
       await startChatgptLogin()
-      const nextStatus = await waitForAuth('openai')
+      const nextStatus = await waitForChatgptAuth()
       setAuthStatus(nextStatus)
       return nextStatus
     } catch (error) {
@@ -749,7 +750,7 @@ function App() {
   const handleLogoutChatgpt = async () => {
     setAuthError('')
     try {
-      const nextStatus = await logoutProvider('openai')
+      const nextStatus = await logoutChatgpt()
       setAuthStatus(nextStatus)
     } catch (error) {
       setAuthError(error.message || 'Could not sign out')
@@ -759,40 +760,68 @@ function App() {
   const submitQuestion = async () => {
     const question = input.trim()
     if (!question || running) return
+    const live = selectedModel.authProvider === 'chatgpt' || (selectedModel.id === 'smart-default' && authStatus.connected)
+    if (live && !authStatus.connected) {
+      const connected = await handleConnectChatgpt()
+      if (!connected) return
+    }
     setMessages((current) => [...current, { id: `user-${Date.now()}`, role: 'user', text: question }])
     setInput('')
-    const live = selectedModel.authProvider === 'openai' || (selectedModel.id === 'smart-default' && authStatus.connected)
-    if (live && !authStatus.connected) {
-      await handleConnectChatgpt()
-      return
-    }
     if (live) {
+      const assistantId = `assistant-${Date.now()}`
+      const controller = new AbortController()
+      requestAbortRef.current = controller
       setRunMode('live')
       setActiveStage(1)
       setRunning(true)
+      setMessages((current) => [...current, {
+        id: assistantId,
+        role: 'assistant',
+        text: '',
+        bullets: [],
+        closing: '',
+      }])
+      let streamedText = ''
+      let renderFrame = 0
+      const flushStreamedText = () => {
+        renderFrame = 0
+        setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, text: streamedText } : message))
+      }
       try {
-        const result = await chatWithProvider({
+        const history = messages
+          .filter((message) => message.role === 'user' || message.role === 'assistant')
+          .slice(-20)
+          .map((message) => ({
+            role: message.role,
+            content: [message.text, message.closing].filter(Boolean).join('\n\n'),
+          }))
+        const result = await streamChatgptResponse({
           model: selectedModel.id === 'smart-default' ? 'gpt-5.4' : selectedModel.id,
-          messages: [{ role: 'user', content: question }],
+          messages: [...history, { role: 'user', content: question }],
+          signal: controller.signal,
+          onDelta: (delta) => {
+            streamedText += delta
+            setActiveStage(4)
+            if (!renderFrame) renderFrame = window.requestAnimationFrame(flushStreamedText)
+          },
         })
+        if (renderFrame) window.cancelAnimationFrame(renderFrame)
         setActiveStage(5)
-        setMessages((current) => [...current, {
-          id: `assistant-${Date.now()}`,
-          role: 'assistant',
-          text: result.text || 'The provider returned an empty response.',
-          bullets: [],
+        setMessages((current) => current.map((message) => message.id === assistantId ? {
+          ...message,
+          text: result.text || streamedText || 'The provider returned an empty response.',
           closing: `Generated with ${result.model} through the connected ChatGPT subscription.`,
-        }])
+        } : message))
       } catch (error) {
+        if (renderFrame) window.cancelAnimationFrame(renderFrame)
         setActiveStage(5)
-        setMessages((current) => [...current, {
-          id: `assistant-error-${Date.now()}`,
-          role: 'assistant',
-          text: `The connected model could not complete this request: ${error.message}`,
-          bullets: [],
-          closing: 'Check the provider connection and try again.',
-        }])
+        setMessages((current) => current.map((message) => message.id === assistantId ? {
+          ...message,
+          text: streamedText || message.text || (error.name === 'AbortError' ? 'Generation stopped.' : `The connected model could not complete this request: ${error.message}`),
+          closing: error.name === 'AbortError' ? 'The partial response was kept.' : 'Check the ChatGPT connection and try again.',
+        } : message))
       } finally {
+        if (requestAbortRef.current === controller) requestAbortRef.current = null
         setRunning(false)
         setRunMode('mock')
       }
@@ -805,7 +834,7 @@ function App() {
 
   const handleModelSelect = (chatModelId) => {
     const model = getModelById(chatModelId)
-    if (model.authProvider === 'openai' && !authStatus.connected) {
+    if (model.authProvider === 'chatgpt' && !authStatus.connected) {
       void handleConnectChatgpt()
       return
     }
@@ -814,6 +843,12 @@ function App() {
       saveModelConfig(next)
       return next
     })
+  }
+
+  const handlePause = () => {
+    requestAbortRef.current?.abort()
+    setActiveStage(5)
+    setRunning(false)
   }
 
   const handleSettingsSave = (nextConfig) => {
@@ -857,7 +892,7 @@ function App() {
               <EvidenceTrail activeStage={activeStage} />
               <Composer value={input} setValue={setInput} onSubmit={submitQuestion} disabled={running} selectedModel={selectedModel} models={chatModels} onSelectModel={handleModelSelect} authStatus={authStatus} authBusy={authBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} />
             </div>
-            <Inspector activeStage={activeStage} running={running} onPause={() => setRunning(false)} linkedNotes={inspectorNotes} sources={inspectorSources} vaultName={vaultName} topK={modelConfig.topK} rerankLabel={rerankModel?.name || 'Disabled by profile'} onOpenNote={setSelectedNote} />
+            <Inspector activeStage={activeStage} running={running} onPause={handlePause} linkedNotes={inspectorNotes} sources={inspectorSources} vaultName={vaultName} topK={modelConfig.topK} rerankLabel={rerankModel?.name || 'Disabled by profile'} onOpenNote={setSelectedNote} />
           </div>
         )}
       </main>

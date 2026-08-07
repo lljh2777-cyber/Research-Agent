@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test:auth": "node --test server/auth-server.test.mjs",
     "preview": "vite preview",
     "vault-server": "node server/vault-server.mjs",
     "auth-server": "node server/auth-server.mjs"
