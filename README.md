@@ -30,7 +30,7 @@ npm run build
 - IndexedDB-backed Vault snapshot persistence and in-app Markdown note preview
 - Persistent browser directory handle with manual Vault rescan when File System Access API is available
 - Optional loopback-only local Vault adapter with 15-second revision polling and read-only Markdown access
-- Local model registry with chat-model selector and a persisted knowledge-base retrieval profile
+- Account-aware ChatGPT model discovery with a six-hour local cache, manual refresh, and compatibility fallback
 - Markdown-aware chunking, multilingual BM25 ranking, one-hop `[[wikilink]]` expansion, and per-note evidence diversification
 - Provider-neutral evidence packets injected into the user-selected ChatGPT answer model with numbered source citations
 - Loopback-only ChatGPT/Codex OAuth bridge with PKCE, refresh-token rotation, account status, logout, and streaming Responses proxy
@@ -46,7 +46,9 @@ npm run auth-server
 
 It listens on `127.0.0.1:4318` for the app and temporarily uses `localhost:1455` for the OAuth callback. Credentials are stored outside the repository at `%LOCALAPPDATA%\\bioresearch-os\\auth.json` on Windows (or `$XDG_DATA_HOME/bioresearch-os/auth.json` on Linux/macOS). Override the location with `BIORESEARCH_AUTH_FILE` when needed.
 
-The browser receives only connection status and streamed answer events. The local service keeps the OAuth access/refresh tokens, refreshes them before expiry, retries once after an upstream `401`, adds the Codex-specific headers, and routes ChatGPT subscription requests through the Codex backend. Requests use a Responses-style SSE stream with `store: false` and encrypted-reasoning round trips.
+The browser receives only connection status, model metadata, and streamed answer events. The local service keeps the OAuth access/refresh tokens, refreshes them before expiry, retries once after an upstream `401`, adds the Codex-specific headers, and routes ChatGPT subscription requests through the Codex backend. Requests use a Responses-style SSE stream with `store: false` and encrypted-reasoning round trips.
+
+After login, the service queries the authenticated Codex `/models` endpoint and shows the picker-visible models returned for that account. The catalog is cached for six hours in `%LOCALAPPDATA%\\bioresearch-os\\models.json`, can be refreshed from the model picker, and is removed on logout or account replacement. A stale account cache is used during temporary network failures; the legacy GPT-5.4 routes are only a last-resort compatibility fallback when no account catalog has ever been fetched.
 
 This is a ChatGPT/Codex compatibility route, not the public OpenAI Platform API. Public API usage and ChatGPT subscriptions are separate products. The endpoint and accepted models are provider-specific and may change. Do not enable the bridge on a public host without replacing the loopback trust boundary with a server-side OAuth session and encrypted secret storage. No other subscription login is included at this stage.
 
@@ -67,7 +69,7 @@ Use `BIORESEARCH_VAULT_PORT` to change the port or `VITE_VAULT_API_URL` when the
 
 ## Model and retrieval profile
 
-The composer model selector stores the answer model independently from retrieval settings. `Smart (Default)` provides a retrieval-only preview while disconnected and routes to GPT-5.4 when ChatGPT is connected; GPT-5.4 and GPT-5.4 mini can also be selected explicitly. Future provider profiles remain visible but disabled until their API adapters exist.
+The composer model selector stores the answer model independently from retrieval settings. `Smart (Default)` provides a retrieval-only preview while disconnected and routes to the first picker-visible model returned by the connected ChatGPT account. Discovered models can also be selected explicitly, so newly released models do not require a frontend release. Future provider profiles remain visible but disabled until their API adapters exist.
 
 The `Settings` action opens the knowledge-base profile with Markdown parsing, embedding model, optional reranker, Top K, chunk size/overlap, similarity threshold, hybrid search, and citation settings. The current retrieval engine uses multilingual BM25 plus one-hop Wikilink expansion, limits a single note to two selected chunks, and returns a provider-neutral evidence packet. When a connected answer model runs, only the retrieved excerpts—not the entire Vault—are included in its system context. Changing the answer model does not rebuild the retrieval index; changing chunk settings does.
 

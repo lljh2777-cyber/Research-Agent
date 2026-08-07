@@ -16,24 +16,6 @@ export const MODEL_REGISTRY = [
     ready: false,
   },
   {
-    id: 'gpt-5.4',
-    name: 'GPT-5.4',
-    provider: 'ChatGPT Plus/Pro',
-    role: 'chat',
-    authProvider: 'chatgpt',
-    detail: 'Codex subscription route',
-    ready: false,
-  },
-  {
-    id: 'gpt-5.4-mini',
-    name: 'GPT-5.4 mini',
-    provider: 'ChatGPT Plus/Pro',
-    role: 'chat',
-    authProvider: 'chatgpt',
-    detail: 'Faster Codex subscription route',
-    ready: false,
-  },
-  {
     id: 'local-qwen',
     name: 'Qwen3 · Ollama',
     provider: 'Ollama',
@@ -74,12 +56,27 @@ export const DEFAULT_MODEL_CONFIG = {
 
 const STORAGE_KEY = 'bioresearch-os:model-config'
 
-export function getModelsByRole(role) {
-  return MODEL_REGISTRY.filter((model) => model.role === role)
+export function chatgptCatalogToModels(models = []) {
+  return models.map((model) => ({
+    id: model.id,
+    name: model.name || model.id,
+    provider: 'ChatGPT account',
+    role: 'chat',
+    authProvider: 'chatgpt',
+    detail: model.description || 'Discovered from the connected ChatGPT account.',
+    reasoningLevels: model.reasoningLevels || [],
+    defaultReasoningLevel: model.defaultReasoningLevel || null,
+    ready: true,
+    discovered: true,
+  }))
 }
 
-export function getModelById(id) {
-  return MODEL_REGISTRY.find((model) => model.id === id) || MODEL_REGISTRY[0]
+export function getModelsByRole(role, registry = MODEL_REGISTRY) {
+  return registry.filter((model) => model.role === role)
+}
+
+export function getModelById(id, registry = MODEL_REGISTRY) {
+  return registry.find((model) => model.id === id) || registry[0] || MODEL_REGISTRY[0]
 }
 
 export function loadModelConfig() {

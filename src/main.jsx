@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   ArrowRight,
@@ -38,10 +38,10 @@ import {
 } from 'lucide-react'
 import { buildVaultIndex, getVaultName, parseVaultDirectory, parseVaultFiles } from './vault.js'
 import { loadLocalVault } from './localVault.js'
-import { DEFAULT_MODEL_CONFIG, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
+import { chatgptCatalogToModels, DEFAULT_MODEL_CONFIG, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
 import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources, retrieveEvidence } from './retrieval.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
-import { getAuthStatus, logoutChatgpt, startChatgptLogin, streamChatgptResponse, waitForChatgptAuth } from './authClient.js'
+import { getAuthStatus, getChatgptModels, logoutChatgpt, startChatgptLogin, streamChatgptResponse, waitForChatgptAuth } from './authClient.js'
 import './styles.css'
 
 const navItems = [
@@ -91,6 +91,15 @@ const initialMessages = [
 ]
 
 const stages = ['Query parsed', 'Retrieve', 'Rerank', 'Synthesize', 'Cite']
+const EMPTY_CHATGPT_CATALOG = {
+  connected: false,
+  source: 'disconnected',
+  stale: false,
+  fetchedAt: null,
+  defaultModelId: null,
+  models: [],
+  warning: '',
+}
 
 function responseForQuestion(question, packet) {
   const evidence = packet?.evidence || []
@@ -114,7 +123,7 @@ function LogoMark() {
   )
 }
 
-function ModelPicker({ selectedModel, models, onSelect, disabled = false, authStatus, authBusy, onConnect, onLogout }) {
+function ModelPicker({ selectedModel, models, onSelect, disabled = false, authStatus, authBusy, modelCatalog, modelsBusy, onConnect, onLogout, onRefreshModels }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef(null)
 
@@ -140,7 +149,12 @@ function ModelPicker({ selectedModel, models, onSelect, disabled = false, authSt
         <span>{selectedModel.name}</span><ChevronDown size={14} />
       </button>
       {open && <div className="model-menu" role="menu" aria-label="Research model">
-        <div className="model-menu-heading">Research model</div>
+        <div className="model-menu-heading">
+          <span>Research model</span>
+          <button onClick={() => onRefreshModels(true)} disabled={!authStatus?.connected || modelsBusy} aria-label="Refresh available models" title="Refresh models from this ChatGPT account">
+            <RefreshCw className={modelsBusy ? 'spin' : ''} size={12} />
+          </button>
+        </div>
         {models.map((model) => {
           const ready = model.authProvider === 'chatgpt' ? authStatus?.connected : model.ready
           return <button className={`model-option ${model.id === selectedModel.id ? 'selected' : ''}`} key={model.id} onClick={() => { onSelect(model.id); setOpen(false) }} role="menuitem" disabled={!ready && !model.authProvider}>
@@ -150,9 +164,10 @@ function ModelPicker({ selectedModel, models, onSelect, disabled = false, authSt
         })}
         <div className="model-menu-account">
           <span className={`auth-dot ${authStatus?.connected ? 'connected' : ''}`} />
-          <span><strong>ChatGPT account</strong><small>{authStatus?.connected ? 'Subscription route connected' : 'Use your Plus / Pro subscription'}</small></span>
+          <span><strong>ChatGPT account</strong><small>{authStatus?.connected ? `${modelCatalog?.models?.length || 0} models · ${modelCatalog?.source || 'discovering'}` : 'Connect to discover available models'}</small></span>
           {authStatus?.connected ? <button className="auth-inline-button" onClick={() => { onLogout(); setOpen(false) }}>Sign out</button> : <button className="auth-inline-button" onClick={() => { onConnect(); setOpen(false) }}>{authBusy ? 'Waiting…' : 'Connect'}</button>}
         </div>
+        {modelCatalog?.warning && <div className="model-catalog-warning">{modelCatalog.warning}</div>}
         <div className="model-menu-note">OAuth credentials stay in the local auth service. Only retrieved Vault excerpts are sent when a connected answer model runs.</div>
       </div>}
     </div>
@@ -324,7 +339,7 @@ function EvidenceTrail({ activeStage }) {
   )
 }
 
-function Composer({ value, setValue, onSubmit, disabled, selectedModel, models, onSelectModel, authStatus, authBusy, onConnectChatgpt, onLogoutChatgpt }) {
+function Composer({ value, setValue, onSubmit, disabled, selectedModel, models, onSelectModel, authStatus, authBusy, modelCatalog, modelsBusy, onConnectChatgpt, onLogoutChatgpt, onRefreshModels }) {
   const textareaRef = useRef(null)
   const handleKeyDown = (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -351,7 +366,7 @@ function Composer({ value, setValue, onSubmit, disabled, selectedModel, models, 
             <button aria-label="Insert code"><Code2 size={18} /></button>
           </div>
           <div className="composer-submit">
-            <ModelPicker selectedModel={selectedModel} models={models} onSelect={onSelectModel} disabled={disabled} authStatus={authStatus} authBusy={authBusy} onConnect={onConnectChatgpt} onLogout={onLogoutChatgpt} />
+            <ModelPicker selectedModel={selectedModel} models={models} onSelect={onSelectModel} disabled={disabled} authStatus={authStatus} authBusy={authBusy} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnect={onConnectChatgpt} onLogout={onLogoutChatgpt} onRefreshModels={onRefreshModels} />
             <button className="send-button" onClick={onSubmit} disabled={disabled || !value.trim()} aria-label="Send question">
               {disabled ? <LoaderCircle className="spin" size={19} /> : <Send size={19} />}
             </button>
@@ -557,6 +572,8 @@ function App() {
   const [authStatus, setAuthStatus] = useState({ provider: 'chatgpt', connected: false, pending: false })
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState('')
+  const [modelCatalog, setModelCatalog] = useState(EMPTY_CHATGPT_CATALOG)
+  const [modelsBusy, setModelsBusy] = useState(false)
   const [runMode, setRunMode] = useState('mock')
   const [answerMode, setAnswerMode] = useState('sample')
   const [retrievalPacket, setRetrievalPacket] = useState(null)
@@ -568,8 +585,14 @@ function App() {
     () => buildRetrievalIndex(vaultNotes, { chunkSize: modelConfig.chunkSize, chunkOverlap: modelConfig.chunkOverlap }),
     [vaultNotes, modelConfig.chunkSize, modelConfig.chunkOverlap],
   )
-  const chatModels = useMemo(() => getModelsByRole('chat'), [])
-  const selectedModel = useMemo(() => getModelById(modelConfig.chatModelId), [modelConfig.chatModelId])
+  const staticChatModels = useMemo(() => getModelsByRole('chat'), [])
+  const chatModels = useMemo(() => {
+    const smartModel = staticChatModels.find((model) => model.id === 'smart-default')
+    const futureModels = staticChatModels.filter((model) => model.id !== 'smart-default')
+    const discoveredModels = chatgptCatalogToModels(modelCatalog.models)
+    return [smartModel, ...discoveredModels, ...futureModels].filter(Boolean)
+  }, [modelCatalog.models, staticChatModels])
+  const selectedModel = useMemo(() => getModelById(modelConfig.chatModelId, chatModels), [chatModels, modelConfig.chatModelId])
   const rerankModel = useMemo(() => MODEL_REGISTRY.find((model) => model.id === modelConfig.rerankModelId), [modelConfig.rerankModelId])
   const notesById = useMemo(() => new Map(vaultNotes.map((note) => [note.id, note])), [vaultNotes])
   const retrievedNotes = useMemo(() => {
@@ -701,6 +724,23 @@ function App() {
     setModelConfig(loadModelConfig())
   }, [])
 
+  const refreshChatgptModels = useCallback(async (force = false) => {
+    setModelsBusy(true)
+    try {
+      const catalog = await getChatgptModels({ force })
+      setModelCatalog({ ...EMPTY_CHATGPT_CATALOG, ...catalog, warning: catalog.warning || '' })
+      if (catalog.connected === false) {
+        setAuthStatus((current) => ({ ...current, connected: false, type: null, expiresAt: null }))
+      }
+      return catalog
+    } catch (error) {
+      setModelCatalog((current) => ({ ...current, warning: error.message || 'Could not discover ChatGPT models.' }))
+      return null
+    } finally {
+      setModelsBusy(false)
+    }
+  }, [])
+
   useEffect(() => {
     let cancelled = false
     getAuthStatus().then((status) => {
@@ -710,6 +750,14 @@ function App() {
     })
     return () => { cancelled = true }
   }, [])
+
+  useEffect(() => {
+    if (!authStatus.connected) {
+      setModelCatalog(EMPTY_CHATGPT_CATALOG)
+      return
+    }
+    void refreshChatgptModels(false)
+  }, [authStatus.connected, refreshChatgptModels])
 
   useEffect(() => {
     let cancelled = false
@@ -833,8 +881,12 @@ function App() {
             role: message.role,
             content: [message.text, message.closing].filter(Boolean).join('\n\n'),
           }))
+        let activeCatalog = modelCatalog
+        if (selectedModel.id === 'smart-default' && !activeCatalog.defaultModelId) {
+          activeCatalog = await refreshChatgptModels(false) || activeCatalog
+        }
         const result = await streamChatgptResponse({
-          model: selectedModel.id === 'smart-default' ? 'gpt-5.4' : selectedModel.id,
+          model: selectedModel.id === 'smart-default' ? activeCatalog.defaultModelId || 'gpt-5.4' : selectedModel.id,
           messages: [
             { role: 'system', content: buildEvidenceSystemMessage(packet, { citations: modelConfig.citations }) },
             ...history,
@@ -876,7 +928,7 @@ function App() {
   }
 
   const handleModelSelect = async (chatModelId) => {
-    const model = getModelById(chatModelId)
+    const model = getModelById(chatModelId, chatModels)
     if (model.authProvider === 'chatgpt' && !authStatus.connected) {
       const connected = await handleConnectChatgpt()
       if (!connected?.connected) return
@@ -933,7 +985,7 @@ function App() {
                 {messages.map((message) => message.role === 'user' ? <UserMessage text={message.text} key={message.id} /> : <AssistantMessage message={message} running={running} onOpenNote={setSelectedNote} key={message.id} />)}
               </div>
               <EvidenceTrail activeStage={activeStage} />
-              <Composer value={input} setValue={setInput} onSubmit={submitQuestion} disabled={running} selectedModel={selectedModel} models={chatModels} onSelectModel={handleModelSelect} authStatus={authStatus} authBusy={authBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} />
+              <Composer value={input} setValue={setInput} onSubmit={submitQuestion} disabled={running} selectedModel={selectedModel} models={chatModels} onSelectModel={handleModelSelect} authStatus={authStatus} authBusy={authBusy} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} />
             </div>
             <Inspector activeStage={activeStage} running={running} onPause={handlePause} linkedNotes={inspectorNotes} sources={inspectorSources} vaultName={vaultName} topK={modelConfig.topK} rerankLabel={rerankModel?.name || 'Disabled by profile'} packet={retrievalPacket} answerMode={answerMode} onOpenNote={setSelectedNote} />
           </div>

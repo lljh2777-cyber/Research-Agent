@@ -23,6 +23,10 @@ export function getAuthStatus() {
   return requestJson('/api/auth/status')
 }
 
+export function getChatgptModels({ force = false } = {}) {
+  return requestJson(`/api/chatgpt/models${force ? '?refresh=1' : ''}`)
+}
+
 export async function startChatgptLogin() {
   // Open synchronously from the click so browsers do not classify the OAuth
   // window as a popup created later by an asynchronous fetch.

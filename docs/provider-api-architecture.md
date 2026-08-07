@@ -93,7 +93,7 @@ A future registry entry should declare capabilities rather than rely on provider
 }
 ```
 
-Model availability, context limits, and tool support belong to the model record, not a hard-coded UI list. Subscription-only routes that cannot list models should use a curated, versioned registry, as Cherry Studio does for its Codex provider.
+Model availability, context limits, and tool support belong to the model record, not a hard-coded UI list. Providers with an authenticated model-catalog endpoint should discover and cache account-visible models; routes that cannot list models should use a curated, versioned registry.
 
 ## Error and retry policy
 

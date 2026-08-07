@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { coerceCodexRequestBody, extractResponseText, parseSseBlock } from './auth-server.mjs'
+import { coerceCodexRequestBody, extractResponseText, normalizeCodexModels, parseSseBlock } from './auth-server.mjs'
 
 test('coerceCodexRequestBody creates the Codex Responses shape', () => {
   const body = coerceCodexRequestBody({
@@ -31,4 +31,27 @@ test('extractResponseText joins output message parts', () => {
     output: [{ content: [{ type: 'output_text', text: 'first' }, { type: 'output_text', text: 'second' }] }],
   })
   assert.equal(text, 'first\nsecond')
+})
+
+test('normalizeCodexModels keeps picker-visible account models in backend order', () => {
+  const catalog = normalizeCodexModels({
+    models: [
+      {
+        slug: 'gpt-5.6-sol',
+        display_name: 'GPT-5.6-Sol',
+        description: 'Frontier model',
+        visibility: 'list',
+        priority: 1,
+        default_reasoning_level: 'high',
+        supported_reasoning_levels: [{ effort: 'medium' }, { effort: 'high' }],
+      },
+      { slug: 'codex-auto-review', display_name: 'Auto review', visibility: 'hide', priority: 2 },
+      { slug: 'GPT-5.6-TERRA', display_name: 'GPT-5.6-Terra', visibility: 'list', priority: 3 },
+      { slug: '../invalid', display_name: 'Invalid', visibility: 'list', priority: 4 },
+    ],
+  })
+
+  assert.equal(catalog.defaultModelId, 'gpt-5.6-sol')
+  assert.deepEqual(catalog.models.map((model) => model.id), ['gpt-5.6-sol', 'gpt-5.6-terra'])
+  assert.deepEqual(catalog.models[0].reasoningLevels, ['medium', 'high'])
 })

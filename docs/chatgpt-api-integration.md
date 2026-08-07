@@ -29,7 +29,15 @@ Relevant implementation:
 
 - [`packages/opencode/src/plugin/openai/codex.ts`](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/plugin/openai/codex.ts)
 
-The useful patterns are PKCE with loopback callback, refresh-token rotation, account-id extraction from JWT claims, a strict subscription model allowlist, and provider-specific request headers.
+The useful patterns are PKCE with loopback callback, refresh-token rotation, account-id extraction from JWT claims, provider-specific request headers, and conservative filtering of a model registry.
+
+### Official Codex model discovery
+
+The official OpenAI Codex client queries the authenticated Codex `/models` endpoint with a `client_version` query parameter, preserves the backend model order, shows entries whose visibility is `list`, and caches the returned catalog. Research-Agent now follows this account-aware discovery path instead of maintaining a version allowlist.
+
+- [`models_endpoint.rs`](https://github.com/openai/codex/blob/main/codex-rs/model-provider/src/models_endpoint.rs)
+- [`openai_models.rs`](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs)
+- [OpenAI model catalog](https://developers.openai.com/api/docs/models)
 
 ### OpenAI public API
 
@@ -43,6 +51,7 @@ OpenAI recommends the Responses API for new public API projects. Its streaming t
 The browser talks only to the loopback service at `127.0.0.1:4318`:
 
 - `GET /api/auth/status`
+- `GET /api/chatgpt/models` (`?refresh=1` bypasses a fresh cache)
 - `POST /api/auth/chatgpt/start`
 - `POST /api/auth/chatgpt/logout`
 - `POST /api/chatgpt/responses/stream`
@@ -54,7 +63,9 @@ The stream endpoint returns local SSE events:
 - `completed`: final text, model, response id, and usage when available
 - `error`: a safe error message
 
-OAuth tokens never enter browser storage. The loopback service stores them outside the repository, refreshes shortly before expiry, and retries one request after a `401`. The upstream request is forced to `store: false`, includes `reasoning.encrypted_content`, and uses a curated model allowlist.
+OAuth tokens never enter browser storage. The loopback service stores them outside the repository, refreshes shortly before expiry, and retries one request after a `401`. The upstream request is forced to `store: false` and includes `reasoning.encrypted_content`.
+
+The account model catalog is cached separately from credentials for six hours. Only safe picker-visible model identifiers returned by the authenticated backend are accepted for generation. Logout and account replacement remove this cache; temporary discovery failures use a stale same-account cache, then a minimal compatibility fallback if no cache exists.
 
 ## Next architecture step
 

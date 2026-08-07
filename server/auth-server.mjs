@@ -10,13 +10,21 @@ const DEFAULT_PORT = 4318
 const OAUTH_PORT = 1455
 const OAUTH_HOST = 'localhost'
 const ISSUER = 'https://auth.openai.com'
-const CODEX_API_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses'
+const CODEX_API_BASE = 'https://chatgpt.com/backend-api/codex'
+const CODEX_API_ENDPOINT = `${CODEX_API_BASE}/responses`
+const CODEX_MODELS_ENDPOINT = `${CODEX_API_BASE}/models`
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
+const CLIENT_VERSION = process.env.BIORESEARCH_CLIENT_VERSION || '0.1.0'
 const OAUTH_TIMEOUT_MS = 5 * 60 * 1000
 const REFRESH_SAFETY_WINDOW_MS = 60 * 1000
+const MODEL_CACHE_TTL_MS = 6 * 60 * 60 * 1000
 const MAX_BODY_BYTES = 1024 * 1024
 const TRANSIENT_AUTH_STATUSES = new Set([408, 425, 429])
-const CHATGPT_MODELS = new Set(['gpt-5.4', 'gpt-5.4-mini'])
+const MODEL_ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{1,127}$/
+const FALLBACK_CHATGPT_MODELS = [
+  { id: 'gpt-5.4', name: 'GPT-5.4', description: 'Compatibility fallback for the ChatGPT Codex route.', reasoningLevels: [] },
+  { id: 'gpt-5.4-mini', name: 'GPT-5.4 mini', description: 'Faster compatibility fallback for the ChatGPT Codex route.', reasoningLevels: [] },
+]
 const SYSTEM_INSTRUCTIONS = 'You are BioResearch OS, a careful scientific research assistant. Distinguish evidence from inference, preserve source context, and say when evidence is missing.'
 
 const authFile = process.env.BIORESEARCH_AUTH_FILE || join(
@@ -24,10 +32,12 @@ const authFile = process.env.BIORESEARCH_AUTH_FILE || join(
   'bioresearch-os',
   'auth.json',
 )
+const modelsFile = process.env.BIORESEARCH_MODELS_FILE || join(dirname(authFile), 'models.json')
 
 let oauthServer
 let pendingOAuth
 let refreshPromise
+let modelDiscoveryPromise
 
 function stopOAuthServer() {
   const current = oauthServer
@@ -139,6 +149,36 @@ async function removeAuth() {
   await unlink(authFile).catch(() => {})
 }
 
+async function removeModelCache() {
+  await unlink(modelsFile).catch(() => {})
+}
+
+async function readModelCache(accountId) {
+  try {
+    const payload = JSON.parse(await readFile(modelsFile, 'utf8'))
+    if (payload?.version !== 1 || !Array.isArray(payload.models) || !payload.models.length) return null
+    if (accountId && payload.accountId && accountId !== payload.accountId) return null
+    return payload
+  } catch {
+    return null
+  }
+}
+
+async function writeModelCache(catalog, accountId) {
+  await mkdir(dirname(modelsFile), { recursive: true })
+  const temporaryFile = `${modelsFile}.${process.pid}.${randomUrlSafe(8)}.tmp`
+  const payload = { version: 1, provider: 'chatgpt', accountId: accountId || null, ...catalog }
+  await writeFile(temporaryFile, JSON.stringify(payload, null, 2), { encoding: 'utf8', mode: 0o600 })
+  try {
+    await rename(temporaryFile, modelsFile)
+  } catch (error) {
+    if (!['EEXIST', 'EPERM'].includes(error.code)) throw error
+    await unlink(modelsFile).catch(() => {})
+    await rename(temporaryFile, modelsFile)
+  }
+  await chmod(modelsFile, 0o600).catch(() => {})
+}
+
 async function getFreshAuth(forceRefresh = false) {
   const auth = await readAuth()
   if (!auth.refresh) throw new Error('ChatGPT account is not connected')
@@ -175,6 +215,63 @@ function authStatus(auth = {}) {
     type: auth.refresh ? 'oauth' : null,
     expiresAt: auth.expires || null,
     pending: Boolean(pendingOAuth),
+  }
+}
+
+function fallbackModelCatalog({ connected = false, warning = '' } = {}) {
+  return {
+    provider: 'chatgpt',
+    connected,
+    source: 'fallback',
+    stale: true,
+    fetchedAt: null,
+    defaultModelId: FALLBACK_CHATGPT_MODELS[0].id,
+    models: FALLBACK_CHATGPT_MODELS,
+    ...(warning ? { warning } : {}),
+  }
+}
+
+function reasoningLevelId(level) {
+  if (typeof level === 'string') return level
+  if (level && typeof level.effort === 'string') return level.effort
+  if (level && typeof level.id === 'string') return level.id
+  return null
+}
+
+export function normalizeCodexModels(payload) {
+  const models = []
+  const seen = new Set()
+  for (const entry of payload?.models || []) {
+    const id = typeof entry?.slug === 'string' ? entry.slug.trim().toLowerCase() : ''
+    if (!MODEL_ID_PATTERN.test(id) || seen.has(id) || (entry.visibility && entry.visibility !== 'list')) continue
+    seen.add(id)
+    models.push({
+      id,
+      name: typeof entry.display_name === 'string' && entry.display_name.trim() ? entry.display_name.trim() : id,
+      description: typeof entry.description === 'string' ? entry.description : '',
+      reasoningLevels: (entry.supported_reasoning_levels || []).map(reasoningLevelId).filter(Boolean),
+      defaultReasoningLevel: reasoningLevelId(entry.default_reasoning_level),
+      priority: Number.isFinite(entry.priority) ? entry.priority : models.length,
+    })
+  }
+  if (!models.length) throw new Error('ChatGPT returned an empty model catalog')
+  return {
+    fetchedAt: new Date().toISOString(),
+    defaultModelId: models[0].id,
+    models,
+  }
+}
+
+function publicCachedCatalog(cache, { source = 'cache', stale = false, warning = '' } = {}) {
+  return {
+    provider: 'chatgpt',
+    connected: true,
+    source,
+    stale,
+    fetchedAt: cache.fetchedAt || null,
+    defaultModelId: cache.defaultModelId || cache.models[0]?.id || null,
+    models: cache.models,
+    ...(warning ? { warning } : {}),
   }
 }
 
@@ -311,6 +408,7 @@ async function startOAuth() {
         accountId: extractAccountId(tokens),
       }
       await writeAuth(auth)
+      await removeModelCache()
       current.resolve(authStatus(auth))
       pendingOAuth = undefined
       sendHtml(response, 200, '<h1>Connected to ChatGPT</h1><p>You can close this window and return to BioResearch OS.</p>')
@@ -347,12 +445,6 @@ function normalizeMessages(messages) {
   }).filter((message) => message.content)
 }
 
-function normalizeModel(model) {
-  const requested = typeof model === 'string' ? model : 'gpt-5.4'
-  if (!CHATGPT_MODELS.has(requested)) throw new Error('Unsupported ChatGPT model')
-  return requested
-}
-
 export function coerceCodexRequestBody({ model, messages }) {
   const systemMessages = messages.filter((message) => message.role === 'system').map((message) => message.content)
   const input = messages.filter((message) => message.role !== 'system')
@@ -366,17 +458,85 @@ export function coerceCodexRequestBody({ model, messages }) {
   }
 }
 
-function buildCodexHeaders(auth) {
+function buildCodexAuthHeaders(auth) {
   return {
     Authorization: `Bearer ${auth.access}`,
     ...(auth.accountId ? { 'ChatGPT-Account-Id': auth.accountId } : {}),
+    originator: 'bioresearch-os',
+    'User-Agent': 'BioResearch-OS/0.1',
+  }
+}
+
+function buildCodexHeaders(auth) {
+  return {
+    ...buildCodexAuthHeaders(auth),
     'Content-Type': 'application/json',
     Accept: 'text/event-stream',
     'OpenAI-Beta': 'responses=experimental',
-    originator: 'bioresearch-os',
     'session-id': randomUUID(),
-    'User-Agent': 'BioResearch-OS/0.1',
   }
+}
+
+async function fetchRemoteModelCatalog(auth, signal) {
+  const url = new URL(CODEX_MODELS_ENDPOINT)
+  url.searchParams.set('client_version', CLIENT_VERSION)
+  return fetch(url, {
+    method: 'GET',
+    headers: { ...buildCodexAuthHeaders(auth), Accept: 'application/json' },
+    signal,
+  })
+}
+
+async function discoverChatgptModels({ force = false } = {}) {
+  const storedAuth = await readAuth()
+  if (!storedAuth.refresh) return fallbackModelCatalog({ warning: 'Connect ChatGPT to discover models available to this account.' })
+
+  const cached = await readModelCache(storedAuth.accountId)
+  const fetchedAt = cached?.fetchedAt ? Date.parse(cached.fetchedAt) : 0
+  if (!force && cached && Number.isFinite(fetchedAt) && Date.now() - fetchedAt < MODEL_CACHE_TTL_MS) {
+    return publicCachedCatalog(cached)
+  }
+
+  if (!modelDiscoveryPromise) {
+    modelDiscoveryPromise = (async () => {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 5000)
+      try {
+        let auth = await getFreshAuth()
+        let response = await fetchRemoteModelCatalog(auth, controller.signal)
+        if (response.status === 401) {
+          await response.body?.cancel().catch(() => {})
+          auth = await getFreshAuth(true)
+          response = await fetchRemoteModelCatalog(auth, controller.signal)
+        }
+        if (!response.ok) throw await providerError(response)
+        const catalog = normalizeCodexModels(await response.json())
+        await writeModelCache(catalog, auth.accountId)
+        return publicCachedCatalog(catalog, { source: 'remote' })
+      } catch (error) {
+        const latestAuth = await readAuth()
+        if (!latestAuth.refresh) {
+          return fallbackModelCatalog({ warning: 'The ChatGPT session expired. Reconnect to discover available models.' })
+        }
+        const warning = error?.name === 'AbortError'
+          ? 'ChatGPT model discovery timed out; using the last known catalog.'
+          : `ChatGPT model discovery failed; using the last known catalog. ${error.message || ''}`.trim()
+        if (cached) return publicCachedCatalog(cached, { stale: true, warning })
+        return fallbackModelCatalog({ connected: true, warning })
+      } finally {
+        clearTimeout(timeout)
+      }
+    })().finally(() => { modelDiscoveryPromise = undefined })
+  }
+  return modelDiscoveryPromise
+}
+
+async function normalizeModel(model) {
+  const requested = typeof model === 'string' ? model.trim().toLowerCase() : ''
+  if (!MODEL_ID_PATTERN.test(requested)) throw new Error('Unsupported ChatGPT model')
+  const catalog = await discoverChatgptModels()
+  if (!catalog.connected || !catalog.models.some((entry) => entry.id === requested)) throw new Error('Unsupported ChatGPT model')
+  return requested
 }
 
 async function codexFetch(auth, body, signal) {
@@ -434,7 +594,7 @@ async function* readSseEvents(body) {
 
 async function providerError(response) {
   const payload = await response.json().catch(() => ({}))
-  return new ProviderHttpError(payload?.error?.message || `ChatGPT request failed (${response.status})`, response.status)
+  return new ProviderHttpError(payload?.error?.message || payload?.detail || `ChatGPT request failed (${response.status})`, response.status)
 }
 
 async function openCodexStream(model, messages, signal) {
@@ -525,6 +685,11 @@ const server = createServer(async (request, response) => {
       sendJson(request, response, 200, authStatus(await readAuth()))
       return
     }
+    if (request.method === 'GET' && url.pathname === '/api/chatgpt/models') {
+      const catalog = await discoverChatgptModels({ force: url.searchParams.get('refresh') === '1' })
+      sendJson(request, response, 200, catalog)
+      return
+    }
     if (request.method === 'POST' && url.pathname === '/api/auth/chatgpt/start') {
       const authorizationUrl = await startOAuth()
       sendJson(request, response, 200, { ok: true, provider: 'chatgpt', url: authorizationUrl, pending: true })
@@ -532,13 +697,14 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === 'POST' && url.pathname === '/api/auth/chatgpt/logout') {
       await removeAuth()
+      await removeModelCache()
       sendJson(request, response, 200, authStatus())
       return
     }
     if (request.method === 'POST' && url.pathname === '/api/chatgpt/responses/stream') {
       const body = await readJson(request)
       const messages = normalizeMessages(body.messages)
-      const model = normalizeModel(body.model)
+      const model = await normalizeModel(body.model)
       await streamChat(request, response, model, messages)
       return
     }
