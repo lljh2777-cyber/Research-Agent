@@ -35,6 +35,7 @@ import {
   ThumbsUp,
 } from 'lucide-react'
 import { buildVaultIndex, getVaultName, parseVaultDirectory, parseVaultFiles } from './vault.js'
+import { loadLocalVault } from './localVault.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
 import './styles.css'
 
@@ -120,7 +121,7 @@ function LogoMark() {
   )
 }
 
-function Sidebar({ activeSection, setActiveSection, onConnectVault, onSyncVault, vaultName, vaultNoteCount, syncState }) {
+function Sidebar({ activeSection, setActiveSection, onConnectVault, onSyncVault, vaultName, vaultNoteCount, syncState, vaultSource, localAdapterState }) {
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -151,6 +152,7 @@ function Sidebar({ activeSection, setActiveSection, onConnectVault, onSyncVault,
           <ChevronDown size={16} />
         </button>
         {vaultName && <button className="settings-link sync-link" onClick={onSyncVault} disabled={syncState === 'syncing'}><RefreshCw className={syncState === 'syncing' ? 'spin' : ''} size={15} /> {syncState === 'syncing' ? 'Syncing vault' : syncState === 'needs-permission' ? 'Reconnect vault' : 'Sync vault'}</button>}
+        {vaultSource === 'local-adapter' && <div className={`adapter-status ${localAdapterState}`}><Database size={14} /><span>{localAdapterState === 'ready' ? 'Local adapter online' : 'Local adapter offline'}</span>{localAdapterState === 'ready' && <small>auto sync 15s</small>}</div>}
         <button className="settings-link"><Settings2 size={16} /> Settings</button>
       </div>
     </aside>
@@ -444,6 +446,9 @@ function App() {
   const [vaultNotes, setVaultNotes] = useState([])
   const [vaultName, setVaultName] = useState('')
   const [vaultHandle, setVaultHandle] = useState(null)
+  const [vaultSource, setVaultSource] = useState('sample')
+  const [localAdapterState, setLocalAdapterState] = useState('checking')
+  const [localRevision, setLocalRevision] = useState('')
   const [syncState, setSyncState] = useState('idle')
   const [selectedNote, setSelectedNote] = useState(null)
   const vaultInputRef = useRef(null)
@@ -452,7 +457,7 @@ function App() {
   const inspectorNotes = vaultIndex.notes.length ? vaultIndex.linkedNotes : sampleLinkedNotes
   const inspectorSources = vaultIndex.sources.length ? vaultIndex.sources : sampleSources
 
-  const applyVault = async (notes, nextVaultName, handle = null) => {
+  const applyVault = async (notes, nextVaultName, { handle = null, source = 'manual', revision = '' } = {}) => {
     if (!notes.length) {
       setSyncState('empty')
       return false
@@ -460,9 +465,11 @@ function App() {
     setVaultNotes(notes)
     setVaultName(nextVaultName)
     setVaultHandle(handle)
-    await saveVaultSnapshot({ vaultName: nextVaultName, notes })
+    setVaultSource(source)
+    setLocalRevision(revision)
+    await saveVaultSnapshot({ vaultName: nextVaultName, notes, source, revision })
     if (handle) await saveVaultHandle(handle)
-    setSyncState(handle ? 'ready' : 'manual')
+    setSyncState(source === 'local-adapter' || handle ? 'ready' : 'manual')
     return true
   }
 
@@ -480,14 +487,43 @@ function App() {
     setSyncState('syncing')
     try {
       const notes = await parseVaultDirectory(handle)
-      return applyVault(notes, handle.name || getVaultName(notes), handle)
+      return applyVault(notes, handle.name || getVaultName(notes), { handle, source: 'browser-handle' })
     } catch {
       setSyncState('error')
       return false
     }
   }
 
+  const syncFromLocalAdapter = async (silent = false) => {
+    if (!silent) setSyncState('syncing')
+    try {
+      const payload = await loadLocalVault({ revision: localRevision, timeout: silent ? 1800 : 2200 })
+      setLocalAdapterState('ready')
+      if (payload.unchanged) {
+        setSyncState('ready')
+        return true
+      }
+      const notes = payload.notes || []
+      if (!notes.length) {
+        setVaultNotes([])
+        setVaultName(payload.vaultName || 'local-vault')
+        setVaultHandle(null)
+        setVaultSource('local-adapter')
+        setLocalRevision(payload.revision || '')
+        await saveVaultSnapshot({ vaultName: payload.vaultName || 'local-vault', notes: [], source: 'local-adapter', revision: payload.revision || '' })
+        setSyncState('empty')
+        return true
+      }
+      return applyVault(notes, payload.vaultName || getVaultName(notes), { source: 'local-adapter', revision: payload.revision || '' })
+    } catch {
+      setLocalAdapterState('offline')
+      if (!silent) setSyncState('error')
+      return false
+    }
+  }
+
   const handleConnectVault = async () => {
+    if (await syncFromLocalAdapter()) return
     if (typeof window.showDirectoryPicker === 'function') {
       try {
         const handle = await window.showDirectoryPicker({ mode: 'read' })
@@ -501,7 +537,9 @@ function App() {
   }
 
   const handleSyncVault = async () => {
-    if (vaultHandle) {
+    if (vaultSource === 'local-adapter') {
+      await syncFromLocalAdapter()
+    } else if (vaultHandle) {
       await syncFromHandle(vaultHandle, true)
     } else {
       await handleConnectVault()
@@ -515,7 +553,7 @@ function App() {
         setSyncState('empty')
         return
       }
-      await applyVault(notes, getVaultName(notes))
+      await applyVault(notes, getVaultName(notes), { source: 'manual' })
     } finally {
       event.target.value = ''
     }
@@ -525,6 +563,8 @@ function App() {
     let cancelled = false
     Promise.all([loadVaultSnapshot(), loadVaultHandle()]).then(async ([snapshot, handle]) => {
       if (cancelled) return
+      const localSynced = await syncFromLocalAdapter(true)
+      if (localSynced || cancelled) return
       if (handle) {
         setVaultHandle(handle)
         const synced = await syncFromHandle(handle)
@@ -533,11 +573,19 @@ function App() {
       if (snapshot?.notes?.length && !cancelled) {
         setVaultNotes(snapshot.notes)
         setVaultName(snapshot.vaultName || getVaultName(snapshot.notes))
+        setVaultSource(snapshot.source || (handle ? 'browser-handle' : 'manual'))
+        setLocalRevision(snapshot.revision || '')
         setSyncState(handle ? 'needs-permission' : 'manual')
       }
     })
     return () => { cancelled = true }
   }, [])
+
+  useEffect(() => {
+    if (vaultSource !== 'local-adapter') return undefined
+    const timer = window.setInterval(() => syncFromLocalAdapter(true), 15000)
+    return () => window.clearInterval(timer)
+  }, [vaultSource, localRevision])
 
   useEffect(() => {
     if (!running) return undefined
@@ -576,6 +624,8 @@ function App() {
         vaultName={vaultName}
         vaultNoteCount={vaultIndex.notes.length}
         syncState={syncState}
+        vaultSource={vaultSource}
+        localAdapterState={localAdapterState}
       />
       <input ref={vaultInputRef} className="visually-hidden" type="file" webkitdirectory="true" directory="true" multiple onChange={handleVaultSelection} />
       <main className="main-shell">

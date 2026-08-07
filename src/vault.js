@@ -97,6 +97,14 @@ export async function parseVaultFiles(fileList) {
   return parseVaultEntries(Array.from(fileList))
 }
 
+export async function parseVaultTextEntries(entries) {
+  return parseVaultEntries(entries.map(({ path, content }) => ({
+    name: path.split('/').pop() || path,
+    webkitRelativePath: path,
+    text: () => Promise.resolve(content),
+  })))
+}
+
 export async function parseVaultDirectory(directoryHandle) {
   const entries = []
 

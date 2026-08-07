@@ -28,11 +28,24 @@ npm run build
 - Local wikilink graph view without requiring paper2MD
 - IndexedDB-backed Vault snapshot persistence and in-app Markdown note preview
 - Persistent browser directory handle with manual Vault rescan when File System Access API is available
+- Optional loopback-only local Vault adapter with 15-second revision polling and read-only Markdown access
 - Visual concept in `design/concept-desktop.png`
+
+## Local Vault adapter
+
+For a Web browser that cannot use the File System Access API, start the read-only local adapter with the Vault root you want to expose:
+
+```bash
+npm run vault-server -- "D:\Obsidian Vault\paper-knowledge-base\knowledge-base"
+```
+
+The adapter listens only on `127.0.0.1:4317`, serves Markdown files under the selected root, ignores `.obsidian`, `.trash`, and `node_modules`, and exposes `GET /api/health` plus `GET /api/vault`. The Web app attempts this adapter first, falls back to browser folder selection when it is unavailable, and polls for revisions every 15 seconds after a local connection succeeds.
+
+Use `BIORESEARCH_VAULT_PORT` to change the port or `VITE_VAULT_API_URL` when the adapter runs at another local URL.
 
 ## Next integration steps
 
-1. Connect the Obsidian vault through a local filesystem adapter or MCP server for broader browser support.
-2. Add vector retrieval and source-aware answer generation.
-3. Add automatic file-change synchronization and note editing safeguards.
+1. Add vector retrieval and source-aware answer generation.
+2. Add note editing safeguards and explicit change conflict handling.
+3. Add an MCP bridge over the same local Vault adapter.
 4. Move the stable Web app into an Electron shell with the same renderer.

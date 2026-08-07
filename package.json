@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "vault-server": "node server/vault-server.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
