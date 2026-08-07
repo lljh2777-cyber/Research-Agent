@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  ArrowLeftToLine,
-  ArrowRightToLine,
   BookOpen,
   Boxes,
   ChevronDown,
@@ -12,7 +10,6 @@ import {
   Folder,
   FolderOpen,
   Globe2,
-  GripVertical,
   Hash,
   LayoutPanelLeft,
   LayoutPanelTop,
@@ -21,10 +18,12 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
+  Plus,
   RefreshCw,
   RotateCcw,
   Search,
   Tag,
+  X,
 } from 'lucide-react'
 
 import { createKnowledgeGraph } from './knowledgeGraph.js'
@@ -212,26 +211,19 @@ function PluginsPanel() {
   return <div className="plugin-grid">{tools.map(([label, Icon]) => <button key={label}><Icon size={14} /><span>{label}</span><small>Ready</small></button>)}</div>
 }
 
-function DockPanel({ panelId, side, collapsed, dragging, onToggle, onDragStart, onDragEnd, onDrop, onMove, children }) {
-  const meta = PANEL_META[panelId]
-  const Icon = meta.icon
-  const MoveIcon = side === 'left' ? ArrowRightToLine : ArrowLeftToLine
-  return <section className={`dock-panel dock-panel-${panelId} ${collapsed ? 'collapsed' : ''} ${dragging ? 'dragging' : ''}`} data-panel-id={panelId} draggable onDragStart={(event) => onDragStart(event, panelId)} onDragEnd={onDragEnd} onDragOver={(event) => event.preventDefault()} onDrop={(event) => onDrop(event, side, panelId)}>
-    <header className="dock-panel-header">
-      <span className="dock-drag-handle" title="Drag panel"><GripVertical size={13} /></span>
-      <Icon size={13} />
-      <button className="dock-panel-title" onClick={() => onToggle(panelId)}>{meta.title}</button>
-      <button className="dock-panel-action" onClick={() => onMove(panelId, side === 'left' ? 'right' : 'left')} title={`Move ${meta.title} to ${side === 'left' ? 'right' : 'left'} sidebar`}><MoveIcon size={12} /></button>
-      <button className="dock-panel-action" onClick={() => onToggle(panelId)} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${meta.title}`}>{collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</button>
-    </header>
-    {!collapsed && <div className="dock-panel-body">{children}</div>}
-  </section>
-}
-
-function Dock({ side, panelIds, collapsedPanels, draggingId, onToggle, onDragStart, onDragEnd, onDrop, onMove, renderPanel }) {
+function Dock({ side, panelIds, activePanelId, draggingId, onActivate, onDragStart, onDragEnd, onDrop, renderPanel }) {
+  const activePanel = panelIds.includes(activePanelId) ? activePanelId : panelIds[0]
   return <aside className={`knowledge-dock dock-${side}`} data-sidebar={side} onDragOver={(event) => event.preventDefault()} onDrop={(event) => onDrop(event, side)}>
-    <div className="dock-stack">{panelIds.map((panelId) => <DockPanel panelId={panelId} side={side} collapsed={collapsedPanels.has(panelId)} dragging={draggingId === panelId} onToggle={onToggle} onDragStart={onDragStart} onDragEnd={onDragEnd} onDrop={onDrop} onMove={onMove} key={panelId}>{renderPanel(panelId)}</DockPanel>)}</div>
-    <div className="dock-drop-hint">Drop panel here</div>
+    <div className="dock-tabbar" role="tablist" aria-label={`${side} sidebar panels`}>
+      {panelIds.map((panelId) => {
+        const meta = PANEL_META[panelId]
+        const Icon = meta.icon
+        const active = panelId === activePanel
+        return <button className={`dock-tab ${active ? 'active' : ''} ${draggingId === panelId ? 'dragging' : ''}`} role="tab" aria-selected={active} aria-label={`${meta.title} panel`} title={`${meta.title} · drag to move`} data-panel-tab={panelId} draggable onClick={() => onActivate(side, panelId)} onDragStart={(event) => onDragStart(event, panelId)} onDragEnd={onDragEnd} onDragOver={(event) => event.preventDefault()} onDrop={(event) => onDrop(event, side, panelId)} key={panelId}><Icon size={17} /><span>{meta.title}</span></button>
+      })}
+      <span className="dock-tab-dropzone" aria-hidden="true" />
+    </div>
+    {activePanel ? <section className={`dock-active-panel dock-panel-${activePanel}`} data-panel-id={activePanel} role="tabpanel" aria-label={PANEL_META[activePanel].title}>{renderPanel(activePanel)}</section> : <div className="dock-empty">Drag a panel tab here.</div>}
   </aside>
 }
 
@@ -239,8 +231,9 @@ export default function KnowledgeGraphSection({ index, onConnectVault }) {
   const graph = useMemo(() => createKnowledgeGraph(index), [index])
   const notes = index?.notes || []
   const [selectedNote, setSelectedNote] = useState(() => notes[0] || null)
+  const [openNoteIds, setOpenNoteIds] = useState(() => notes[0] ? [notes[0].id] : [])
   const [dockLayout, setDockLayout] = useState(loadDockLayout)
-  const [collapsedPanels, setCollapsedPanels] = useState(() => new Set())
+  const [activePanels, setActivePanels] = useState({ left: 'files', right: 'graph' })
   const [draggingId, setDraggingId] = useState(null)
   const [leftOpen, setLeftOpen] = useState(true)
   const [rightOpen, setRightOpen] = useState(true)
@@ -257,9 +250,13 @@ export default function KnowledgeGraphSection({ index, onConnectVault }) {
   }, [])
 
   useEffect(() => {
-    if (!selectedNote && notes.length) setSelectedNote(notes[0])
-    if (selectedNote && !notes.some((note) => note.id === selectedNote.id)) setSelectedNote(notes[0] || null)
-  }, [notes, selectedNote])
+    setSelectedNote((current) => notes.find((note) => note.id === current?.id) || notes[0] || null)
+    setOpenNoteIds((current) => {
+      const available = new Set(notes.map((note) => note.id))
+      const valid = current.filter((id) => available.has(id))
+      return valid.length ? valid : notes[0] ? [notes[0].id] : []
+    })
+  }, [notes])
 
   useEffect(() => {
     window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(dockLayout))
@@ -268,11 +265,33 @@ export default function KnowledgeGraphSection({ index, onConnectVault }) {
   const outline = useMemo(() => extractMarkdownOutline(selectedNote?.body), [selectedNote])
   const tags = useMemo(() => collectVaultTags(notes), [notes])
 
-  const handleTogglePanel = (panelId) => setCollapsedPanels((current) => {
-    const next = new Set(current)
-    next.has(panelId) ? next.delete(panelId) : next.add(panelId)
-    return next
-  })
+  useEffect(() => {
+    setActivePanels((current) => ({
+      left: dockLayout.left.includes(current.left) ? current.left : dockLayout.left[0] || null,
+      right: dockLayout.right.includes(current.right) ? current.right : dockLayout.right[0] || null,
+    }))
+  }, [dockLayout])
+
+  const notesById = useMemo(() => new Map(notes.map((note) => [note.id, note])), [notes])
+  const openNotes = useMemo(() => openNoteIds.map((id) => notesById.get(id)).filter(Boolean), [notesById, openNoteIds])
+
+  const handleSelectNote = (note) => {
+    if (!note) return
+    setSelectedNote(note)
+    setOpenNoteIds((current) => current.includes(note.id) ? current : [...current, note.id])
+  }
+
+  const handleCloseNote = (noteId) => {
+    setOpenNoteIds((current) => {
+      const closingIndex = current.indexOf(noteId)
+      const next = current.filter((id) => id !== noteId)
+      if (selectedNote?.id === noteId) {
+        const nextId = next[Math.min(closingIndex, next.length - 1)]
+        setSelectedNote(nextId ? notesById.get(nextId) || null : null)
+      }
+      return next
+    })
+  }
 
   const handleDragStart = (event, panelId) => {
     setDraggingId(panelId)
@@ -283,23 +302,25 @@ export default function KnowledgeGraphSection({ index, onConnectVault }) {
     event.preventDefault()
     event.stopPropagation()
     const panelId = event.dataTransfer.getData('text/knowledge-panel') || draggingId
-    if (panelId) setDockLayout((current) => moveDockPanel(current, panelId, side, beforePanelId === panelId ? null : beforePanelId))
+    if (panelId) {
+      setDockLayout((current) => moveDockPanel(current, panelId, side, beforePanelId === panelId ? null : beforePanelId))
+      setActivePanels((current) => ({ ...current, [side]: panelId }))
+    }
     setDraggingId(null)
   }
-  const handleMove = (panelId, side) => setDockLayout((current) => moveDockPanel(current, panelId, side))
   const resetLayout = () => {
     setDockLayout(normalizeDockLayout(DEFAULT_DOCK_LAYOUT))
-    setCollapsedPanels(new Set())
+    setActivePanels({ left: 'files', right: 'graph' })
     setLeftOpen(true)
     setRightOpen(true)
   }
 
   const selectGraphNode = (node) => {
-    if (node.note) setSelectedNote(node.note)
+    if (node.note) handleSelectNote(node.note)
   }
 
   const renderPanel = (panelId) => {
-    if (panelId === 'files') return <FilesPanel notes={notes} selectedId={selectedNote?.id} onSelect={setSelectedNote} />
+    if (panelId === 'files') return <FilesPanel notes={notes} selectedId={selectedNote?.id} onSelect={handleSelectNote} />
     if (panelId === 'outline') return <OutlinePanel note={selectedNote} />
     if (panelId === 'tags') return <TagsPanel tags={tags} />
     if (panelId === 'graph') return <MiniGraph graph={graph} selectedId={selectedNote?.id} onSelect={selectGraphNode} />
@@ -320,24 +341,28 @@ export default function KnowledgeGraphSection({ index, onConnectVault }) {
       </div>
     </div>
 
-    <div className="knowledge-tabs">
-      <button className="active"><FileText size={13} /><span>{selectedNote?.title || 'Welcome'}</span><small>{selectedNote ? 'Markdown' : 'Workspace'}</small></button>
-      <button><Network size={13} /><span>Graph explorer</span></button>
-    </div>
-
     <div className="knowledge-layout">
-      {leftOpen && <Dock side="left" panelIds={dockLayout.left} collapsedPanels={collapsedPanels} draggingId={draggingId} onToggle={handleTogglePanel} onDragStart={handleDragStart} onDragEnd={() => setDraggingId(null)} onDrop={handleDrop} onMove={handleMove} renderPanel={renderPanel} />}
+      {leftOpen && <Dock side="left" panelIds={dockLayout.left} activePanelId={activePanels.left} draggingId={draggingId} onActivate={(side, panelId) => setActivePanels((current) => ({ ...current, [side]: panelId }))} onDragStart={handleDragStart} onDragEnd={() => setDraggingId(null)} onDrop={handleDrop} renderPanel={renderPanel} />}
 
-      <main className="knowledge-editor">
-        {selectedNote ? <MarkdownDocument note={selectedNote} /> : <div className="knowledge-welcome">
-          <span><BookOpen size={25} /></span>
-          <h2>Your research knowledge, in one workspace</h2>
-          <p>Connect an Obsidian Vault to browse files, inspect backlinks, read Markdown, and arrange research tools around your document.</p>
-          <button onClick={onConnectVault}><FolderOpen size={15} /> Connect Vault</button>
-        </div>}
+      <main className="knowledge-center">
+        <div className="knowledge-tabs" role="tablist" aria-label="Open documents">
+          {openNotes.map((note) => <div className={note.id === selectedNote?.id ? 'active' : ''} role="tab" aria-selected={note.id === selectedNote?.id} key={note.id}>
+            <button className="document-tab-main" onClick={() => setSelectedNote(note)}><FileText size={13} /><span>{note.title}</span><small>Markdown</small></button>
+            <button className="document-tab-close" onClick={() => handleCloseNote(note.id)} aria-label={`Close ${note.title}`}><X size={12} /></button>
+          </div>)}
+          <button className="document-tab-add" onClick={() => { setLeftOpen(true); setActivePanels((current) => ({ ...current, left: 'files' })) }} aria-label="Browse Vault files"><Plus size={14} /></button>
+        </div>
+        <div className="knowledge-editor">
+          {selectedNote ? <MarkdownDocument note={selectedNote} /> : <div className="knowledge-welcome">
+            <span><BookOpen size={25} /></span>
+            <h2>{notes.length ? 'Choose a document from the Files panel' : 'Your research knowledge, in one workspace'}</h2>
+            <p>{notes.length ? 'Open Markdown notes as tabs and keep multiple sources ready while you research.' : 'Connect an Obsidian Vault to browse files, inspect backlinks, read Markdown, and arrange research tools around your document.'}</p>
+            <button onClick={notes.length ? () => { setLeftOpen(true); setActivePanels((current) => ({ ...current, left: 'files' })) } : onConnectVault}><FolderOpen size={15} /> {notes.length ? 'Browse files' : 'Connect Vault'}</button>
+          </div>}
+        </div>
       </main>
 
-      {rightOpen && <Dock side="right" panelIds={dockLayout.right} collapsedPanels={collapsedPanels} draggingId={draggingId} onToggle={handleTogglePanel} onDragStart={handleDragStart} onDragEnd={() => setDraggingId(null)} onDrop={handleDrop} onMove={handleMove} renderPanel={renderPanel} />}
+      {rightOpen && <Dock side="right" panelIds={dockLayout.right} activePanelId={activePanels.right} draggingId={draggingId} onActivate={(side, panelId) => setActivePanels((current) => ({ ...current, [side]: panelId }))} onDragStart={handleDragStart} onDragEnd={() => setDraggingId(null)} onDrop={handleDrop} renderPanel={renderPanel} />}
     </div>
 
     <footer className="knowledge-statusbar">

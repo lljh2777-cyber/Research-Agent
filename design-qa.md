@@ -1,49 +1,56 @@
-# Knowledge Workspace Design QA
+# Knowledge Workspace Horizontal Tabs QA
 
-- Source visual truth: `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-d2b2d0cf-2ad1-416e-b8a6-8ba91d0eac8b.png`
-- Implementation screenshot: `C:\Users\Thomas Wade\AppData\Local\Temp\research-agent-knowledge-workspace-2048.png`
-- Responsive screenshot: `C:\Users\Thomas Wade\AppData\Local\Temp\research-agent-knowledge-workspace-mobile.png`
-- Viewport: 2048 x 1216 CSS px for the normalized full-view comparison; 390 x 844 CSS px for responsive verification
-- Pixels and density: source 2048 x 1216, implementation 2048 x 1216, device scale factor 1; no density normalization required
-- State: real local Obsidian Vault connected, annotation note open, left and right docks visible
+- Source visual truths:
+  - `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-747cf767-be3e-4d19-ab9f-04a4c71e1a87.png` (left dock horizontal tool tabs)
+  - `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-43831c75-e5ae-45c1-8322-633c1f6882a0.png` (right dock horizontal tool tabs)
+  - `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-0de4f25b-3e8d-47a3-86eb-7c04c9c193ee.png` (document tabs above the center editor)
+- Before-state evidence: `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-8e1a316d-4bbf-47d4-82c6-fc5f9c32b657.png`
+- Implementation screenshots:
+  - `C:\Users\Thomas Wade\AppData\Local\Temp\research-agent-horizontal-tabs-desktop.png`
+  - `C:\Users\Thomas Wade\AppData\Local\Temp\research-agent-horizontal-tabs-mobile.png`
+- Viewports: 1600 x 1000 CSS px desktop; 390 x 844 CSS px responsive
+- Device scale factor: 1
+- State: cached real Vault snapshot with 181 Markdown notes; two documents open; Files selected on the left; Web browser selected on the right
 
 ## Full-view comparison evidence
 
-The source and implementation were opened together at the same 2048 x 1216 viewport. The implementation preserves the defining Obsidian workspace anatomy: persistent tabs and command strip, a file/outline/tag dock on the left, a primary Markdown reading surface in the center, and a modular graph/web/tools dock on the right. The existing BioResearch OS dark theme, global product navigation, and typography were intentionally retained instead of copying Obsidian's application chrome or light palette.
+The latest implementation and all three focused target references were opened together. The previous vertically stacked accordion modules were replaced with a single active panel per side. Both sidebars now place draggable module icons in a horizontal tab strip at the top, with a blue active underline. The center column owns its own document tab strip, supports multiple open notes, and provides close and add/browse controls.
 
-The three primary regions have clear borders, independent scrolling, dense editor-scale controls, and full-height use of the available workspace. Panel headers expose drag handles, collapse controls, and accessible cross-dock movement controls.
+The existing BioResearch OS dark theme and icon family remain intentional product-system constraints; the information architecture and interaction placement follow the supplied Obsidian references.
 
 ## Focused region comparison evidence
 
-The left dock, document header/properties, and right tool dock are all readable in the normalized full-view capture, so separate crops were not required. These regions were also exercised directly in the browser: file search opened `qiang_language_2026 批注`, the document and outline updated together, and the Files panel moved from the left dock to the right dock and persisted there.
+- Left sidebar: Files, Outline, and Tags are a horizontal icon group matching the compact dock-tab reference. Clicking a tab swaps the one visible left-side panel.
+- Right sidebar: Local graph, Web browser, and Research tools use the same horizontal group and selected treatment.
+- Center editor: GRO-seq and `qiang_language_2026 批注` appear as adjacent tabs directly above the document, with close buttons and a trailing add/browse button.
+- Narrow viewport: document tabs remain above the editor while both docks collapse behind the existing sidebar controls.
 
 ## Required fidelity surfaces
 
-- Fonts and typography: existing Manrope/DM Mono product typography is consistent across document, metadata, tabs, and dock chrome. Hierarchy and wrapping remain readable at desktop and narrow viewports.
-- Spacing and layout rhythm: three full-height panes, narrow editor chrome, tab strip, panel dividers, and dense list rhythm match the reference's workspace character. No outer content card or excessive page margin remains.
-- Colors and visual tokens: existing dark navy, blue, mint, and subtle border tokens were intentionally retained. Selected files, active tabs, graph nodes, and status states have sufficient visual distinction.
-- Image and asset quality: no raster assets were required. Product icons use the existing icon system; the local graph is rendered from real Vault relationship data.
-- Copy and content: panel labels and actions describe real behavior. The central surface renders the selected Vault note and hides internal HTML comment markers.
+- Fonts and typography: existing Manrope and DM Mono are preserved; compact tab labels truncate cleanly and the active document remains readable.
+- Spacing and layout rhythm: 38 px side tab rails and 35 px document rail match the dense editor chrome of the references without adding nested cards.
+- Colors and visual tokens: dark navy surfaces, blue active underlines, subtle separators, and muted inactive icons remain consistent with BioResearch OS.
+- Image and asset quality: no raster assets were required. All visible controls use the existing icon library rather than placeholders.
+- Copy and content: side tabs expose accessible names and tooltips; document labels come from real Vault titles.
 
 ## Comparison history
 
-1. P2: On narrow screens both docks initially covered the document. Fixed by automatically closing both docks below 900 px while keeping toolbar controls to reopen either dock. Post-fix evidence: 390 x 844 screenshot shows an unobstructed document and browser interaction confirmed the left dock can be opened and closed.
-2. P2: Agent dashboard HTML comment markers appeared as document text. Fixed by filtering single-line and multiline HTML comments in the Markdown presentation layer and suppressing a repeated leading H1. Post-fix DOM evidence contains the expected document heading and no `agent-dashboard:` markers.
+1. P1: All modules were previously stacked vertically, consuming the entire sidebars. Fixed by changing each dock to a horizontal tablist plus one active tabpanel.
+2. P1: Document tabs previously spanned the whole workspace above both sidebars. Fixed by moving the open-document tablist inside the center column only.
+3. P2: The original page model held only one document. Fixed by adding multiple open document tabs, adjacent-tab fallback when closing, and a browse-files add action.
+4. P2: Side docks could cover the document on narrow viewports. Existing responsive behavior was retained and reverified: both docks close below 900 px and can be reopened independently.
 
 ## Findings
 
-No actionable P0, P1, or P2 differences remain. The outer BioResearch OS navigation and dark palette are intentional product-system constraints, not fidelity defects.
-
-## Follow-up polish
-
-- P3: Future iterations could add draggable dock resizing and multi-document tab persistence.
-- P3: A richer Markdown renderer could turn wikilinks into interactive inline links and support tables and callouts.
+No actionable P0, P1, or P2 findings remain.
 
 ## Browser verification
 
 - URL: `http://localhost:5173/`
 - Page identity: `BioResearch OS`
-- Primary interactions: Knowledge Graph navigation, real Vault auto-load, file filtering, note selection, cross-dock panel movement, layout reset, mobile dock open/close
+- Primary interactions: left Files/Outline/Tags switching, right Graph/Web/Tools switching, opening a second document, selecting document tabs, closing the active document and falling back to its neighbor, mobile dock open/close
+- Panel movement: horizontal panel tabs retain HTML drag-and-drop and share the unit-tested `moveDockPanel` state transition for same-side reordering and cross-dock movement
 - Console warnings/errors: none
+- Automated tests: 20 passed
 
 final result: passed
