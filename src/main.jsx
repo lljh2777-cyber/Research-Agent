@@ -18,7 +18,6 @@ import {
   FlaskConical,
   GitBranch,
   Info,
-  Layers3,
   LoaderCircle,
   MessageSquare,
   MoreHorizontal,
@@ -511,10 +510,6 @@ function Inspector({ activeStage, running, onPause, linkedNotes, sources, vaultN
   )
 }
 
-function EmptyGraphSection({ onConnectVault }) {
-  return <div className="empty-section"><div className="empty-icon"><Layers3 size={26} /></div><h2>Knowledge Graph</h2><p>Connect an Obsidian Vault to map papers, methods, datasets, and concepts from local wikilinks.</p><button className="primary-button" onClick={onConnectVault}><Plus size={16} /> Connect Vault</button></div>
-}
-
 function App() {
   const [activeSection, setActiveSection] = useState('research')
   const [input, setInput] = useState('')
@@ -993,7 +988,7 @@ function App() {
           <div className="topbar-actions"><button className="new-chat" onClick={handleNewChat}>New chat <Plus size={17} /></button><button className="icon-button mobile-settings-button" onClick={() => setSettingsOpen(true)} aria-label="Open knowledge settings"><Settings2 size={18} /></button><button className="icon-button" aria-label="More options"><MoreHorizontal size={19} /></button></div>
         </header>
 
-        {activeSection === 'graph' ? (vaultIndex.notes.length ? <KnowledgeGraphSection index={vaultIndex} onOpenNote={setSelectedNote} /> : <EmptyGraphSection onConnectVault={handleConnectVault} />) : activeSection === 'pipelines' ? (
+        {activeSection === 'graph' ? <KnowledgeGraphSection index={vaultIndex} onConnectVault={handleConnectVault} /> : activeSection === 'pipelines' ? (
           <PipelinesSection vaultName={vaultName} noteCount={vaultNotes.length} runs={pipelineRuns} runningPipelineId={pipelineRunningId} onRun={handleRunPipeline} onViewRun={handleViewPipelineRun} onConnectVault={handleConnectVault} />
         ) : activeSection === 'runs' ? (
           <RunsSection runs={pipelineRuns} selectedRunId={selectedPipelineRunId} onSelectRun={setSelectedPipelineRunId} />

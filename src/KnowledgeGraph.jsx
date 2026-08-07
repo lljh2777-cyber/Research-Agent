@@ -1,156 +1,347 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, ArrowRight, FileText, GitBranch, Network, RotateCcw, Search } from 'lucide-react'
+import {
+  ArrowLeftToLine,
+  ArrowRightToLine,
+  BookOpen,
+  Boxes,
+  ChevronDown,
+  ChevronRight,
+  CircleDot,
+  ExternalLink,
+  FileText,
+  Folder,
+  FolderOpen,
+  Globe2,
+  GripVertical,
+  Hash,
+  LayoutPanelLeft,
+  LayoutPanelTop,
+  Network,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  Tag,
+} from 'lucide-react'
 
 import { createKnowledgeGraph } from './knowledgeGraph.js'
+import { collectVaultTags, DEFAULT_DOCK_LAYOUT, extractMarkdownOutline, moveDockPanel, normalizeDockLayout } from './knowledgeWorkspace.js'
 
-function Stat({ value, label, warning = false }) {
-  return <div className={`graph-stat ${warning && value ? 'warning' : ''}`}><strong>{value}</strong><span>{label}</span></div>
+const LAYOUT_KEY = 'bioresearch-os:knowledge-dock-layout'
+
+const PANEL_META = {
+  files: { title: 'Files', icon: FolderOpen },
+  outline: { title: 'Outline', icon: LayoutPanelTop },
+  tags: { title: 'Tags', icon: Tag },
+  graph: { title: 'Local graph', icon: Network },
+  web: { title: 'Web browser', icon: Globe2 },
+  plugins: { title: 'Research tools', icon: Boxes },
 }
 
-function nodeClass(node, selected, matched) {
-  return ['graph-node', `type-${node.type}`, selected ? 'selected' : '', matched ? 'matched' : '', node.missing ? 'missing' : ''].filter(Boolean).join(' ')
-}
-
-function viewBoxForNodes(nodes, graph) {
-  if (!nodes.length) return `0 0 ${graph.width} ${graph.height}`
-  let minX = Infinity
-  let maxX = -Infinity
-  let minY = Infinity
-  let maxY = -Infinity
-  for (const node of nodes) {
-    minX = Math.min(minX, node.x)
-    maxX = Math.max(maxX, node.x)
-    minY = Math.min(minY, node.y)
-    maxY = Math.max(maxY, node.y)
+function loadDockLayout() {
+  try {
+    return normalizeDockLayout(JSON.parse(window.localStorage.getItem(LAYOUT_KEY)))
+  } catch {
+    return normalizeDockLayout(DEFAULT_DOCK_LAYOUT)
   }
-  const width = Math.min(graph.width, Math.max(460, maxX - minX + 140))
-  const height = Math.min(graph.height, Math.max(400, maxY - minY + 120))
-  const centerX = (minX + maxX) / 2
-  const centerY = (minY + maxY) / 2
-  const x = Math.max(0, Math.min(graph.width - width, centerX - width / 2))
-  const y = Math.max(0, Math.min(graph.height - height, centerY - height / 2))
-  return `${x} ${y} ${width} ${height}`
 }
 
-export default function KnowledgeGraphSection({ index, onOpenNote }) {
-  const graph = useMemo(() => createKnowledgeGraph(index), [index])
-  const [query, setQuery] = useState('')
-  const [typeFilter, setTypeFilter] = useState('all')
-  const [selectedId, setSelectedId] = useState(() => graph.nodes.find((node) => !node.missing)?.id || graph.nodes[0]?.id)
-
-  const normalizedQuery = query.trim().toLowerCase()
-  const matchedIds = useMemo(() => new Set(graph.nodes
-    .filter((node) => (typeFilter === 'all' || node.type === typeFilter) && (!normalizedQuery || node.searchText.includes(normalizedQuery)))
-    .map((node) => node.id)), [graph.nodes, normalizedQuery, typeFilter])
-
-  const visibleIds = useMemo(() => {
-    if (!normalizedQuery) return matchedIds
-    const expanded = new Set(matchedIds)
-    for (const id of matchedIds) {
-      for (const neighborId of graph.neighbors.get(id) || []) expanded.add(neighborId)
+function MarkdownDocument({ note }) {
+  const blocks = useMemo(() => {
+    if (!note?.body) return []
+    const lines = note.body.split(/\r?\n/)
+    const output = []
+    let paragraph = []
+    let code = []
+    let inCode = false
+    let inComment = false
+    const flushParagraph = () => {
+      if (paragraph.length) output.push({ type: 'paragraph', value: paragraph.join(' ') })
+      paragraph = []
     }
-    return expanded
-  }, [graph.neighbors, matchedIds, normalizedQuery])
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index]
+      if (inComment) {
+        if (line.includes('-->')) inComment = false
+        continue
+      }
+      if (line.trim().startsWith('<!--')) {
+        if (!line.includes('-->')) inComment = true
+        continue
+      }
+      if (line.trim().startsWith('```')) {
+        flushParagraph()
+        if (inCode) {
+          output.push({ type: 'code', value: code.join('\n') })
+          code = []
+        }
+        inCode = !inCode
+        continue
+      }
+      if (inCode) {
+        code.push(line)
+        continue
+      }
+      const heading = line.match(/^(#{1,6})\s+(.+)$/)
+      if (heading) {
+        flushParagraph()
+        const isRepeatedTitle = heading[1].length === 1 && heading[2].trim() === note.title.trim() && output.length === 0
+        if (!isRepeatedTitle) output.push({ type: 'heading', level: heading[1].length, value: heading[2], id: `heading-${index}` })
+      } else if (/^[-*]\s+/.test(line)) {
+        flushParagraph()
+        output.push({ type: 'list', value: line.replace(/^[-*]\s+/, '') })
+      } else if (/^>\s?/.test(line)) {
+        flushParagraph()
+        output.push({ type: 'quote', value: line.replace(/^>\s?/, '') })
+      } else if (!line.trim()) {
+        flushParagraph()
+      } else {
+        paragraph.push(line.trim())
+      }
+    }
+    flushParagraph()
+    return output
+  }, [note])
+
+  if (!note) return null
+  const metadata = Object.entries(note.frontmatter || {}).filter(([, value]) => value !== '' && value != null)
+  return (
+    <article className="knowledge-document">
+      <div className="document-path">{note.path}</div>
+      <h1>{note.title}</h1>
+      {metadata.length > 0 && <dl className="document-properties">
+        {metadata.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{Array.isArray(value) ? value.join(', ') : String(value)}</dd></div>)}
+      </dl>}
+      <div className="document-markdown">
+        {blocks.map((block, index) => {
+          if (block.type === 'heading') {
+            const Heading = `h${Math.min(6, block.level + 1)}`
+            return <Heading id={block.id} key={`${block.id}-${index}`}>{block.value}</Heading>
+          }
+          if (block.type === 'list') return <div className="document-list-item" key={index}><CircleDot size={9} /> <span>{block.value}</span></div>
+          if (block.type === 'quote') return <blockquote key={index}>{block.value}</blockquote>
+          if (block.type === 'code') return <pre key={index}><code>{block.value}</code></pre>
+          return <p key={index}>{block.value}</p>
+        })}
+      </div>
+    </article>
+  )
+}
+
+function FilesPanel({ notes, selectedId, onSelect }) {
+  const [query, setQuery] = useState('')
+  const groups = useMemo(() => {
+    const normalized = query.trim().toLowerCase()
+    const grouped = new Map()
+    notes.filter((note) => !normalized || `${note.title} ${note.path}`.toLowerCase().includes(normalized)).forEach((note) => {
+      const parts = note.path.split('/')
+      const folder = parts.length > 1 ? parts.slice(0, -1).join('/') : 'Vault root'
+      if (!grouped.has(folder)) grouped.set(folder, [])
+      grouped.get(folder).push(note)
+    })
+    return [...grouped.entries()]
+  }, [notes, query])
+  return <div className="files-panel-content">
+    <label className="dock-search"><Search size={13} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search files" /></label>
+    <div className="file-tree">
+      {groups.map(([folder, files]) => <div className="file-group" key={folder}>
+        <div className="file-folder"><ChevronDown size={12} /><Folder size={13} /><span>{folder}</span></div>
+        {files.map((note) => <button className={note.id === selectedId ? 'selected' : ''} onClick={() => onSelect(note)} key={note.id}><FileText size={13} /><span>{note.title}</span></button>)}
+      </div>)}
+      {!notes.length && <div className="dock-empty">Connect a Vault to browse Markdown files.</div>}
+      {notes.length > 0 && groups.length === 0 && <div className="dock-empty">No matching notes.</div>}
+    </div>
+  </div>
+}
+
+function OutlinePanel({ note }) {
+  const outline = useMemo(() => extractMarkdownOutline(note?.body), [note])
+  const handleHeading = (id) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  return <div className="outline-list">
+    {outline.map((heading) => <button style={{ '--outline-level': heading.level }} onClick={() => handleHeading(heading.id)} key={heading.id}><Hash size={11} /><span>{heading.title}</span></button>)}
+    {!outline.length && <div className="dock-empty">Headings in the open note appear here.</div>}
+  </div>
+}
+
+function TagsPanel({ tags }) {
+  return <div className="tag-cloud">
+    {tags.map((tag) => <button key={tag.name}><Hash size={10} /><span>{tag.name}</span><small>{tag.count}</small></button>)}
+    {!tags.length && <div className="dock-empty">No tags found in this Vault.</div>}
+  </div>
+}
+
+function MiniGraph({ graph, selectedId, onSelect }) {
+  const nodesById = useMemo(() => new Map(graph.nodes.map((node) => [node.id, node])), [graph.nodes])
+  return <div className="dock-graph">
+    {graph.nodes.length ? <svg viewBox={`0 0 ${graph.width} ${graph.height}`} aria-label={`${graph.nodes.length} knowledge nodes`}>
+      <g>{graph.links.map((link) => {
+        const source = nodesById.get(link.sourceId)
+        const target = nodesById.get(link.targetId)
+        return source && target ? <line className={selectedId === link.sourceId || selectedId === link.targetId ? 'active' : ''} key={link.id} x1={source.x} y1={source.y} x2={target.x} y2={target.y} /> : null
+      })}</g>
+      <g>{graph.nodes.map((node) => <circle className={`type-${node.type} ${node.id === selectedId ? 'selected' : ''}`} role="button" tabIndex="0" aria-label={node.title} key={node.id} cx={node.x} cy={node.y} r={Math.max(8, node.radius)} onClick={() => onSelect(node)} onKeyDown={(event) => { if (event.key === 'Enter') onSelect(node) }} />)}</g>
+    </svg> : <div className="dock-empty">Wikilinks will form a local graph here.</div>}
+    <div className="dock-graph-stats"><span><strong>{graph.stats.notes}</strong> notes</span><span><strong>{graph.stats.resolvedLinks}</strong> links</span><span><strong>{graph.stats.orphans}</strong> orphans</span></div>
+  </div>
+}
+
+function WebPanel() {
+  const [address, setAddress] = useState('https://pubmed.ncbi.nlm.nih.gov/')
+  const openAddress = () => window.open(address, '_blank', 'noopener,noreferrer')
+  return <div className="web-panel-content">
+    <form onSubmit={(event) => { event.preventDefault(); openAddress() }}><Globe2 size={12} /><input value={address} onChange={(event) => setAddress(event.target.value)} aria-label="Web address" /><button aria-label="Open web address"><ExternalLink size={12} /></button></form>
+    <div className="web-preview">
+      <span>Literature browser</span>
+      <strong>Search papers without leaving your research context.</strong>
+      <p>Open PubMed, bioRxiv, DOI pages, and linked datasets in a dedicated research tab.</p>
+      <button onClick={openAddress}>Open current address <ExternalLink size={12} /></button>
+    </div>
+  </div>
+}
+
+function PluginsPanel() {
+  const tools = [
+    ['Deep read', BookOpen],
+    ['Knowledge search', Search],
+    ['Vault audit', RefreshCw],
+    ['Code analysis', Boxes],
+  ]
+  return <div className="plugin-grid">{tools.map(([label, Icon]) => <button key={label}><Icon size={14} /><span>{label}</span><small>Ready</small></button>)}</div>
+}
+
+function DockPanel({ panelId, side, collapsed, dragging, onToggle, onDragStart, onDragEnd, onDrop, onMove, children }) {
+  const meta = PANEL_META[panelId]
+  const Icon = meta.icon
+  const MoveIcon = side === 'left' ? ArrowRightToLine : ArrowLeftToLine
+  return <section className={`dock-panel dock-panel-${panelId} ${collapsed ? 'collapsed' : ''} ${dragging ? 'dragging' : ''}`} data-panel-id={panelId} draggable onDragStart={(event) => onDragStart(event, panelId)} onDragEnd={onDragEnd} onDragOver={(event) => event.preventDefault()} onDrop={(event) => onDrop(event, side, panelId)}>
+    <header className="dock-panel-header">
+      <span className="dock-drag-handle" title="Drag panel"><GripVertical size={13} /></span>
+      <Icon size={13} />
+      <button className="dock-panel-title" onClick={() => onToggle(panelId)}>{meta.title}</button>
+      <button className="dock-panel-action" onClick={() => onMove(panelId, side === 'left' ? 'right' : 'left')} title={`Move ${meta.title} to ${side === 'left' ? 'right' : 'left'} sidebar`}><MoveIcon size={12} /></button>
+      <button className="dock-panel-action" onClick={() => onToggle(panelId)} aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${meta.title}`}>{collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</button>
+    </header>
+    {!collapsed && <div className="dock-panel-body">{children}</div>}
+  </section>
+}
+
+function Dock({ side, panelIds, collapsedPanels, draggingId, onToggle, onDragStart, onDragEnd, onDrop, onMove, renderPanel }) {
+  return <aside className={`knowledge-dock dock-${side}`} data-sidebar={side} onDragOver={(event) => event.preventDefault()} onDrop={(event) => onDrop(event, side)}>
+    <div className="dock-stack">{panelIds.map((panelId) => <DockPanel panelId={panelId} side={side} collapsed={collapsedPanels.has(panelId)} dragging={draggingId === panelId} onToggle={onToggle} onDragStart={onDragStart} onDragEnd={onDragEnd} onDrop={onDrop} onMove={onMove} key={panelId}>{renderPanel(panelId)}</DockPanel>)}</div>
+    <div className="dock-drop-hint">Drop panel here</div>
+  </aside>
+}
+
+export default function KnowledgeGraphSection({ index, onConnectVault }) {
+  const graph = useMemo(() => createKnowledgeGraph(index), [index])
+  const notes = index?.notes || []
+  const [selectedNote, setSelectedNote] = useState(() => notes[0] || null)
+  const [dockLayout, setDockLayout] = useState(loadDockLayout)
+  const [collapsedPanels, setCollapsedPanels] = useState(() => new Set())
+  const [draggingId, setDraggingId] = useState(null)
+  const [leftOpen, setLeftOpen] = useState(true)
+  const [rightOpen, setRightOpen] = useState(true)
 
   useEffect(() => {
-    if (selectedId && visibleIds.has(selectedId)) return
-    setSelectedId(graph.nodes.find((node) => visibleIds.has(node.id))?.id || null)
-  }, [graph.nodes, selectedId, visibleIds])
+    const mobileWorkspace = window.matchMedia('(max-width: 900px)')
+    const syncResponsiveDocks = (event) => {
+      setLeftOpen(!event.matches)
+      setRightOpen(!event.matches)
+    }
+    syncResponsiveDocks(mobileWorkspace)
+    mobileWorkspace.addEventListener('change', syncResponsiveDocks)
+    return () => mobileWorkspace.removeEventListener('change', syncResponsiveDocks)
+  }, [])
 
-  const nodesById = useMemo(() => new Map(graph.nodes.map((node) => [node.id, node])), [graph.nodes])
-  const visibleNodes = useMemo(() => graph.nodes.filter((node) => visibleIds.has(node.id)), [graph.nodes, visibleIds])
-  const visibleLinks = useMemo(() => graph.links.filter((link) => visibleIds.has(link.sourceId) && visibleIds.has(link.targetId)), [graph.links, visibleIds])
-  const selectedNode = nodesById.get(selectedId)
-  const selectedLinks = useMemo(() => selectedNode ? graph.links.filter((link) => link.sourceId === selectedNode.id || link.targetId === selectedNode.id) : [], [graph.links, selectedNode])
-  const labeledIds = useMemo(() => new Set(graph.nodes.slice(0, 10).map((node) => node.id)), [graph.nodes])
-  const graphViewBox = useMemo(() => viewBoxForNodes(visibleNodes, graph), [graph, visibleNodes])
+  useEffect(() => {
+    if (!selectedNote && notes.length) setSelectedNote(notes[0])
+    if (selectedNote && !notes.some((note) => note.id === selectedNote.id)) setSelectedNote(notes[0] || null)
+  }, [notes, selectedNote])
 
-  const resetFilters = () => {
-    setQuery('')
-    setTypeFilter('all')
+  useEffect(() => {
+    window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(dockLayout))
+  }, [dockLayout])
+
+  const outline = useMemo(() => extractMarkdownOutline(selectedNote?.body), [selectedNote])
+  const tags = useMemo(() => collectVaultTags(notes), [notes])
+
+  const handleTogglePanel = (panelId) => setCollapsedPanels((current) => {
+    const next = new Set(current)
+    next.has(panelId) ? next.delete(panelId) : next.add(panelId)
+    return next
+  })
+
+  const handleDragStart = (event, panelId) => {
+    setDraggingId(panelId)
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/knowledge-panel', panelId)
+  }
+  const handleDrop = (event, side, beforePanelId = null) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const panelId = event.dataTransfer.getData('text/knowledge-panel') || draggingId
+    if (panelId) setDockLayout((current) => moveDockPanel(current, panelId, side, beforePanelId === panelId ? null : beforePanelId))
+    setDraggingId(null)
+  }
+  const handleMove = (panelId, side) => setDockLayout((current) => moveDockPanel(current, panelId, side))
+  const resetLayout = () => {
+    setDockLayout(normalizeDockLayout(DEFAULT_DOCK_LAYOUT))
+    setCollapsedPanels(new Set())
+    setLeftOpen(true)
+    setRightOpen(true)
   }
 
-  const handleQueryChange = (event) => {
-    const nextQuery = event.target.value
-    setQuery(nextQuery)
-    const normalizedNextQuery = nextQuery.trim().toLowerCase()
-    if (!normalizedNextQuery) return
-    const directMatch = graph.nodes.find((node) => (typeFilter === 'all' || node.type === typeFilter) && node.searchText.includes(normalizedNextQuery))
-    if (directMatch) setSelectedId(directMatch.id)
+  const selectGraphNode = (node) => {
+    if (node.note) setSelectedNote(node.note)
   }
 
-  return (
-    <div className="graph-section">
-      <div className="graph-header">
-        <div>
-          <span className="graph-kicker"><Network size={16} /> Local wikilink graph</span>
-          <h2>Knowledge Graph</h2>
-          <p>Explore notes, backlinks, and unresolved references parsed from the connected Obsidian vault.</p>
-        </div>
-        <div className="graph-summary" aria-label="Knowledge graph summary">
-          <Stat value={graph.stats.notes} label="notes" />
-          <Stat value={graph.stats.resolvedLinks} label="resolved links" />
-          <Stat value={graph.stats.orphans} label="orphans" warning />
-          <Stat value={graph.stats.unresolvedLinks} label="unresolved" warning />
-        </div>
+  const renderPanel = (panelId) => {
+    if (panelId === 'files') return <FilesPanel notes={notes} selectedId={selectedNote?.id} onSelect={setSelectedNote} />
+    if (panelId === 'outline') return <OutlinePanel note={selectedNote} />
+    if (panelId === 'tags') return <TagsPanel tags={tags} />
+    if (panelId === 'graph') return <MiniGraph graph={graph} selectedId={selectedNote?.id} onSelect={selectGraphNode} />
+    if (panelId === 'web') return <WebPanel />
+    return <PluginsPanel />
+  }
+
+  return <div className={`knowledge-workspace ${leftOpen ? '' : 'left-closed'} ${rightOpen ? '' : 'right-closed'}`}>
+    <div className="knowledge-workspace-toolbar">
+      <div className="workspace-toolbar-group">
+        <button onClick={() => setLeftOpen(!leftOpen)} aria-label={`${leftOpen ? 'Hide' : 'Show'} left sidebar`}>{leftOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}</button>
+        <div className="workspace-breadcrumb"><span>{notes.length ? 'Vault' : 'Knowledge workspace'}</span><ChevronRight size={12} /><strong>{selectedNote?.title || 'No note open'}</strong></div>
       </div>
-
-      <div className="graph-toolbar">
-        <label className="graph-search"><Search size={15} /><span className="visually-hidden">Search graph</span><input value={query} onChange={handleQueryChange} placeholder="Search title, path, or type…" /></label>
-        <label className="graph-filter"><span>Type</span><select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}><option value="all">All types</option>{graph.types.map((type) => <option value={type} key={type}>{type}</option>)}{graph.stats.unresolvedLinks > 0 && <option value="unresolved">unresolved</option>}</select></label>
-        <button className="graph-reset" onClick={resetFilters} disabled={!query && typeFilter === 'all'}><RotateCcw size={14} /> Reset</button>
-        <span className="graph-result-count">{visibleNodes.length} of {graph.nodes.length} nodes</span>
-      </div>
-
-      <div className="graph-workspace">
-        <section className="graph-canvas-panel" aria-label="Interactive knowledge graph">
-          <svg className="graph-canvas" viewBox={graphViewBox} role="group" aria-label={`${visibleNodes.length} visible knowledge nodes and ${visibleLinks.length} links`}>
-            <g className="graph-links">
-              {visibleLinks.map((link) => {
-                const source = nodesById.get(link.sourceId)
-                const target = nodesById.get(link.targetId)
-                const active = selectedId === link.sourceId || selectedId === link.targetId
-                return <line className={`${active ? 'active' : ''} ${link.unresolved ? 'unresolved' : ''}`} key={link.id} x1={source.x} y1={source.y} x2={target.x} y2={target.y} />
-              })}
-            </g>
-            <g className="graph-nodes">
-              {visibleNodes.map((node) => {
-                const selected = node.id === selectedId
-                const matched = Boolean(normalizedQuery && matchedIds.has(node.id))
-                const showLabel = selected || matched || labeledIds.has(node.id)
-                return (
-                  <g className={nodeClass(node, selected, matched)} key={node.id} role="button" tabIndex="0" aria-label={`${node.title}, ${node.rawType}, ${node.degree} links`} aria-pressed={selected} onClick={() => setSelectedId(node.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedId(node.id) } }}>
-                    <circle cx={node.x} cy={node.y} r={node.radius + (selected ? 4 : 0)} />
-                    {showLabel && <text x={node.x} y={node.y + node.radius + 15} textAnchor="middle">{node.title.length > 28 ? `${node.title.slice(0, 27)}…` : node.title}</text>}
-                  </g>
-                )
-              })}
-            </g>
-          </svg>
-          {visibleNodes.length === 0 && <div className="graph-no-results"><Search size={20} /><strong>No matching nodes</strong><span>Try another title, path, or note type.</span><button onClick={resetFilters}>Clear filters</button></div>}
-          <div className="graph-legend" aria-label="Node type legend">{['paper', 'method', 'concept', 'dataset', 'gene', 'note'].map((type) => graph.nodes.some((node) => node.type === type) && <span className={`type-${type}`} key={type}><i />{type}</span>)}{graph.stats.unresolvedLinks > 0 && <span className="type-unresolved"><i />unresolved</span>}</div>
-        </section>
-
-        <aside className="graph-detail-panel">
-          {selectedNode ? <>
-            <div className="graph-detail-heading">
-              <span className={`graph-detail-type type-${selectedNode.type}`}>{selectedNode.missing ? <AlertTriangle size={13} /> : <FileText size={13} />}{selectedNode.rawType}</span>
-              <h3>{selectedNode.title}</h3>
-              <p>{selectedNode.path}</p>
-            </div>
-            <div className="graph-node-metrics"><span><strong>{selectedNode.incoming}</strong>backlinks</span><span><strong>{selectedNode.outgoing}</strong>outgoing</span><span><strong>{selectedNode.degree}</strong>total links</span></div>
-            <div className="graph-relations">
-              <div className="graph-panel-heading"><span>Connected notes</span><small>{selectedLinks.length} relations</small></div>
-              {selectedLinks.length ? selectedLinks.map((link) => {
-                const outgoing = link.sourceId === selectedNode.id
-                const neighbor = nodesById.get(outgoing ? link.targetId : link.sourceId)
-                return <button key={link.id} onClick={() => setSelectedId(neighbor.id)}><span className={neighbor.missing ? 'missing' : ''}>{neighbor.title}</span><small>{outgoing ? 'outgoing' : 'backlink'} <ArrowRight size={11} /></small></button>
-              }) : <div className="graph-empty">This note is not linked to another Vault note.</div>}
-            </div>
-            {selectedNode.note ? <button className="graph-open-note" onClick={() => onOpenNote(selectedNode.note)}>Open Markdown note <ArrowRight size={15} /></button> : <div className="graph-unresolved-note"><GitBranch size={15} /><span>Create a Markdown note matching this wikilink to resolve it.</span></div>}
-          </> : <div className="graph-detail-empty"><Network size={24} /><span>Select a graph node to inspect its relationships.</span></div>}
-        </aside>
+      <div className="workspace-toolbar-group">
+        <span className="workspace-local-badge"><CircleDot size={10} /> Local-first</span>
+        <button onClick={resetLayout} title="Reset panel layout"><RotateCcw size={14} /><span>Reset layout</span></button>
+        <button onClick={() => setRightOpen(!rightOpen)} aria-label={`${rightOpen ? 'Hide' : 'Show'} right sidebar`}>{rightOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}</button>
       </div>
     </div>
-  )
+
+    <div className="knowledge-tabs">
+      <button className="active"><FileText size={13} /><span>{selectedNote?.title || 'Welcome'}</span><small>{selectedNote ? 'Markdown' : 'Workspace'}</small></button>
+      <button><Network size={13} /><span>Graph explorer</span></button>
+    </div>
+
+    <div className="knowledge-layout">
+      {leftOpen && <Dock side="left" panelIds={dockLayout.left} collapsedPanels={collapsedPanels} draggingId={draggingId} onToggle={handleTogglePanel} onDragStart={handleDragStart} onDragEnd={() => setDraggingId(null)} onDrop={handleDrop} onMove={handleMove} renderPanel={renderPanel} />}
+
+      <main className="knowledge-editor">
+        {selectedNote ? <MarkdownDocument note={selectedNote} /> : <div className="knowledge-welcome">
+          <span><BookOpen size={25} /></span>
+          <h2>Your research knowledge, in one workspace</h2>
+          <p>Connect an Obsidian Vault to browse files, inspect backlinks, read Markdown, and arrange research tools around your document.</p>
+          <button onClick={onConnectVault}><FolderOpen size={15} /> Connect Vault</button>
+        </div>}
+      </main>
+
+      {rightOpen && <Dock side="right" panelIds={dockLayout.right} collapsedPanels={collapsedPanels} draggingId={draggingId} onToggle={handleTogglePanel} onDragStart={handleDragStart} onDragEnd={() => setDraggingId(null)} onDrop={handleDrop} onMove={handleMove} renderPanel={renderPanel} />}
+    </div>
+
+    <footer className="knowledge-statusbar">
+      <span>{graph.stats.resolvedLinks} links</span><span>{notes.length} notes</span><span>{outline.length} headings</span><span>{tags.length} tags</span><span className="statusbar-spacer" /><span><Network size={11} /> Graph index ready</span>
+    </footer>
+  </div>
 }
