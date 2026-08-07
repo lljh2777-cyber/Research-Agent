@@ -70,8 +70,8 @@ function isIgnoredPath(path) {
   return path.split('/').some((part) => part === '.obsidian' || part === '.trash' || part === 'node_modules')
 }
 
-export async function parseVaultFiles(fileList) {
-  const files = Array.from(fileList).filter((file) => /\.md$/i.test(file.name) && !isIgnoredPath(file.webkitRelativePath || file.name))
+async function parseVaultEntries(entries) {
+  const files = entries.filter((file) => /\.md$/i.test(file.name) && !isIgnoredPath(file.webkitRelativePath || file.name))
   const notes = await Promise.all(files.map(async (file) => {
     const path = file.webkitRelativePath || file.name
     const markdown = await file.text()
@@ -91,6 +91,30 @@ export async function parseVaultFiles(fileList) {
     }
   }))
   return notes.sort((a, b) => a.path.localeCompare(b.path))
+}
+
+export async function parseVaultFiles(fileList) {
+  return parseVaultEntries(Array.from(fileList))
+}
+
+export async function parseVaultDirectory(directoryHandle) {
+  const entries = []
+
+  async function walk(directory, prefix = '') {
+    for await (const [name, entry] of directory.entries()) {
+      const path = prefix ? `${prefix}/${name}` : name
+      if (isIgnoredPath(path)) continue
+      if (entry.kind === 'directory') {
+        await walk(entry, path)
+      } else if (entry.kind === 'file' && /\.md$/i.test(name)) {
+        const file = await entry.getFile()
+        entries.push({ name: file.name, webkitRelativePath: path, text: () => file.text() })
+      }
+    }
+  }
+
+  await walk(directoryHandle)
+  return parseVaultEntries(entries)
 }
 
 function normalizeTarget(target) {

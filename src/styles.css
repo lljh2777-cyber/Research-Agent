@@ -46,6 +46,8 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .workspace-copy strong { font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .workspace-copy small { font-size: 10px; color: var(--muted); font-family: var(--mono); }
 .settings-link { border: 0; background: transparent; color: var(--muted); display: flex; align-items: center; gap: 9px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.settings-link:hover:not(:disabled) { color: var(--text); }
+.settings-link:disabled { cursor: wait; opacity: .7; }
 
 .main-shell { min-width: 0; min-height: 0; height: 100vh; flex: 1; display: flex; flex-direction: column; background: radial-gradient(circle at 55% -10%, rgba(38, 94, 168, .12), transparent 34%), var(--bg); }
 .topbar { height: 72px; flex: 0 0 72px; border-bottom: 1px solid var(--border); padding: 0 26px; display: flex; align-items: center; justify-content: space-between; }

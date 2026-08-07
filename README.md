@@ -27,11 +27,12 @@ npm run build
 - Local Obsidian Vault folder import with Markdown/frontmatter/`[[wikilink]]` parsing
 - Local wikilink graph view without requiring paper2MD
 - IndexedDB-backed Vault snapshot persistence and in-app Markdown note preview
+- Persistent browser directory handle with manual Vault rescan when File System Access API is available
 - Visual concept in `design/concept-desktop.png`
 
 ## Next integration steps
 
-1. Connect the Obsidian vault through a local filesystem adapter or MCP server.
+1. Connect the Obsidian vault through a local filesystem adapter or MCP server for broader browser support.
 2. Add vector retrieval and source-aware answer generation.
-3. Add file-change synchronization and note editing safeguards.
+3. Add automatic file-change synchronization and note editing safeguards.
 4. Move the stable Web app into an Electron shell with the same renderer.

@@ -26,6 +26,7 @@ import {
   Pause,
   PlayCircle,
   Plus,
+  RefreshCw,
   Search,
   Send,
   Settings2,
@@ -33,8 +34,8 @@ import {
   ThumbsDown,
   ThumbsUp,
 } from 'lucide-react'
-import { buildVaultIndex, getVaultName, parseVaultFiles } from './vault.js'
-import { loadVaultSnapshot, saveVaultSnapshot } from './vaultStorage.js'
+import { buildVaultIndex, getVaultName, parseVaultDirectory, parseVaultFiles } from './vault.js'
+import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
 import './styles.css'
 
 const navItems = [
@@ -119,7 +120,7 @@ function LogoMark() {
   )
 }
 
-function Sidebar({ activeSection, setActiveSection, onConnectVault, vaultName, vaultNoteCount }) {
+function Sidebar({ activeSection, setActiveSection, onConnectVault, onSyncVault, vaultName, vaultNoteCount, syncState }) {
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -149,6 +150,7 @@ function Sidebar({ activeSection, setActiveSection, onConnectVault, vaultName, v
           </span>
           <ChevronDown size={16} />
         </button>
+        {vaultName && <button className="settings-link sync-link" onClick={onSyncVault} disabled={syncState === 'syncing'}><RefreshCw className={syncState === 'syncing' ? 'spin' : ''} size={15} /> {syncState === 'syncing' ? 'Syncing vault' : syncState === 'needs-permission' ? 'Reconnect vault' : 'Sync vault'}</button>}
         <button className="settings-link"><Settings2 size={16} /> Settings</button>
       </div>
     </aside>
@@ -441,6 +443,8 @@ function App() {
   const [pendingQuestion, setPendingQuestion] = useState('')
   const [vaultNotes, setVaultNotes] = useState([])
   const [vaultName, setVaultName] = useState('')
+  const [vaultHandle, setVaultHandle] = useState(null)
+  const [syncState, setSyncState] = useState('idle')
   const [selectedNote, setSelectedNote] = useState(null)
   const vaultInputRef = useRef(null)
 
@@ -448,22 +452,89 @@ function App() {
   const inspectorNotes = vaultIndex.notes.length ? vaultIndex.linkedNotes : sampleLinkedNotes
   const inspectorSources = vaultIndex.sources.length ? vaultIndex.sources : sampleSources
 
-  const handleVaultSelection = async (event) => {
-    const notes = await parseVaultFiles(event.target.files || [])
-    if (!notes.length) return
-    const nextVaultName = getVaultName(notes)
+  const applyVault = async (notes, nextVaultName, handle = null) => {
+    if (!notes.length) {
+      setSyncState('empty')
+      return false
+    }
     setVaultNotes(notes)
     setVaultName(nextVaultName)
+    setVaultHandle(handle)
     await saveVaultSnapshot({ vaultName: nextVaultName, notes })
-    event.target.value = ''
+    if (handle) await saveVaultHandle(handle)
+    setSyncState(handle ? 'ready' : 'manual')
+    return true
+  }
+
+  const syncFromHandle = async (handle, requestPermission = false) => {
+    if (!handle) return false
+    let permission = 'granted'
+    if (handle.queryPermission) permission = await handle.queryPermission({ mode: 'read' })
+    if (permission !== 'granted' && requestPermission && handle.requestPermission) {
+      permission = await handle.requestPermission({ mode: 'read' })
+    }
+    if (permission !== 'granted') {
+      setSyncState('needs-permission')
+      return false
+    }
+    setSyncState('syncing')
+    try {
+      const notes = await parseVaultDirectory(handle)
+      return applyVault(notes, handle.name || getVaultName(notes), handle)
+    } catch {
+      setSyncState('error')
+      return false
+    }
+  }
+
+  const handleConnectVault = async () => {
+    if (typeof window.showDirectoryPicker === 'function') {
+      try {
+        const handle = await window.showDirectoryPicker({ mode: 'read' })
+        await syncFromHandle(handle, true)
+        return
+      } catch (error) {
+        if (error?.name === 'AbortError') return
+      }
+    }
+    vaultInputRef.current?.click()
+  }
+
+  const handleSyncVault = async () => {
+    if (vaultHandle) {
+      await syncFromHandle(vaultHandle, true)
+    } else {
+      await handleConnectVault()
+    }
+  }
+
+  const handleVaultSelection = async (event) => {
+    try {
+      const notes = await parseVaultFiles(event.target.files || [])
+      if (!notes.length) {
+        setSyncState('empty')
+        return
+      }
+      await applyVault(notes, getVaultName(notes))
+    } finally {
+      event.target.value = ''
+    }
   }
 
   useEffect(() => {
     let cancelled = false
-    loadVaultSnapshot().then((snapshot) => {
-      if (cancelled || !snapshot?.notes?.length) return
-      setVaultNotes(snapshot.notes)
-      setVaultName(snapshot.vaultName || getVaultName(snapshot.notes))
+    Promise.all([loadVaultSnapshot(), loadVaultHandle()]).then(async ([snapshot, handle]) => {
+      if (cancelled) return
+      if (handle) {
+        setVaultHandle(handle)
+        const synced = await syncFromHandle(handle)
+        if (synced || cancelled) return
+      }
+      if (snapshot?.notes?.length && !cancelled) {
+        setVaultNotes(snapshot.notes)
+        setVaultName(snapshot.vaultName || getVaultName(snapshot.notes))
+        setSyncState(handle ? 'needs-permission' : 'manual')
+      }
     })
     return () => { cancelled = true }
   }, [])
@@ -500,9 +571,11 @@ function App() {
       <Sidebar
         activeSection={activeSection}
         setActiveSection={setActiveSection}
-        onConnectVault={() => vaultInputRef.current?.click()}
+        onConnectVault={handleConnectVault}
+        onSyncVault={handleSyncVault}
         vaultName={vaultName}
         vaultNoteCount={vaultIndex.notes.length}
+        syncState={syncState}
       />
       <input ref={vaultInputRef} className="visually-hidden" type="file" webkitdirectory="true" directory="true" multiple onChange={handleVaultSelection} />
       <main className="main-shell">
