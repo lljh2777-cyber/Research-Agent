@@ -576,16 +576,20 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .dock-search:focus-within { border-color: rgba(110, 168, 254, .55); }
 .dock-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: #d3dde9; padding: 6px 0; font-size: 9px; }
 .dock-search input::placeholder { color: #53657c; }
-.file-tree { padding: 1px 5px 7px; }
-.file-group + .file-group { margin-top: 4px; }
-.file-folder { min-width: 0; height: 25px; display: flex; align-items: center; gap: 5px; color: #7e90a7; padding: 0 5px; font-size: 9px; }
-.file-folder span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-folder svg:nth-child(2) { color: #7ba1d1; }
-.file-group > button { width: 100%; min-width: 0; height: 27px; display: flex; align-items: center; gap: 7px; border: 0; border-radius: 3px; background: transparent; color: #a5b3c6; padding: 0 7px 0 23px; text-align: left; cursor: pointer; font-size: 9px; }
-.file-group > button:hover { color: #dbe4ef; background: rgba(110, 168, 254, .07); }
-.file-group > button.selected { color: #e6edf6; background: rgba(46, 101, 190, .25); box-shadow: inset 2px 0 0 var(--blue); }
-.file-group > button svg { flex: 0 0 auto; color: #7890ad; }
-.file-group > button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-tree { padding: 2px 5px 9px; }
+.file-tree-branch { min-width: 0; }
+.file-tree-children { min-width: 0; margin-left: 11px; padding-left: 7px; border-left: 1px solid rgba(115, 148, 194, .28); }
+.file-tree-row { width: 100%; min-width: 0; height: 27px; display: flex; align-items: center; gap: 6px; border: 0; border-radius: 3px; background: transparent; padding: 0 7px 0 4px; text-align: left; cursor: pointer; font-size: 9px; }
+.file-tree-row:hover { color: #e2eaf3; background: rgba(110, 168, 254, .07); }
+.file-tree-row > svg { flex: 0 0 auto; }
+.file-tree-row > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-row { color: #c3cfdd; font-weight: 650; }
+.folder-row svg:first-child { color: #627991; }
+.folder-row svg:nth-child(2) { color: #75a0d4; }
+.file-row { color: #a5b3c6; }
+.file-row > svg { color: #7890ad; }
+.file-row.selected { color: #eef4fb; background: rgba(46, 101, 190, .38); box-shadow: inset 2px 0 0 var(--blue); }
+.file-tree-spacer { width: 12px; flex: 0 0 12px; }
 .dock-empty { padding: 17px 13px; color: #607189; font-size: 9px; line-height: 1.5; text-align: center; }
 .outline-list { padding: 5px; }
 .outline-list > button { width: 100%; min-width: 0; display: flex; align-items: center; gap: 5px; border: 0; border-radius: 3px; background: transparent; color: #95a5b9; padding: 5px 7px 5px calc(7px + (var(--outline-level) - 1) * 10px); text-align: left; cursor: pointer; font-size: 9px; }

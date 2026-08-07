@@ -50,3 +50,60 @@ export function collectVaultTags(notes = []) {
   }
   return [...counts.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
 }
+
+const compareTreeNodes = (a, b) => {
+  if (a.type !== b.type) return a.type === 'folder' ? -1 : 1
+  return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+}
+
+export function buildVaultFileTree(notes = []) {
+  const root = { type: 'folder', id: '', name: '', path: '', children: [], folders: new Map() }
+
+  for (const note of notes) {
+    const segments = String(note.path || note.name || '').split('/').filter(Boolean)
+    if (!segments.length || segments.some((segment) => segment.startsWith('.'))) continue
+
+    let parent = root
+    for (const segment of segments.slice(0, -1)) {
+      const folderPath = parent.path ? `${parent.path}/${segment}` : segment
+      if (!parent.folders.has(segment)) {
+        const folder = { type: 'folder', id: folderPath, name: segment, path: folderPath, children: [], folders: new Map() }
+        parent.folders.set(segment, folder)
+        parent.children.push(folder)
+      }
+      parent = parent.folders.get(segment)
+    }
+
+    const filename = segments.at(-1)
+    parent.children.push({
+      type: 'file',
+      id: note.id,
+      name: filename.replace(/\.md$/i, ''),
+      path: note.path,
+      note,
+    })
+  }
+
+  const finalize = (folder) => {
+    folder.children.forEach((node) => {
+      if (node.type === 'folder') finalize(node)
+    })
+    folder.children.sort(compareTreeNodes)
+    delete folder.folders
+    return folder
+  }
+
+  return finalize(root).children
+}
+
+export function filterVaultFileTree(nodes = [], query = '') {
+  const normalized = String(query).trim().toLocaleLowerCase()
+  if (!normalized) return nodes
+
+  return nodes.flatMap((node) => {
+    const matches = `${node.name} ${node.path}`.toLocaleLowerCase().includes(normalized)
+    if (node.type === 'file') return matches ? [node] : []
+    const children = matches ? node.children : filterVaultFileTree(node.children, normalized)
+    return children.length ? [{ ...node, children }] : []
+  })
+}

@@ -27,7 +27,7 @@ import {
 } from 'lucide-react'
 
 import { createKnowledgeGraph } from './knowledgeGraph.js'
-import { collectVaultTags, DEFAULT_DOCK_LAYOUT, extractMarkdownOutline, moveDockPanel, normalizeDockLayout } from './knowledgeWorkspace.js'
+import { buildVaultFileTree, collectVaultTags, DEFAULT_DOCK_LAYOUT, extractMarkdownOutline, filterVaultFileTree, moveDockPanel, normalizeDockLayout } from './knowledgeWorkspace.js'
 
 const LAYOUT_KEY = 'bioresearch-os:knowledge-dock-layout'
 
@@ -130,28 +130,66 @@ function MarkdownDocument({ note }) {
   )
 }
 
+function FileTreeNode({ node, selectedId, expandedFolders, forceExpanded, onToggle, onSelect }) {
+  if (node.type === 'folder') {
+    const expanded = forceExpanded || expandedFolders.has(node.path)
+    return <div className="file-tree-branch">
+      <button className="file-tree-row folder-row" aria-expanded={expanded} onClick={() => onToggle(node.path)} title={node.path}>
+        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        {expanded ? <FolderOpen size={13} /> : <Folder size={13} />}
+        <span>{node.name}</span>
+      </button>
+      {expanded && <div className="file-tree-children">
+        {node.children.map((child) => <FileTreeNode node={child} selectedId={selectedId} expandedFolders={expandedFolders} forceExpanded={forceExpanded} onToggle={onToggle} onSelect={onSelect} key={`${child.type}-${child.id}`} />)}
+      </div>}
+    </div>
+  }
+
+  return <button className={`file-tree-row file-row ${node.id === selectedId ? 'selected' : ''}`} onClick={() => onSelect(node.note)} title={node.path}>
+    <span className="file-tree-spacer" />
+    <FileText size={13} />
+    <span>{node.name}</span>
+  </button>
+}
+
 function FilesPanel({ notes, selectedId, onSelect }) {
   const [query, setQuery] = useState('')
-  const groups = useMemo(() => {
-    const normalized = query.trim().toLowerCase()
-    const grouped = new Map()
-    notes.filter((note) => !normalized || `${note.title} ${note.path}`.toLowerCase().includes(normalized)).forEach((note) => {
-      const parts = note.path.split('/')
-      const folder = parts.length > 1 ? parts.slice(0, -1).join('/') : 'Vault root'
-      if (!grouped.has(folder)) grouped.set(folder, [])
-      grouped.get(folder).push(note)
+  const [expandedFolders, setExpandedFolders] = useState(() => new Set(['wiki', 'wiki/annotations']))
+  const tree = useMemo(() => buildVaultFileTree(notes), [notes])
+  const filteredTree = useMemo(() => filterVaultFileTree(tree, query), [tree, query])
+  const forceExpanded = Boolean(query.trim())
+
+  useEffect(() => {
+    const selected = notes.find((note) => note.id === selectedId)
+    if (!selected) return
+    const folders = String(selected.path).split('/').slice(0, -1)
+    setExpandedFolders((current) => {
+      const next = new Set(current)
+      let path = ''
+      folders.forEach((folder) => {
+        path = path ? `${path}/${folder}` : folder
+        next.add(path)
+      })
+      return next
     })
-    return [...grouped.entries()]
-  }, [notes, query])
+  }, [notes, selectedId])
+
+  const handleToggle = (path) => {
+    if (forceExpanded) return
+    setExpandedFolders((current) => {
+      const next = new Set(current)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
+
   return <div className="files-panel-content">
     <label className="dock-search"><Search size={13} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search files" /></label>
     <div className="file-tree">
-      {groups.map(([folder, files]) => <div className="file-group" key={folder}>
-        <div className="file-folder"><ChevronDown size={12} /><Folder size={13} /><span>{folder}</span></div>
-        {files.map((note) => <button className={note.id === selectedId ? 'selected' : ''} onClick={() => onSelect(note)} key={note.id}><FileText size={13} /><span>{note.title}</span></button>)}
-      </div>)}
+      {filteredTree.map((node) => <FileTreeNode node={node} selectedId={selectedId} expandedFolders={expandedFolders} forceExpanded={forceExpanded} onToggle={handleToggle} onSelect={onSelect} key={`${node.type}-${node.id}`} />)}
       {!notes.length && <div className="dock-empty">Connect a Vault to browse Markdown files.</div>}
-      {notes.length > 0 && groups.length === 0 && <div className="dock-empty">No matching notes.</div>}
+      {notes.length > 0 && filteredTree.length === 0 && <div className="dock-empty">No matching notes.</div>}
     </div>
   </div>
 }
