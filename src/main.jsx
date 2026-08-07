@@ -22,6 +22,8 @@ import {
   MessageSquare,
   MoreHorizontal,
   Network,
+  PanelLeftClose,
+  PanelLeftOpen,
   Paperclip,
   Pause,
   PlayCircle,
@@ -52,6 +54,8 @@ const navItems = [
   { id: 'pipelines', label: 'Pipelines', icon: GitBranch },
   { id: 'runs', label: 'Runs', icon: PlayCircle },
 ]
+
+const SIDEBAR_COLLAPSED_KEY = 'bioresearch-os:sidebar-collapsed'
 
 const sampleLinkedNotes = [
   { title: 'Spatial transcriptomics', type: 'concept', path: 'wiki/concepts/spatial-transcriptomics.md' },
@@ -220,12 +224,15 @@ function KnowledgeSettingsModal({ config, onClose, onSave }) {
   )
 }
 
-function Sidebar({ activeSection, setActiveSection, onConnectVault, onSyncVault, onOpenSettings, vaultName, vaultNoteCount, syncState, vaultSource, localAdapterState, authStatus, authBusy, onConnectChatgpt, onLogoutChatgpt, authError }) {
+function Sidebar({ activeSection, setActiveSection, collapsed, onToggleCollapsed, onConnectVault, onSyncVault, onOpenSettings, vaultName, vaultNoteCount, syncState, vaultSource, localAdapterState, authStatus, authBusy, onConnectChatgpt, onLogoutChatgpt, authError }) {
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${collapsed ? 'sidebar-collapsed' : ''}`}>
       <div className="brand">
         <LogoMark />
         <span>BioResearch OS</span>
+        <button className="sidebar-collapse" onClick={onToggleCollapsed} aria-label={collapsed ? 'Expand navigation sidebar' : 'Collapse navigation sidebar'} title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
+          {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+        </button>
       </div>
 
       <nav className="main-nav" aria-label="Primary navigation">
@@ -234,6 +241,7 @@ function Sidebar({ activeSection, setActiveSection, onConnectVault, onSyncVault,
             className={`nav-item ${activeSection === id ? 'active' : ''}`}
             key={id}
             aria-label={label}
+            title={collapsed ? label : undefined}
             onClick={() => setActiveSection(id)}
           >
             <Icon size={18} strokeWidth={1.7} />
@@ -251,15 +259,15 @@ function Sidebar({ activeSection, setActiveSection, onConnectVault, onSyncVault,
           </span>
           <ChevronDown size={16} />
         </button>
-        {vaultName && <button className="settings-link sync-link" onClick={onSyncVault} disabled={syncState === 'syncing'}><RefreshCw className={syncState === 'syncing' ? 'spin' : ''} size={15} /> {syncState === 'syncing' ? 'Syncing vault' : syncState === 'needs-permission' ? 'Reconnect vault' : 'Sync vault'}</button>}
-        {vaultSource === 'local-adapter' && <div className={`adapter-status ${localAdapterState}`}><Database size={14} /><span>{localAdapterState === 'ready' ? 'Local adapter online' : 'Local adapter offline'}</span>{localAdapterState === 'ready' && <small>auto sync 15s</small>}</div>}
-        <div className={`account-status ${authStatus?.connected ? 'connected' : ''}`}>
+        {vaultName && <button className="settings-link sync-link" onClick={onSyncVault} disabled={syncState === 'syncing'} title={collapsed ? (syncState === 'needs-permission' ? 'Reconnect vault' : 'Sync vault') : undefined}><RefreshCw className={syncState === 'syncing' ? 'spin' : ''} size={15} /><span>{syncState === 'syncing' ? 'Syncing vault' : syncState === 'needs-permission' ? 'Reconnect vault' : 'Sync vault'}</span></button>}
+        {vaultSource === 'local-adapter' && <div className={`adapter-status ${localAdapterState}`} title={collapsed ? (localAdapterState === 'ready' ? 'Local adapter online' : 'Local adapter offline') : undefined}><Database size={14} /><span>{localAdapterState === 'ready' ? 'Local adapter online' : 'Local adapter offline'}</span>{localAdapterState === 'ready' && <small>auto sync 15s</small>}</div>}
+        <div className={`account-status ${authStatus?.connected ? 'connected' : ''}`} title={collapsed ? (authStatus?.connected ? 'ChatGPT connected' : 'ChatGPT not connected') : undefined}>
           <Sparkles size={14} />
           <span>{authStatus?.connected ? 'ChatGPT connected' : authStatus?.unavailable ? 'Local ChatGPT service offline' : 'ChatGPT not connected'}</span>
           <button onClick={authStatus?.connected ? onLogoutChatgpt : onConnectChatgpt} disabled={authBusy}>{authStatus?.connected ? 'Sign out' : authBusy ? 'Waiting…' : authStatus?.unavailable ? 'Retry' : 'Connect'}</button>
         </div>
         {authError && <small className="auth-error" role="alert">{authError}</small>}
-        <button className="settings-link" onClick={onOpenSettings}><Settings2 size={16} /> Settings</button>
+        <button className="settings-link" onClick={onOpenSettings} title={collapsed ? 'Settings' : undefined}><Settings2 size={16} /><span>Settings</span></button>
       </div>
     </aside>
   )
@@ -512,6 +520,7 @@ function Inspector({ activeStage, running, onPause, linkedNotes, sources, vaultN
 
 function App() {
   const [activeSection, setActiveSection] = useState('research')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true')
   const [input, setInput] = useState('')
   const [messages, setMessages] = useState(initialMessages)
   const [running, setRunning] = useState(false)
@@ -541,6 +550,10 @@ function App() {
   const vaultInputRef = useRef(null)
   const requestAbortRef = useRef(null)
   const pipelineRunTimerRef = useRef(null)
+
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed))
+  }, [sidebarCollapsed])
 
   const vaultIndex = useMemo(() => buildVaultIndex(vaultNotes), [vaultNotes])
   const retrievalIndex = useMemo(
@@ -967,6 +980,8 @@ function App() {
       <Sidebar
         activeSection={activeSection}
         setActiveSection={setActiveSection}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
         onConnectVault={handleConnectVault}
         onSyncVault={handleSyncVault}
         onOpenSettings={() => setSettingsOpen(true)}
