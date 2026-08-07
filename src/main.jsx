@@ -17,7 +17,6 @@ import {
   FileText,
   FlaskConical,
   GitBranch,
-  Info,
   LoaderCircle,
   MessageSquare,
   MoreHorizontal,
@@ -35,11 +34,11 @@ import {
   Sparkles,
   ThumbsDown,
   ThumbsUp,
-  X,
 } from 'lucide-react'
 import { buildVaultIndex, getVaultName, parseVaultDirectory, parseVaultFiles } from './vault.js'
 import KnowledgeGraphSection from './KnowledgeGraph.jsx'
 import { PipelinesSection, RunsSection } from './PipelineWorkspace.jsx'
+import SettingsWorkspace from './SettingsWorkspace.jsx'
 import { loadLocalVault } from './localVault.js'
 import { chatgptCatalogToModels, DEFAULT_MODEL_CONFIG, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
 import { executePipeline, loadPipelineRuns, savePipelineRuns } from './pipelineEngine.js'
@@ -180,50 +179,6 @@ function ModelPicker({ selectedModel, models, onSelect, disabled = false, authSt
   )
 }
 
-function KnowledgeSettingsModal({ config, onClose, onSave }) {
-  const [draft, setDraft] = useState(config)
-  const [advancedOpen, setAdvancedOpen] = useState(false)
-  const embeddingModels = getModelsByRole('embedding')
-  const rerankModels = getModelsByRole('rerank')
-
-  useEffect(() => {
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onClose])
-
-  const update = (key, value) => setDraft((current) => ({ ...current, [key]: value }))
-  const modelOption = (model) => <option key={model.id} value={model.id}>{model.name} · {model.provider}</option>
-
-  return (
-    <div className="settings-modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="settings-modal" role="dialog" aria-modal="true" aria-label="Knowledge base settings">
-        <header className="settings-modal-header">
-          <div><span className="settings-modal-kicker">Retrieval profile</span><h2>Knowledge base settings</h2><p>Configure how research notes become evidence for the agent.</p></div>
-          <button className="note-preview-close" onClick={onClose} aria-label="Close knowledge base settings"><X size={18} /></button>
-        </header>
-        <div className="settings-modal-body">
-          <label className="setting-field"><span>Document processing <Info size={14} /></span><select value={draft.parserId} onChange={(event) => update('parserId', event.target.value)}><option value="markdown">Markdown-aware parser</option><option value="plain-text">Plain text fallback</option></select><small>Preserves frontmatter, headings, wikilinks, formulas, and source paths.</small></label>
-          <label className="setting-field"><span>Embedding model <Info size={14} /></span><select value={draft.embeddingModelId} onChange={(event) => update('embeddingModelId', event.target.value)}><option value="none">Not configured</option>{embeddingModels.map(modelOption)}</select><small>Used when building the vector index for the connected Vault.</small></label>
-          <label className="setting-field"><span>Rerank model <Info size={14} /></span><select value={draft.rerankModelId} onChange={(event) => update('rerankModelId', event.target.value)}><option value="none">Disabled</option>{rerankModels.map(modelOption)}</select><small>Optional cross-encoder pass after the first retrieval.</small></label>
-          <label className="setting-range"><span><strong>Top K evidence chunks</strong><output>{draft.topK}</output></span><input type="range" min="1" max="50" value={draft.topK} onChange={(event) => update('topK', Number(event.target.value))} /><small><span>1</span><span>50</span></small></label>
-          <button className="advanced-toggle" onClick={() => setAdvancedOpen(!advancedOpen)}><strong>Advanced settings</strong>{advancedOpen ? <ChevronUp size={17} /> : <ChevronDown size={17} />}</button>
-          {advancedOpen && <div className="advanced-settings">
-            <label className="inline-setting"><span>Chunk size</span><input type="number" min="200" max="4000" step="50" value={draft.chunkSize} onChange={(event) => update('chunkSize', Number(event.target.value))} /></label>
-            <label className="inline-setting"><span>Chunk overlap</span><input type="number" min="0" max="1000" step="20" value={draft.chunkOverlap} onChange={(event) => update('chunkOverlap', Number(event.target.value))} /></label>
-            <label className="setting-range"><span><strong>Similarity threshold</strong><output>{draft.similarityThreshold.toFixed(2)}</output></span><input type="range" min="0" max="1" step="0.05" value={draft.similarityThreshold} onChange={(event) => update('similarityThreshold', Number(event.target.value))} /><small><span>0.00</span><span>1.00</span></small></label>
-            <label className="toggle-setting"><span><strong>Hybrid search</strong><small>Combine keyword and vector retrieval.</small></span><input type="checkbox" checked={draft.hybridSearch} onChange={(event) => update('hybridSearch', event.target.checked)} /></label>
-            <label className="toggle-setting"><span><strong>Require source citations</strong><small>Keep note paths attached to generated answers.</small></span><input type="checkbox" checked={draft.citations} onChange={(event) => update('citations', event.target.checked)} /></label>
-          </div>}
-        </div>
-        <footer className="settings-modal-footer"><button className="text-button" onClick={() => setDraft(DEFAULT_MODEL_CONFIG)}>Restore defaults</button><button className="primary-button" onClick={() => onSave(draft)}>Save settings</button></footer>
-      </section>
-    </div>
-  )
-}
-
 function Sidebar({ activeSection, setActiveSection, collapsed, onToggleCollapsed, onConnectVault, onSyncVault, onOpenSettings, vaultName, vaultNoteCount, syncState, vaultSource, localAdapterState, authStatus, authBusy, onConnectChatgpt, onLogoutChatgpt, authError }) {
   return (
     <aside className={`sidebar ${collapsed ? 'sidebar-collapsed' : ''}`}>
@@ -267,7 +222,7 @@ function Sidebar({ activeSection, setActiveSection, collapsed, onToggleCollapsed
           <button onClick={authStatus?.connected ? onLogoutChatgpt : onConnectChatgpt} disabled={authBusy}>{authStatus?.connected ? 'Sign out' : authBusy ? 'Waiting…' : authStatus?.unavailable ? 'Retry' : 'Connect'}</button>
         </div>
         {authError && <small className="auth-error" role="alert">{authError}</small>}
-        <button className="settings-link" onClick={onOpenSettings} title={collapsed ? 'Settings' : undefined}><Settings2 size={16} /><span>Settings</span></button>
+        <button className={`settings-link ${activeSection === 'settings' ? 'active' : ''}`} onClick={onOpenSettings} title={collapsed ? 'Settings' : undefined}><Settings2 size={16} /><span>Settings</span></button>
       </div>
     </aside>
   )
@@ -535,7 +490,6 @@ function App() {
   const [syncState, setSyncState] = useState('idle')
   const [selectedNote, setSelectedNote] = useState(null)
   const [modelConfig, setModelConfig] = useState(DEFAULT_MODEL_CONFIG)
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const [authStatus, setAuthStatus] = useState({ provider: 'chatgpt', connected: false, pending: false })
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState('')
@@ -928,7 +882,6 @@ function App() {
   const handleSettingsSave = (nextConfig) => {
     setModelConfig(nextConfig)
     saveModelConfig(nextConfig)
-    setSettingsOpen(false)
   }
 
   const handleRunPipeline = useCallback((pipelineId) => {
@@ -973,7 +926,7 @@ function App() {
     setActiveSection('research')
   }
 
-  const ActiveSectionIcon = navItems.find((item) => item.id === activeSection)?.icon || MessageSquare
+  const ActiveSectionIcon = activeSection === 'settings' ? Settings2 : navItems.find((item) => item.id === activeSection)?.icon || MessageSquare
 
   return (
     <div className="app-shell">
@@ -984,7 +937,7 @@ function App() {
         onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
         onConnectVault={handleConnectVault}
         onSyncVault={handleSyncVault}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => setActiveSection('settings')}
         vaultName={vaultName}
         vaultNoteCount={vaultIndex.notes.length}
         syncState={syncState}
@@ -999,11 +952,11 @@ function App() {
       <input ref={vaultInputRef} className="visually-hidden" type="file" webkitdirectory="true" directory="true" multiple onChange={handleVaultSelection} />
       <main className="main-shell">
         <header className="topbar">
-          <div className="topbar-title"><ActiveSectionIcon size={21} /><span>{activeSection === 'research' ? 'Ask your research vault' : activeTitle}</span></div>
-          <div className="topbar-actions"><button className="new-chat" onClick={handleNewChat}>New chat <Plus size={17} /></button><button className="icon-button mobile-settings-button" onClick={() => setSettingsOpen(true)} aria-label="Open knowledge settings"><Settings2 size={18} /></button><button className="icon-button" aria-label="More options"><MoreHorizontal size={19} /></button></div>
+          <div className="topbar-title"><ActiveSectionIcon size={21} /><span>{activeSection === 'research' ? 'Ask your research vault' : activeSection === 'settings' ? 'Settings' : activeTitle}</span></div>
+          <div className="topbar-actions"><button className="new-chat" onClick={handleNewChat}>New chat <Plus size={17} /></button><button className="icon-button mobile-settings-button" onClick={() => setActiveSection('settings')} aria-label="Open settings"><Settings2 size={18} /></button><button className="icon-button" aria-label="More options"><MoreHorizontal size={19} /></button></div>
         </header>
 
-        {activeSection === 'graph' ? <KnowledgeGraphSection index={vaultIndex} onConnectVault={handleConnectVault} /> : activeSection === 'pipelines' ? (
+        {activeSection === 'settings' ? <SettingsWorkspace authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} /> : activeSection === 'graph' ? <KnowledgeGraphSection index={vaultIndex} onConnectVault={handleConnectVault} /> : activeSection === 'pipelines' ? (
           <PipelinesSection vaultName={vaultName} noteCount={vaultNotes.length} runs={pipelineRuns} runningPipelineId={pipelineRunningId} onRun={handleRunPipeline} onViewRun={handleViewPipelineRun} onConnectVault={handleConnectVault} />
         ) : activeSection === 'runs' ? (
           <RunsSection runs={pipelineRuns} selectedRunId={selectedPipelineRunId} onSelectRun={setSelectedPipelineRunId} />
@@ -1021,7 +974,6 @@ function App() {
         )}
       </main>
       {selectedNote && <NotePreview note={selectedNote} onClose={() => setSelectedNote(null)} />}
-      {settingsOpen && <KnowledgeSettingsModal config={modelConfig} onClose={() => setSettingsOpen(false)} onSave={handleSettingsSave} />}
     </div>
   )
 }
