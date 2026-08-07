@@ -333,8 +333,8 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .empty-section p { max-width: 420px; color: var(--muted); font-size: 14px; line-height: 1.6; margin: 0 0 22px; }
 .primary-button { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border-strong); background: #1a4ba9; color: white; border-radius: 6px; padding: 10px 13px; cursor: pointer; font-size: 12px; }
 
-.pipeline-section, .runs-section { flex: 1; min-width: 0; overflow: auto; padding: 40px clamp(24px, 5vw, 76px) 56px; }
-.pipeline-page-header, .runs-page-header, .pipeline-picker, .pipeline-detail, .runs-history, .run-detail { width: 100%; max-width: 1160px; margin-left: auto; margin-right: auto; }
+.pipeline-section, .runs-section { flex: 1; min-width: 0; overflow: auto; padding: 28px clamp(18px, 2.4vw, 38px) 42px; }
+.pipeline-page-header, .runs-page-header, .pipeline-picker, .pipeline-detail, .runs-history, .run-detail { width: 100%; max-width: none; margin-left: auto; margin-right: auto; }
 .pipeline-page-header, .runs-page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 28px; }
 .pipeline-page-header h2, .runs-page-header h2 { margin: 0 0 8px; font-size: 32px; letter-spacing: -.045em; }
 .pipeline-page-header p, .runs-page-header p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
@@ -345,7 +345,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .pipeline-vault-status > span { min-width: 0; display: grid; gap: 4px; }
 .pipeline-vault-status strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #d5dfeb; font-size: 11px; font-weight: 600; }
 .pipeline-vault-status small { color: var(--faint); font-family: var(--mono); font-size: 8px; }
-.pipeline-picker { margin-top: 38px; }
+.pipeline-picker { margin-top: 26px; }
 .pipeline-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 0 11px; border-bottom: 1px solid var(--border); color: #c8d3e1; font-size: 11px; }
 .pipeline-list-heading small { color: var(--faint); font-family: var(--mono); font-size: 8px; }
 .pipeline-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding-top: 12px; }
@@ -358,7 +358,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .pipeline-list > button em { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: #6f7f96; font-size: 9px; line-height: 1.45; font-style: normal; }
 .pipeline-icon, .run-state { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid rgba(110, 168, 254, .2); border-radius: 7px; background: rgba(110, 168, 254, .08); color: #83b5ff; }
 .pipeline-ran { grid-column: 2; display: inline-flex; align-items: center; gap: 4px; color: var(--mint); font-family: var(--mono); font-size: 8px; }
-.pipeline-detail { margin-top: 38px; padding-top: 28px; border-top: 1px solid var(--border); }
+.pipeline-detail { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--border); }
 .pipeline-detail-header, .run-detail-header { display: flex; gap: 15px; align-items: flex-start; }
 .pipeline-large-icon, .run-complete-icon { width: 46px; height: 46px; display: grid; place-items: center; flex: 0 0 auto; border: 1px solid rgba(110, 168, 254, .28); border-radius: 10px; background: rgba(31, 82, 171, .18); color: var(--blue); }
 .run-complete-icon { border-color: rgba(126, 226, 195, .25); background: rgba(126, 226, 195, .1); color: var(--mint); }
@@ -374,7 +374,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .pipeline-capability { display: flex; align-items: center; gap: 8px; margin: 17px 0 0 61px; color: #78928f; font-size: 9px; }
 .pipeline-capability > svg { color: var(--mint); flex: 0 0 auto; }
 .pipeline-capability strong { color: #a8c8c0; font-weight: 600; }
-.pipeline-stages, .pipeline-latest { margin-top: 28px; }
+.pipeline-stages, .pipeline-latest { margin-top: 22px; }
 .pipeline-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 0 11px; color: #c3cedd; font-size: 11px; }
 .pipeline-section-heading small { color: var(--faint); font-family: var(--mono); font-size: 8px; }
 .pipeline-stage-flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
@@ -403,7 +403,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .runs-empty h2 { margin: 17px 0 8px; font-size: 24px; letter-spacing: -.04em; }
 .runs-empty p { max-width: 400px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .runs-page-header > span { display: inline-flex; align-items: center; gap: 6px; color: var(--mint); padding: 6px 0; font-family: var(--mono); font-size: 9px; }
-.runs-history { margin-top: 38px; }
+.runs-history { margin-top: 26px; }
 .runs-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding-top: 12px; }
 .runs-list > button { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; border: 1px solid rgba(125, 157, 201, .15); border-radius: 6px; background: rgba(15, 27, 47, .3); color: #aebbcf; padding: 12px; text-align: left; cursor: pointer; }
 .runs-list > button:hover { border-color: var(--border-strong); }
@@ -413,7 +413,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .runs-list > button strong { font-size: 10px; font-weight: 600; }
 .runs-list > button small { color: var(--faint); font-family: var(--mono); font-size: 8px; }
 .run-state { width: 26px; height: 26px; color: var(--mint); border-color: rgba(126, 226, 195, .2); background: rgba(126, 226, 195, .08); }
-.run-detail { margin-top: 38px; padding: 28px 0 12px; border-top: 1px solid var(--border); }
+.run-detail { margin-top: 26px; padding: 22px 0 12px; border-top: 1px solid var(--border); }
 .run-detail > .pipeline-metrics { margin-top: 23px; }
 .run-metadata { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 14px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .run-metadata > span { min-width: 0; display: grid; gap: 4px; padding: 10px 11px; border-right: 1px solid var(--border); color: #aebccf; font-family: var(--mono); font-size: 8px; overflow-wrap: anywhere; }
