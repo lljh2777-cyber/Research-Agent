@@ -8,6 +8,7 @@ Licensed under AGPL-3.0-only.
 
 ```bash
 npm install
+npm run auth-server
 npm run dev
 ```
 
@@ -30,7 +31,22 @@ npm run build
 - Persistent browser directory handle with manual Vault rescan when File System Access API is available
 - Optional loopback-only local Vault adapter with 15-second revision polling and read-only Markdown access
 - Local model registry with chat-model selector and a persisted knowledge-base retrieval profile
+- Loopback-only ChatGPT/Codex OAuth bridge with PKCE, refresh-token rotation, account status, logout, and provider request proxy
 - Visual concept in `design/concept-desktop.png`
+
+## ChatGPT subscription bridge
+
+The local auth bridge is an optional companion process for Web-first development:
+
+```bash
+npm run auth-server
+```
+
+It listens on `127.0.0.1:4318` for the app and temporarily uses `localhost:1455` for the OAuth callback. Credentials are stored outside the repository at `%LOCALAPPDATA%\\bioresearch-os\\auth.json` on Windows (or `$XDG_DATA_HOME/bioresearch-os/auth.json` on Linux/macOS). Override the location with `BIORESEARCH_AUTH_FILE` when needed.
+
+The browser receives only connection status. The local service keeps the OAuth access/refresh tokens, refreshes them before expiry, adds the ChatGPT account header, and routes ChatGPT subscription requests through the Codex backend. This is provider-specific and may change; it is not a general way to reuse another application's credential file. Do not enable it on a public host without replacing the loopback trust boundary with a server-side OAuth session and encrypted secret storage.
+
+Anthropic Claude Pro/Max subscription OAuth is intentionally not included because Anthropic's current OpenCode provider documentation says third-party use is not officially supported.
 
 ## Local Vault adapter
 
@@ -46,11 +62,11 @@ Use `BIORESEARCH_VAULT_PORT` to change the port or `VITE_VAULT_API_URL` when the
 
 ## Model and retrieval profile
 
-The composer model selector currently stores a local profile choice without making provider calls. The `Settings` action opens the knowledge-base profile with Markdown parsing, embedding model, optional reranker, Top K, chunk size/overlap, similarity threshold, hybrid search, and citation settings. Provider connections and real vector indexing are the next integration layer.
+The composer model selector stores the selected model locally and now exposes GPT-5.4 routes when the ChatGPT account bridge is connected. The `Settings` action opens the knowledge-base profile with Markdown parsing, embedding model, optional reranker, Top K, chunk size/overlap, similarity threshold, hybrid search, and citation settings. Unconnected models remain available as profiles but do not make provider calls.
 
 ## Next integration steps
 
-1. Connect the model registry to OpenAI-compatible, Ollama, Gemini, and other providers.
-2. Add vector retrieval and source-aware answer generation.
+1. Add GitHub Copilot device OAuth and a generic provider adapter contract.
+2. Add vector retrieval and source-aware answer generation around live model responses.
 3. Add note editing safeguards and explicit change conflict handling.
 4. Add an MCP bridge over the same local Vault adapter, then move the stable Web app into Electron.

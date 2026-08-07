@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "vault-server": "node server/vault-server.mjs"
+    "vault-server": "node server/vault-server.mjs",
+    "auth-server": "node server/auth-server.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",

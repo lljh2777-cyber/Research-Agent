@@ -40,6 +40,7 @@ import { buildVaultIndex, getVaultName, parseVaultDirectory, parseVaultFiles } f
 import { loadLocalVault } from './localVault.js'
 import { DEFAULT_MODEL_CONFIG, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
+import { chatWithProvider, getAuthStatus, logoutProvider, startChatgptLogin, waitForAuth } from './authClient.js'
 import './styles.css'
 
 const navItems = [
@@ -124,7 +125,7 @@ function LogoMark() {
   )
 }
 
-function ModelPicker({ selectedModel, models, onSelect, disabled = false }) {
+function ModelPicker({ selectedModel, models, onSelect, disabled = false, authStatus, authBusy, onConnect, onLogout }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef(null)
 
@@ -151,13 +152,19 @@ function ModelPicker({ selectedModel, models, onSelect, disabled = false }) {
       </button>
       {open && <div className="model-menu" role="menu" aria-label="Research model">
         <div className="model-menu-heading">Research model</div>
-        {models.map((model) => (
-          <button className={`model-option ${model.id === selectedModel.id ? 'selected' : ''}`} key={model.id} onClick={() => { onSelect(model.id); setOpen(false) }} role="menuitem">
+        {models.map((model) => {
+          const ready = model.authProvider === 'openai' ? authStatus?.connected : model.ready
+          return <button className={`model-option ${model.id === selectedModel.id ? 'selected' : ''}`} key={model.id} onClick={() => { if (model.authProvider === 'openai' && !authStatus?.connected) onConnect(); else onSelect(model.id); setOpen(false) }} role="menuitem">
             <span className="model-option-main"><strong>{model.name}</strong><small>{model.provider}</small></span>
-            <span className={`model-readiness ${model.ready ? 'ready' : ''}`}>{model.ready ? 'ready' : 'profile'}</span>
+            <span className={`model-readiness ${ready ? 'ready' : ''}`}>{ready ? 'ready' : model.authProvider ? 'connect' : 'profile'}</span>
           </button>
-        ))}
-        <div className="model-menu-note">Provider connections will be added in the next integration step.</div>
+        })}
+        <div className="model-menu-account">
+          <span className={`auth-dot ${authStatus?.connected ? 'connected' : ''}`} />
+          <span><strong>ChatGPT account</strong><small>{authStatus?.connected ? 'Subscription route connected' : 'Use your Plus / Pro subscription'}</small></span>
+          {authStatus?.connected ? <button className="auth-inline-button" onClick={() => { onLogout(); setOpen(false) }}>Sign out</button> : <button className="auth-inline-button" onClick={() => { onConnect(); setOpen(false) }}>{authBusy ? 'Waiting…' : 'Connect'}</button>}
+        </div>
+        <div className="model-menu-note">OAuth credentials stay in the local auth service, outside browser storage.</div>
       </div>}
     </div>
   )
@@ -207,7 +214,7 @@ function KnowledgeSettingsModal({ config, onClose, onSave }) {
   )
 }
 
-function Sidebar({ activeSection, setActiveSection, onConnectVault, onSyncVault, onOpenSettings, vaultName, vaultNoteCount, syncState, vaultSource, localAdapterState }) {
+function Sidebar({ activeSection, setActiveSection, onConnectVault, onSyncVault, onOpenSettings, vaultName, vaultNoteCount, syncState, vaultSource, localAdapterState, authStatus, authBusy, onConnectChatgpt, onLogoutChatgpt, authError }) {
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -239,6 +246,12 @@ function Sidebar({ activeSection, setActiveSection, onConnectVault, onSyncVault,
         </button>
         {vaultName && <button className="settings-link sync-link" onClick={onSyncVault} disabled={syncState === 'syncing'}><RefreshCw className={syncState === 'syncing' ? 'spin' : ''} size={15} /> {syncState === 'syncing' ? 'Syncing vault' : syncState === 'needs-permission' ? 'Reconnect vault' : 'Sync vault'}</button>}
         {vaultSource === 'local-adapter' && <div className={`adapter-status ${localAdapterState}`}><Database size={14} /><span>{localAdapterState === 'ready' ? 'Local adapter online' : 'Local adapter offline'}</span>{localAdapterState === 'ready' && <small>auto sync 15s</small>}</div>}
+        <div className={`account-status ${authStatus?.connected ? 'connected' : ''}`}>
+          <Sparkles size={14} />
+          <span>{authStatus?.connected ? 'ChatGPT connected' : 'ChatGPT not connected'}</span>
+          <button onClick={authStatus?.connected ? onLogoutChatgpt : onConnectChatgpt} disabled={authBusy}>{authStatus?.connected ? 'Sign out' : authBusy ? 'Waiting…' : 'Connect'}</button>
+        </div>
+        {authError && <small className="auth-error" role="alert">{authError}</small>}
         <button className="settings-link" onClick={onOpenSettings}><Settings2 size={16} /> Settings</button>
       </div>
     </aside>
@@ -313,7 +326,7 @@ function EvidenceTrail({ activeStage }) {
   )
 }
 
-function Composer({ value, setValue, onSubmit, disabled, selectedModel, models, onSelectModel }) {
+function Composer({ value, setValue, onSubmit, disabled, selectedModel, models, onSelectModel, authStatus, authBusy, onConnectChatgpt, onLogoutChatgpt }) {
   const textareaRef = useRef(null)
   const handleKeyDown = (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -340,7 +353,7 @@ function Composer({ value, setValue, onSubmit, disabled, selectedModel, models, 
             <button aria-label="Insert code"><Code2 size={18} /></button>
           </div>
           <div className="composer-submit">
-            <ModelPicker selectedModel={selectedModel} models={models} onSelect={onSelectModel} disabled={disabled} />
+            <ModelPicker selectedModel={selectedModel} models={models} onSelect={onSelectModel} disabled={disabled} authStatus={authStatus} authBusy={authBusy} onConnect={onConnectChatgpt} onLogout={onLogoutChatgpt} />
             <button className="send-button" onClick={onSubmit} disabled={disabled || !value.trim()} aria-label="Send question">
               {disabled ? <LoaderCircle className="spin" size={19} /> : <Send size={19} />}
             </button>
@@ -539,6 +552,10 @@ function App() {
   const [selectedNote, setSelectedNote] = useState(null)
   const [modelConfig, setModelConfig] = useState(DEFAULT_MODEL_CONFIG)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [authStatus, setAuthStatus] = useState({ provider: 'openai', connected: false, pending: false })
+  const [authBusy, setAuthBusy] = useState(false)
+  const [authError, setAuthError] = useState('')
+  const [runMode, setRunMode] = useState('mock')
   const vaultInputRef = useRef(null)
 
   const vaultIndex = useMemo(() => buildVaultIndex(vaultNotes), [vaultNotes])
@@ -656,6 +673,16 @@ function App() {
 
   useEffect(() => {
     let cancelled = false
+    getAuthStatus().then((status) => {
+      if (!cancelled) setAuthStatus(status)
+    }).catch(() => {
+      if (!cancelled) setAuthStatus({ provider: 'openai', connected: false, pending: false, unavailable: true })
+    })
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
     Promise.all([loadVaultSnapshot(), loadVaultHandle()]).then(async ([snapshot, handle]) => {
       if (cancelled) return
       const localSynced = await syncFromLocalAdapter(true)
@@ -683,7 +710,7 @@ function App() {
   }, [vaultSource, localRevision])
 
   useEffect(() => {
-    if (!running) return undefined
+    if (!running || runMode !== 'mock') return undefined
     setActiveStage(0)
     const timers = stages.map((_, index) => setTimeout(() => setActiveStage(index), (index + 1) * 620))
     const finish = setTimeout(() => {
@@ -696,20 +723,92 @@ function App() {
       timers.forEach(clearTimeout)
       clearTimeout(finish)
     }
-  }, [running, pendingQuestion])
+  }, [running, pendingQuestion, runMode])
 
   const activeTitle = useMemo(() => navItems.find((item) => item.id === activeSection)?.label || 'Research', [activeSection])
 
-  const submitQuestion = () => {
+  const handleConnectChatgpt = async () => {
+    if (authBusy || authStatus.connected) return authStatus
+    setAuthBusy(true)
+    setAuthError('')
+    setAuthStatus((current) => ({ ...current, pending: true }))
+    try {
+      await startChatgptLogin()
+      const nextStatus = await waitForAuth('openai')
+      setAuthStatus(nextStatus)
+      return nextStatus
+    } catch (error) {
+      setAuthError(error.message || 'ChatGPT connection failed')
+      setAuthStatus((current) => ({ ...current, pending: false }))
+      return null
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+
+  const handleLogoutChatgpt = async () => {
+    setAuthError('')
+    try {
+      const nextStatus = await logoutProvider('openai')
+      setAuthStatus(nextStatus)
+    } catch (error) {
+      setAuthError(error.message || 'Could not sign out')
+    }
+  }
+
+  const submitQuestion = async () => {
     const question = input.trim()
     if (!question || running) return
     setMessages((current) => [...current, { id: `user-${Date.now()}`, role: 'user', text: question }])
     setInput('')
+    const live = selectedModel.authProvider === 'openai' || (selectedModel.id === 'smart-default' && authStatus.connected)
+    if (live && !authStatus.connected) {
+      await handleConnectChatgpt()
+      return
+    }
+    if (live) {
+      setRunMode('live')
+      setActiveStage(1)
+      setRunning(true)
+      try {
+        const result = await chatWithProvider({
+          model: selectedModel.id === 'smart-default' ? 'gpt-5.4' : selectedModel.id,
+          messages: [{ role: 'user', content: question }],
+        })
+        setActiveStage(5)
+        setMessages((current) => [...current, {
+          id: `assistant-${Date.now()}`,
+          role: 'assistant',
+          text: result.text || 'The provider returned an empty response.',
+          bullets: [],
+          closing: `Generated with ${result.model} through the connected ChatGPT subscription.`,
+        }])
+      } catch (error) {
+        setActiveStage(5)
+        setMessages((current) => [...current, {
+          id: `assistant-error-${Date.now()}`,
+          role: 'assistant',
+          text: `The connected model could not complete this request: ${error.message}`,
+          bullets: [],
+          closing: 'Check the provider connection and try again.',
+        }])
+      } finally {
+        setRunning(false)
+        setRunMode('mock')
+      }
+      return
+    }
+    setRunMode('mock')
     setPendingQuestion(question)
     setRunning(true)
   }
 
   const handleModelSelect = (chatModelId) => {
+    const model = getModelById(chatModelId)
+    if (model.authProvider === 'openai' && !authStatus.connected) {
+      void handleConnectChatgpt()
+      return
+    }
     setModelConfig((current) => {
       const next = { ...current, chatModelId }
       saveModelConfig(next)
@@ -736,6 +835,11 @@ function App() {
         syncState={syncState}
         vaultSource={vaultSource}
         localAdapterState={localAdapterState}
+        authStatus={authStatus}
+        authBusy={authBusy}
+        onConnectChatgpt={handleConnectChatgpt}
+        onLogoutChatgpt={handleLogoutChatgpt}
+        authError={authError}
       />
       <input ref={vaultInputRef} className="visually-hidden" type="file" webkitdirectory="true" directory="true" multiple onChange={handleVaultSelection} />
       <main className="main-shell">
@@ -751,7 +855,7 @@ function App() {
                 {messages.map((message) => message.role === 'user' ? <UserMessage text={message.text} key={message.id} /> : <AssistantMessage message={message} running={running} key={message.id} />)}
               </div>
               <EvidenceTrail activeStage={activeStage} />
-              <Composer value={input} setValue={setInput} onSubmit={submitQuestion} disabled={running} selectedModel={selectedModel} models={chatModels} onSelectModel={handleModelSelect} />
+              <Composer value={input} setValue={setInput} onSubmit={submitQuestion} disabled={running} selectedModel={selectedModel} models={chatModels} onSelectModel={handleModelSelect} authStatus={authStatus} authBusy={authBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} />
             </div>
             <Inspector activeStage={activeStage} running={running} onPause={() => setRunning(false)} linkedNotes={inspectorNotes} sources={inspectorSources} vaultName={vaultName} topK={modelConfig.topK} rerankLabel={rerankModel?.name || 'Disabled by profile'} onOpenNote={setSelectedNote} />
           </div>
