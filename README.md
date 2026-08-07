@@ -25,7 +25,7 @@ npm run build
 - Research / Knowledge Graph / Pipelines / Runs navigation
 - Responsive desktop and mobile layouts
 - Local Obsidian Vault folder import with Markdown/frontmatter/`[[wikilink]]` parsing
-- Local wikilink graph view without requiring paper2MD
+- Interactive local wikilink graph with search, type filters, backlinks, unresolved-link diagnostics, and note preview without requiring paper2MD
 - IndexedDB-backed Vault snapshot persistence and in-app Markdown note preview
 - Persistent browser directory handle with manual Vault rescan when File System Access API is available
 - Optional loopback-only local Vault adapter with 15-second revision polling and read-only Markdown access

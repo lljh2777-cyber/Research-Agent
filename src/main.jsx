@@ -37,6 +37,7 @@ import {
   X,
 } from 'lucide-react'
 import { buildVaultIndex, getVaultName, parseVaultDirectory, parseVaultFiles } from './vault.js'
+import KnowledgeGraphSection from './KnowledgeGraph.jsx'
 import { loadLocalVault } from './localVault.js'
 import { chatgptCatalogToModels, DEFAULT_MODEL_CONFIG, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
 import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources, retrieveEvidence } from './retrieval.js'
@@ -231,6 +232,7 @@ function Sidebar({ activeSection, setActiveSection, onConnectVault, onSyncVault,
           <button
             className={`nav-item ${activeSection === id ? 'active' : ''}`}
             key={id}
+            aria-label={label}
             onClick={() => setActiveSection(id)}
           >
             <Icon size={18} strokeWidth={1.7} />
@@ -504,42 +506,6 @@ function Inspector({ activeStage, running, onPause, linkedNotes, sources, vaultN
       <AgentStatus activeStage={activeStage} running={running} onPause={onPause} />
       <Sources sources={sources} onOpenNote={onOpenNote} />
     </aside>
-  )
-}
-
-function KnowledgeGraphSection({ index, onOpenNote }) {
-  const visibleEdges = index.edges.slice(0, 10)
-  return (
-    <div className="graph-section">
-      <div className="graph-header">
-        <div>
-          <span className="graph-kicker"><Network size={16} /> Local wikilink graph</span>
-          <h2>Knowledge Graph</h2>
-          <p>Parsed from Markdown notes in the connected Obsidian vault.</p>
-        </div>
-        <div className="graph-summary"><strong>{index.notes.length}</strong><span>notes</span><strong>{index.edges.length}</strong><span>links</span></div>
-      </div>
-      <div className="graph-grid">
-        <section className="graph-panel">
-          <div className="graph-panel-heading"><span>Link paths</span><small>first {visibleEdges.length} edges</small></div>
-          {visibleEdges.length ? visibleEdges.map((edge, index) => (
-            <div className="edge-row" key={`${edge.source.path}-${edge.target.path}-${index}`}>
-              <span className="edge-node">{edge.source.title}</span>
-              <GitBranch size={15} />
-              <span className={`edge-node ${edge.target.missing ? 'missing' : ''}`}>{edge.target.title}</span>
-            </div>
-          )) : <div className="graph-empty">No `[[wikilinks]]` were found yet.</div>}
-        </section>
-        <section className="graph-panel">
-          <div className="graph-panel-heading"><span>Vault notes</span><small>Markdown index</small></div>
-          <div className="graph-note-list">
-            {index.notes.slice(0, 12).map((note) => (
-              <button className="graph-note-row" key={note.path} onClick={() => onOpenNote(note)}><FileText size={15} /><span>{note.title}</span><small>{note.type}</small></button>
-            ))}
-          </div>
-        </section>
-      </div>
-    </div>
   )
 }
 
