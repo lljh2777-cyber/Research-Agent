@@ -994,7 +994,7 @@ function App() {
         </header>
 
         {activeSection === 'graph' ? (vaultIndex.notes.length ? <KnowledgeGraphSection index={vaultIndex} onOpenNote={setSelectedNote} /> : <EmptyGraphSection onConnectVault={handleConnectVault} />) : activeSection === 'pipelines' ? (
-          <PipelinesSection vaultName={vaultName} noteCount={vaultNotes.length} runs={pipelineRuns} runningPipelineId={pipelineRunningId} onRun={handleRunPipeline} onViewRun={handleViewPipelineRun} />
+          <PipelinesSection vaultName={vaultName} noteCount={vaultNotes.length} runs={pipelineRuns} runningPipelineId={pipelineRunningId} onRun={handleRunPipeline} onViewRun={handleViewPipelineRun} onConnectVault={handleConnectVault} />
         ) : activeSection === 'runs' ? (
           <RunsSection runs={pipelineRuns} selectedRunId={selectedPipelineRunId} onSelectRun={setSelectedPipelineRunId} />
         ) : (
