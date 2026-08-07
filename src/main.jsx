@@ -39,6 +39,7 @@ import {
 import { buildVaultIndex, getVaultName, parseVaultDirectory, parseVaultFiles } from './vault.js'
 import { loadLocalVault } from './localVault.js'
 import { DEFAULT_MODEL_CONFIG, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
+import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources, retrieveEvidence } from './retrieval.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
 import { getAuthStatus, logoutChatgpt, startChatgptLogin, streamChatgptResponse, waitForChatgptAuth } from './authClient.js'
 import './styles.css'
@@ -91,29 +92,17 @@ const initialMessages = [
 
 const stages = ['Query parsed', 'Retrieve', 'Rerank', 'Synthesize', 'Cite']
 
-function responseForQuestion(question) {
-  if (question.toLowerCase().includes('cellchat')) {
-    return {
-      id: `assistant-${Date.now()}`,
-      role: 'assistant',
-      text: 'CellChat adds a ligand-receptor communication layer to spatial transcriptomics. Spatial measurements show where cell populations are located; CellChat models which populations may be signaling to each other based on ligand-receptor expression.',
-      bullets: [
-        ['Spatial context', 'use coordinates or annotated regions to constrain communication partners to biologically plausible neighborhoods.', 'Spatial transcriptomics'],
-        ['Interaction scoring', 'compare incoming and outgoing signaling patterns across cell types or tumor niches.', 'CellChat'],
-        ['Validation', 'cross-check predicted interactions against expression, imaging, perturbation, or pathology evidence before treating them as mechanisms.', 'CellChat validation'],
-      ],
-      closing: 'A practical workflow is to infer communication with CellChat, project significant pairs back onto tissue neighborhoods, and preserve the supporting notes and thresholds in the vault.',
-    }
-  }
+function responseForQuestion(question, packet) {
+  const evidence = packet?.evidence || []
   return {
     id: `assistant-${Date.now()}`,
     role: 'assistant',
-    text: 'The vault has retrieved a focused set of methods and protocol notes for this question. The next step is to compare the candidates against your tissue, resolution, and validation requirements.',
-    bullets: [
-      ['Retrieved context', 'the answer is grounded in the linked method and benchmark notes.', 'Spatial transcriptomics'],
-      ['Recommended next step', 'narrow the comparison using tissue type, resolution, and available assay budget.', 'Research planning'],
-    ],
-    closing: 'I can turn this into a reproducible comparison table or an analysis plan in the next run.',
+    text: evidence.length
+      ? `Retrieved ${evidence.length} relevant Vault evidence chunk${evidence.length === 1 ? '' : 's'} for “${question}”. This model profile is not connected to a live provider yet, so no unsupported synthesis was generated.`
+      : 'Vault 中未找到足够依据。No relevant Markdown evidence matched this question, and this model profile is not connected to a live provider.',
+    bullets: [],
+    closing: 'Choose a ChatGPT-backed answer model to synthesize the retrieved evidence with inline citations.',
+    evidence,
   }
 }
 
@@ -154,9 +143,9 @@ function ModelPicker({ selectedModel, models, onSelect, disabled = false, authSt
         <div className="model-menu-heading">Research model</div>
         {models.map((model) => {
           const ready = model.authProvider === 'chatgpt' ? authStatus?.connected : model.ready
-          return <button className={`model-option ${model.id === selectedModel.id ? 'selected' : ''}`} key={model.id} onClick={() => { if (model.authProvider === 'chatgpt' && !authStatus?.connected) onConnect(); else onSelect(model.id); setOpen(false) }} role="menuitem">
+          return <button className={`model-option ${model.id === selectedModel.id ? 'selected' : ''}`} key={model.id} onClick={() => { onSelect(model.id); setOpen(false) }} role="menuitem" disabled={!ready && !model.authProvider}>
             <span className="model-option-main"><strong>{model.name}</strong><small>{model.provider}</small></span>
-            <span className={`model-readiness ${ready ? 'ready' : ''}`}>{ready ? 'ready' : model.authProvider ? 'connect' : 'profile'}</span>
+            <span className={`model-readiness ${ready ? 'ready' : ''}`}>{ready ? 'ready' : model.authProvider ? 'connect' : 'later'}</span>
           </button>
         })}
         <div className="model-menu-account">
@@ -164,7 +153,7 @@ function ModelPicker({ selectedModel, models, onSelect, disabled = false, authSt
           <span><strong>ChatGPT account</strong><small>{authStatus?.connected ? 'Subscription route connected' : 'Use your Plus / Pro subscription'}</small></span>
           {authStatus?.connected ? <button className="auth-inline-button" onClick={() => { onLogout(); setOpen(false) }}>Sign out</button> : <button className="auth-inline-button" onClick={() => { onConnect(); setOpen(false) }}>{authBusy ? 'Waiting…' : 'Connect'}</button>}
         </div>
-        <div className="model-menu-note">OAuth credentials stay in the local auth service, outside browser storage.</div>
+        <div className="model-menu-note">OAuth credentials stay in the local auth service. Only retrieved Vault excerpts are sent when a connected answer model runs.</div>
       </div>}
     </div>
   )
@@ -270,7 +259,9 @@ function UserMessage({ text }) {
   )
 }
 
-function AssistantMessage({ message, running }) {
+function AssistantMessage({ message, running, onOpenNote }) {
+  const evidence = message.evidence || []
+  const sourceCount = new Set(evidence.map((item) => item.noteId)).size
   return (
     <article className="assistant-message">
       <div className="assistant-avatar"><Sparkles size={17} /></div>
@@ -281,19 +272,26 @@ function AssistantMessage({ message, running }) {
         </div>
         <p>{message.text}</p>
         <ul>
-          {message.bullets.map(([name, detail, link]) => (
+          {(message.bullets || []).map(([name, detail, link]) => (
             <li key={name}>
               <strong>{name}</strong>: {detail} <a href={`#${link.replaceAll(' ', '-')}`}>[[{link}]]</a>
             </li>
           ))}
         </ul>
         <p>{message.closing}</p>
+        {evidence.length > 0 && <div className="answer-evidence" aria-label="Answer evidence">
+          {evidence.map((item, index) => <button key={item.id} onClick={() => onOpenNote({
+            ...item,
+            body: item.excerpt,
+            frontmatter: { retrieval: item.relationship, score: item.score },
+          })} title={item.path}><span>[{index + 1}]</span>{item.title}</button>)}
+        </div>}
         <div className="message-actions">
           <button aria-label="Helpful"><ThumbsUp size={15} /></button>
           <button aria-label="Not helpful"><ThumbsDown size={15} /></button>
           <button aria-label="Copy"><FileText size={15} /></button>
           <button aria-label="Bookmark"><Bookmark size={15} /></button>
-          <span className="message-time">10:24 AM <span>·</span> 6 sources <ChevronDown size={14} /></span>
+          <span className="message-time">10:24 AM <span>·</span> {sourceCount || 6} sources <ChevronDown size={14} /></span>
         </div>
       </div>
     </article>
@@ -418,13 +416,16 @@ function NotePreview({ note, onClose }) {
   )
 }
 
-function RetrievalPath({ activeStage, vaultName, topK, rerankLabel }) {
+function RetrievalPath({ activeStage, vaultName, topK, rerankLabel, packet, answerMode }) {
+  const evidenceCount = packet?.evidence?.length || 0
+  const retrieval = packet?.retrieval
+  const query = packet?.question || 'Ask a question to retrieve evidence'
   const path = [
-    ['Query', 'Which spatial transcriptomics methods...', 'done'],
-    [`Vector search (top-k=${topK})`, vaultName ? `vault: ${vaultName}` : 'vault: tumor-niche', 'done'],
-    ['Reranking', rerankLabel, 'done'],
-    ['Selected (6 sources)', 'see sources below', 'done'],
-    ['Synthesis', activeStage >= 4 ? 'Answer generated' : 'Agent working...', activeStage >= 4 ? 'done' : 'current'],
+    ['Query', query, packet ? 'done' : 'current'],
+    [`BM25 + Wikilinks (top-k=${topK})`, vaultName ? `vault: ${vaultName}` : 'no Vault connected', packet ? 'done' : 'current'],
+    ['Graph expansion', packet ? `${retrieval?.graphExpanded || 0} one-hop result${retrieval?.graphExpanded === 1 ? '' : 's'} · rerank: ${rerankLabel}` : 'waiting for a query', packet ? 'done' : 'current'],
+    [`Selected (${evidenceCount} chunks)`, packet ? `${retrieval?.candidateCount || 0} lexical candidates` : 'no evidence selected yet', packet ? 'done' : 'current'],
+    ['Answer model', packet ? activeStage >= 4 ? answerMode === 'chatgpt' ? 'Cited answer generated' : 'Retrieval preview only' : 'Agent working...' : 'waiting for evidence', packet && activeStage >= 4 ? 'done' : 'current'],
   ]
   return (
     <section className="inspector-section retrieval-path">
@@ -462,30 +463,31 @@ function AgentStatus({ activeStage, running, onPause }) {
   )
 }
 
-function Sources({ sources }) {
+function Sources({ sources, onOpenNote }) {
   return (
     <section className="inspector-section sources-section">
       <div className="inspector-heading"><span>Sources ({sources.length})</span><ChevronUp size={15} /></div>
       <div className="source-list">
         {sources.map((source, index) => (
-          <div className="source-row" key={source.name}>
+          <button className="source-row" key={source.path || source.name} onClick={() => source.note && onOpenNote(source.note)} disabled={!source.note} title={source.path || source.name}>
             <span className="source-index">{index + 1}</span><FileText size={15} /><span className="source-name">{source.name}</span><span className={`source-kind ${source.kind}`}>{source.kind}</span>
-          </div>
+          </button>
         ))}
+        {sources.length === 0 && <div className="source-empty">No evidence retrieved yet.</div>}
       </div>
       <button className="show-more">Show all sources <ChevronDown size={15} /></button>
     </section>
   )
 }
 
-function Inspector({ activeStage, running, onPause, linkedNotes, sources, vaultName, topK, rerankLabel, onOpenNote }) {
+function Inspector({ activeStage, running, onPause, linkedNotes, sources, vaultName, topK, rerankLabel, packet, answerMode, onOpenNote }) {
   return (
     <aside className="inspector">
       <div className="inspector-title"><BookOpen size={18} /> <span>Knowledge context</span><ChevronUp size={16} /></div>
       <LinkedNotes notes={linkedNotes} onOpenNote={onOpenNote} />
-      <RetrievalPath activeStage={activeStage} vaultName={vaultName} topK={topK} rerankLabel={rerankLabel} />
+      <RetrievalPath activeStage={activeStage} vaultName={vaultName} topK={topK} rerankLabel={rerankLabel} packet={packet} answerMode={answerMode} />
       <AgentStatus activeStage={activeStage} running={running} onPause={onPause} />
-      <Sources sources={sources} />
+      <Sources sources={sources} onOpenNote={onOpenNote} />
     </aside>
   )
 }
@@ -556,15 +558,38 @@ function App() {
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState('')
   const [runMode, setRunMode] = useState('mock')
+  const [answerMode, setAnswerMode] = useState('sample')
+  const [retrievalPacket, setRetrievalPacket] = useState(null)
   const vaultInputRef = useRef(null)
   const requestAbortRef = useRef(null)
 
   const vaultIndex = useMemo(() => buildVaultIndex(vaultNotes), [vaultNotes])
+  const retrievalIndex = useMemo(
+    () => buildRetrievalIndex(vaultNotes, { chunkSize: modelConfig.chunkSize, chunkOverlap: modelConfig.chunkOverlap }),
+    [vaultNotes, modelConfig.chunkSize, modelConfig.chunkOverlap],
+  )
   const chatModels = useMemo(() => getModelsByRole('chat'), [])
   const selectedModel = useMemo(() => getModelById(modelConfig.chatModelId), [modelConfig.chatModelId])
   const rerankModel = useMemo(() => MODEL_REGISTRY.find((model) => model.id === modelConfig.rerankModelId), [modelConfig.rerankModelId])
-  const inspectorNotes = vaultIndex.notes.length ? vaultIndex.linkedNotes : sampleLinkedNotes
-  const inspectorSources = vaultIndex.sources.length ? vaultIndex.sources : sampleSources
+  const notesById = useMemo(() => new Map(vaultNotes.map((note) => [note.id, note])), [vaultNotes])
+  const retrievedNotes = useMemo(() => {
+    const seen = new Set()
+    return (retrievalPacket?.evidence || []).flatMap((item) => {
+      if (seen.has(item.noteId)) return []
+      seen.add(item.noteId)
+      return notesById.has(item.noteId) ? [notesById.get(item.noteId)] : []
+    })
+  }, [notesById, retrievalPacket])
+  const retrievedSources = useMemo(() => evidenceSources(retrievalPacket).map((source) => ({
+    ...source,
+    note: notesById.get(source.id) || null,
+  })), [notesById, retrievalPacket])
+  const vaultSources = useMemo(() => vaultIndex.sources.map((source) => ({
+    ...source,
+    note: notesById.get(source.id) || null,
+  })), [notesById, vaultIndex.sources])
+  const inspectorNotes = retrievalPacket ? retrievedNotes : vaultIndex.notes.length ? vaultIndex.linkedNotes : sampleLinkedNotes
+  const inspectorSources = retrievalPacket ? retrievedSources : vaultSources.length ? vaultSources : sampleSources
 
   const applyVault = async (notes, nextVaultName, { handle = null, source = 'manual', revision = '' } = {}) => {
     if (!notes.length) {
@@ -576,6 +601,8 @@ function App() {
     setVaultHandle(handle)
     setVaultSource(source)
     setLocalRevision(revision)
+    setRetrievalPacket(null)
+    setAnswerMode('sample')
     await saveVaultSnapshot({ vaultName: nextVaultName, notes, source, revision })
     if (handle) await saveVaultHandle(handle)
     setSyncState(source === 'local-adapter' || handle ? 'ready' : 'manual')
@@ -619,6 +646,8 @@ function App() {
         setVaultHandle(null)
         setVaultSource('local-adapter')
         setLocalRevision(payload.revision || '')
+        setRetrievalPacket(null)
+        setAnswerMode('sample')
         await saveVaultSnapshot({ vaultName: payload.vaultName || 'local-vault', notes: [], source: 'local-adapter', revision: payload.revision || '' })
         setSyncState('empty')
         return true
@@ -716,7 +745,7 @@ function App() {
     const timers = stages.map((_, index) => setTimeout(() => setActiveStage(index), (index + 1) * 620))
     const finish = setTimeout(() => {
       setActiveStage(5)
-      setMessages((current) => [...current, responseForQuestion(pendingQuestion)])
+      setMessages((current) => [...current, responseForQuestion(pendingQuestion, retrievalPacket)])
       setPendingQuestion('')
       setRunning(false)
     }, 3900)
@@ -724,7 +753,7 @@ function App() {
       timers.forEach(clearTimeout)
       clearTimeout(finish)
     }
-  }, [running, pendingQuestion, runMode])
+  }, [running, pendingQuestion, retrievalPacket, runMode])
 
   const activeTitle = useMemo(() => navItems.find((item) => item.id === activeSection)?.label || 'Research', [activeSection])
 
@@ -760,11 +789,19 @@ function App() {
   const submitQuestion = async () => {
     const question = input.trim()
     if (!question || running) return
-    const live = selectedModel.authProvider === 'chatgpt' || (selectedModel.id === 'smart-default' && authStatus.connected)
-    if (live && !authStatus.connected) {
+    const packet = retrieveEvidence(retrievalIndex, question, {
+      topK: modelConfig.topK,
+      similarityThreshold: modelConfig.similarityThreshold,
+    })
+    setRetrievalPacket(packet)
+    let chatgptConnected = authStatus.connected
+    if (selectedModel.authProvider === 'chatgpt' && !chatgptConnected) {
       const connected = await handleConnectChatgpt()
-      if (!connected) return
+      chatgptConnected = Boolean(connected?.connected)
+      if (!chatgptConnected) return
     }
+    const live = (selectedModel.authProvider === 'chatgpt' || selectedModel.id === 'smart-default') && chatgptConnected
+    setAnswerMode(live ? 'chatgpt' : 'retrieval-only')
     setMessages((current) => [...current, { id: `user-${Date.now()}`, role: 'user', text: question }])
     setInput('')
     if (live) {
@@ -772,7 +809,7 @@ function App() {
       const controller = new AbortController()
       requestAbortRef.current = controller
       setRunMode('live')
-      setActiveStage(1)
+      setActiveStage(3)
       setRunning(true)
       setMessages((current) => [...current, {
         id: assistantId,
@@ -780,6 +817,7 @@ function App() {
         text: '',
         bullets: [],
         closing: '',
+        evidence: packet.evidence,
       }])
       let streamedText = ''
       let renderFrame = 0
@@ -797,7 +835,12 @@ function App() {
           }))
         const result = await streamChatgptResponse({
           model: selectedModel.id === 'smart-default' ? 'gpt-5.4' : selectedModel.id,
-          messages: [...history, { role: 'user', content: question }],
+          messages: [
+            { role: 'system', content: buildEvidenceSystemMessage(packet, { citations: modelConfig.citations }) },
+            ...history,
+            { role: 'user', content: buildEvidenceUserContext(packet) },
+            { role: 'user', content: question },
+          ],
           signal: controller.signal,
           onDelta: (delta) => {
             streamedText += delta
@@ -810,7 +853,7 @@ function App() {
         setMessages((current) => current.map((message) => message.id === assistantId ? {
           ...message,
           text: result.text || streamedText || 'The provider returned an empty response.',
-          closing: `Generated with ${result.model} through the connected ChatGPT subscription.`,
+          closing: `Generated with ${result.model} through the connected ChatGPT subscription · ${packet.evidence.length} Vault evidence chunk${packet.evidence.length === 1 ? '' : 's'}.`,
         } : message))
       } catch (error) {
         if (renderFrame) window.cancelAnimationFrame(renderFrame)
@@ -832,11 +875,11 @@ function App() {
     setRunning(true)
   }
 
-  const handleModelSelect = (chatModelId) => {
+  const handleModelSelect = async (chatModelId) => {
     const model = getModelById(chatModelId)
     if (model.authProvider === 'chatgpt' && !authStatus.connected) {
-      void handleConnectChatgpt()
-      return
+      const connected = await handleConnectChatgpt()
+      if (!connected?.connected) return
     }
     setModelConfig((current) => {
       const next = { ...current, chatModelId }
@@ -887,12 +930,12 @@ function App() {
           <div className="workspace-content">
             <div className="chat-column">
               <div className="conversation">
-                {messages.map((message) => message.role === 'user' ? <UserMessage text={message.text} key={message.id} /> : <AssistantMessage message={message} running={running} key={message.id} />)}
+                {messages.map((message) => message.role === 'user' ? <UserMessage text={message.text} key={message.id} /> : <AssistantMessage message={message} running={running} onOpenNote={setSelectedNote} key={message.id} />)}
               </div>
               <EvidenceTrail activeStage={activeStage} />
               <Composer value={input} setValue={setInput} onSubmit={submitQuestion} disabled={running} selectedModel={selectedModel} models={chatModels} onSelectModel={handleModelSelect} authStatus={authStatus} authBusy={authBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} />
             </div>
-            <Inspector activeStage={activeStage} running={running} onPause={handlePause} linkedNotes={inspectorNotes} sources={inspectorSources} vaultName={vaultName} topK={modelConfig.topK} rerankLabel={rerankModel?.name || 'Disabled by profile'} onOpenNote={setSelectedNote} />
+            <Inspector activeStage={activeStage} running={running} onPause={handlePause} linkedNotes={inspectorNotes} sources={inspectorSources} vaultName={vaultName} topK={modelConfig.topK} rerankLabel={rerankModel?.name || 'Disabled by profile'} packet={retrievalPacket} answerMode={answerMode} onOpenNote={setSelectedNote} />
           </div>
         )}
       </main>

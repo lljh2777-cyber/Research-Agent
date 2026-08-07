@@ -21,8 +21,8 @@ npm run build
 ## Current slice
 
 - Research chat workspace with evidence-trail stages
-- Linked-note inspector and retrieval path
-- Simulated research-agent run with a completed answer
+- Linked-note inspector with a query-specific retrieval path and source preview
+- Offline retrieval preview that does not invent an answer when no live model is connected
 - Research / Knowledge Graph / Pipelines / Runs navigation
 - Responsive desktop and mobile layouts
 - Local Obsidian Vault folder import with Markdown/frontmatter/`[[wikilink]]` parsing
@@ -31,6 +31,8 @@ npm run build
 - Persistent browser directory handle with manual Vault rescan when File System Access API is available
 - Optional loopback-only local Vault adapter with 15-second revision polling and read-only Markdown access
 - Local model registry with chat-model selector and a persisted knowledge-base retrieval profile
+- Markdown-aware chunking, multilingual BM25 ranking, one-hop `[[wikilink]]` expansion, and per-note evidence diversification
+- Provider-neutral evidence packets injected into the user-selected ChatGPT answer model with numbered source citations
 - Loopback-only ChatGPT/Codex OAuth bridge with PKCE, refresh-token rotation, account status, logout, and streaming Responses proxy
 - Visual concept in `design/concept-desktop.png`
 
@@ -65,11 +67,13 @@ Use `BIORESEARCH_VAULT_PORT` to change the port or `VITE_VAULT_API_URL` when the
 
 ## Model and retrieval profile
 
-The composer model selector stores the selected model locally and now exposes GPT-5.4 routes when the ChatGPT account bridge is connected. The `Settings` action opens the knowledge-base profile with Markdown parsing, embedding model, optional reranker, Top K, chunk size/overlap, similarity threshold, hybrid search, and citation settings. Unconnected models remain available as profiles but do not make provider calls.
+The composer model selector stores the answer model independently from retrieval settings. `Smart (Default)` provides a retrieval-only preview while disconnected and routes to GPT-5.4 when ChatGPT is connected; GPT-5.4 and GPT-5.4 mini can also be selected explicitly. Future provider profiles remain visible but disabled until their API adapters exist.
+
+The `Settings` action opens the knowledge-base profile with Markdown parsing, embedding model, optional reranker, Top K, chunk size/overlap, similarity threshold, hybrid search, and citation settings. The current retrieval engine uses multilingual BM25 plus one-hop Wikilink expansion, limits a single note to two selected chunks, and returns a provider-neutral evidence packet. When a connected answer model runs, only the retrieved excerpts—not the entire Vault—are included in its system context. Changing the answer model does not rebuild the retrieval index; changing chunk settings does.
 
 ## Next integration steps
 
-1. Add vector retrieval and source-aware answer generation around live ChatGPT responses.
+1. Add optional embedding and reranker adapters behind the existing evidence-packet boundary.
 2. Persist stream state so an interrupted Web view can reattach to an active run.
 3. Add note editing safeguards and explicit change conflict handling.
 4. Add an MCP bridge over the same local Vault adapter, then move the stable Web app into Electron.

@@ -164,7 +164,10 @@ export function buildVaultIndex(notes) {
       wordCount: note.wordCount,
     })),
     sources: notes.slice(0, 12).map((note) => ({
+      id: note.id,
       name: note.name,
+      title: note.title,
+      path: note.path,
       kind: note.type === 'paper' ? 'paper' : 'note',
     })),
   }
