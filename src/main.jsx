@@ -41,7 +41,7 @@ import { loadLocalVault } from './localVault.js'
 import { chatgptCatalogToModels, DEFAULT_MODEL_CONFIG, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
 import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources, retrieveEvidence } from './retrieval.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
-import { getAuthStatus, getChatgptModels, logoutChatgpt, startChatgptLogin, streamChatgptResponse, waitForChatgptAuth } from './authClient.js'
+import { AUTH_SERVICE_UNAVAILABLE, getAuthStatus, getChatgptModels, logoutChatgpt, startChatgptLogin, streamChatgptResponse, waitForChatgptAuth } from './authClient.js'
 import './styles.css'
 
 const navItems = [
@@ -164,8 +164,8 @@ function ModelPicker({ selectedModel, models, onSelect, disabled = false, authSt
         })}
         <div className="model-menu-account">
           <span className={`auth-dot ${authStatus?.connected ? 'connected' : ''}`} />
-          <span><strong>ChatGPT account</strong><small>{authStatus?.connected ? `${modelCatalog?.models?.length || 0} models · ${modelCatalog?.source || 'discovering'}` : 'Connect to discover available models'}</small></span>
-          {authStatus?.connected ? <button className="auth-inline-button" onClick={() => { onLogout(); setOpen(false) }}>Sign out</button> : <button className="auth-inline-button" onClick={() => { onConnect(); setOpen(false) }}>{authBusy ? 'Waiting…' : 'Connect'}</button>}
+          <span><strong>ChatGPT account</strong><small>{authStatus?.connected ? `${modelCatalog?.models?.length || 0} models · ${modelCatalog?.source || 'discovering'}` : authStatus?.unavailable ? 'Local service offline · restart npm run dev' : 'Connect to discover available models'}</small></span>
+          {authStatus?.connected ? <button className="auth-inline-button" onClick={() => { onLogout(); setOpen(false) }}>Sign out</button> : <button className="auth-inline-button" onClick={() => { onConnect(); setOpen(false) }}>{authBusy ? 'Waiting…' : authStatus?.unavailable ? 'Retry' : 'Connect'}</button>}
         </div>
         {modelCatalog?.warning && <div className="model-catalog-warning">{modelCatalog.warning}</div>}
         <div className="model-menu-note">OAuth credentials stay in the local auth service. Only retrieved Vault excerpts are sent when a connected answer model runs.</div>
@@ -252,8 +252,8 @@ function Sidebar({ activeSection, setActiveSection, onConnectVault, onSyncVault,
         {vaultSource === 'local-adapter' && <div className={`adapter-status ${localAdapterState}`}><Database size={14} /><span>{localAdapterState === 'ready' ? 'Local adapter online' : 'Local adapter offline'}</span>{localAdapterState === 'ready' && <small>auto sync 15s</small>}</div>}
         <div className={`account-status ${authStatus?.connected ? 'connected' : ''}`}>
           <Sparkles size={14} />
-          <span>{authStatus?.connected ? 'ChatGPT connected' : 'ChatGPT not connected'}</span>
-          <button onClick={authStatus?.connected ? onLogoutChatgpt : onConnectChatgpt} disabled={authBusy}>{authStatus?.connected ? 'Sign out' : authBusy ? 'Waiting…' : 'Connect'}</button>
+          <span>{authStatus?.connected ? 'ChatGPT connected' : authStatus?.unavailable ? 'Local ChatGPT service offline' : 'ChatGPT not connected'}</span>
+          <button onClick={authStatus?.connected ? onLogoutChatgpt : onConnectChatgpt} disabled={authBusy}>{authStatus?.connected ? 'Sign out' : authBusy ? 'Waiting…' : authStatus?.unavailable ? 'Retry' : 'Connect'}</button>
         </div>
         {authError && <small className="auth-error" role="alert">{authError}</small>}
         <button className="settings-link" onClick={onOpenSettings}><Settings2 size={16} /> Settings</button>
@@ -817,7 +817,7 @@ function App() {
       return nextStatus
     } catch (error) {
       setAuthError(error.message || 'ChatGPT connection failed')
-      setAuthStatus((current) => ({ ...current, pending: false }))
+      setAuthStatus((current) => ({ ...current, pending: false, unavailable: error.code === AUTH_SERVICE_UNAVAILABLE || current.unavailable }))
       return null
     } finally {
       setAuthBusy(false)

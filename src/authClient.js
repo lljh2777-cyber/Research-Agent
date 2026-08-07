@@ -1,7 +1,34 @@
-const AUTH_SERVER_URL = import.meta.env.VITE_AUTH_SERVER_URL || 'http://127.0.0.1:4318'
+const AUTH_SERVER_URL = import.meta.env?.VITE_AUTH_SERVER_URL || 'http://127.0.0.1:4318'
+const AUTH_SERVICE_CONNECT_TIMEOUT_MS = 3000
+const AUTH_STREAM_CONNECT_TIMEOUT_MS = 10000
+
+export const AUTH_SERVICE_UNAVAILABLE = 'AUTH_SERVICE_UNAVAILABLE'
+
+export function createAuthServiceUnavailableError(cause) {
+  const error = new Error(`Local ChatGPT service is offline at ${AUTH_SERVER_URL}. Restart npm run dev, then try Connect again.`)
+  error.code = AUTH_SERVICE_UNAVAILABLE
+  error.cause = cause
+  return error
+}
+
+async function fetchAuthService(path, options = {}, timeoutMs = AUTH_SERVICE_CONNECT_TIMEOUT_MS) {
+  const timeoutController = new AbortController()
+  const timeout = window.setTimeout(() => timeoutController.abort(), timeoutMs)
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, timeoutController.signal])
+    : timeoutController.signal
+  try {
+    return await fetch(`${AUTH_SERVER_URL}${path}`, { ...options, signal })
+  } catch (error) {
+    if (options.signal?.aborted) throw error
+    throw createAuthServiceUnavailableError(error)
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
 
 async function requestJson(path, options = {}) {
-  const response = await fetch(`${AUTH_SERVER_URL}${path}`, {
+  const response = await fetchAuthService(path, {
     ...options,
     headers: {
       Accept: 'application/json',
@@ -72,12 +99,12 @@ function parseEventBlock(block) {
 }
 
 export async function streamChatgptResponse({ model, messages, signal, onDelta }) {
-  const response = await fetch(`${AUTH_SERVER_URL}/api/chatgpt/responses/stream`, {
+  const response = await fetchAuthService('/api/chatgpt/responses/stream', {
     method: 'POST',
     headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
     body: JSON.stringify({ model, messages }),
     signal,
-  })
+  }, AUTH_STREAM_CONNECT_TIMEOUT_MS)
 
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}))

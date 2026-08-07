@@ -8,7 +8,6 @@ Licensed under AGPL-3.0-only.
 
 ```bash
 npm install
-npm run auth-server
 npm run dev
 ```
 
@@ -38,11 +37,13 @@ npm run build
 
 ## ChatGPT subscription bridge
 
-The local auth bridge is an optional companion process for Web-first development:
+The default development command starts both Vite and the loopback ChatGPT auth bridge:
 
 ```bash
-npm run auth-server
+npm run dev
 ```
+
+Use `npm run dev:web` only when the auth bridge is already running separately with `npm run auth-server`. If the bridge is unavailable, the app reports the local service address and the restart command instead of a generic browser network error.
 
 It listens on `127.0.0.1:4318` for the app and temporarily uses `localhost:1455` for the OAuth callback. Credentials are stored outside the repository at `%LOCALAPPDATA%\\bioresearch-os\\auth.json` on Windows (or `$XDG_DATA_HOME/bioresearch-os/auth.json` on Linux/macOS). Override the location with `BIORESEARCH_AUTH_FILE` when needed.
 
