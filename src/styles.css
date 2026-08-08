@@ -127,7 +127,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .research-setup-snapshot > span { display: grid; gap: 3px; }
 .research-setup-snapshot strong { color: #b8d9d0; font-size: 10px; }
 .research-setup-snapshot small { color: #70998d; font-size: 8px; line-height: 1.45; }
-.research-setup-layout { min-height: 0; flex: 1; display: grid; grid-template-columns: 270px minmax(0, 1fr); }
+.research-setup-layout { min-height: 0; flex: 1; display: grid; grid-template-columns: 270px minmax(0, 1fr); overflow: auto; scrollbar-width: thin; scrollbar-color: rgba(110,168,254,.25) transparent; }
 .agent-preset-panel { min-height: 0; border-right: 1px solid var(--border); padding: 19px 18px 18px 0; }
 .research-setup-section-title, .research-config-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #cbd6e6; }
 .research-setup-section-title span, .research-config-heading > span { display: inline-flex; align-items: center; gap: 7px; font-size: 10px; font-weight: 600; }
@@ -178,9 +178,9 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .research-tool-check { width: 20px; height: 20px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 5px; }
 .research-tool-options > button.selected .research-tool-check { border-color: #4d8de6; background: #235fb9; color: white; }
 .research-setup-footer { flex: 0 0 auto; min-height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
-.research-setup-footer > div { min-width: 0; display: flex; gap: 7px; flex-wrap: wrap; }
-.research-setup-footer > div > span { border: 1px solid var(--border); border-radius: 999px; color: #8091aa; background: rgba(15, 27, 46, .72); padding: 5px 8px; font-family: var(--mono); font-size: 8px; }
-.research-start-button { min-height: 38px; display: inline-flex; align-items: center; gap: 8px; border: 1px solid #3f83e8; border-radius: 7px; background: linear-gradient(135deg, #286bd5, #1d55b6); color: #fff; padding: 0 15px; font-size: 10px; font-weight: 600; cursor: pointer; box-shadow: 0 10px 24px rgba(21, 76, 166, .25); }
+.research-setup-footer > div { min-width: 0; flex: 1 1 0; display: flex; gap: 7px; flex-wrap: wrap; }
+.research-setup-footer > div > span { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid var(--border); border-radius: 999px; color: #8091aa; background: rgba(15, 27, 46, .72); padding: 5px 8px; font-family: var(--mono); font-size: 8px; }
+.research-start-button { min-width: 150px; min-height: 38px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; gap: 8px; white-space: nowrap; border: 1px solid #3f83e8; border-radius: 7px; background: linear-gradient(135deg, #286bd5, #1d55b6); color: #fff; padding: 0 15px; font-size: 10px; font-weight: 600; cursor: pointer; box-shadow: 0 10px 24px rgba(21, 76, 166, .25); }
 .research-start-button:hover { background: linear-gradient(135deg, #3479e5, #2462c7); }
 .research-start-button:disabled { cursor: not-allowed; opacity: .45; box-shadow: none; }
 .research-context-bar { min-height: 38px; flex: 0 0 38px; display: flex; align-items: center; gap: 7px; overflow-x: auto; border-bottom: 1px solid var(--border); color: #71839d; padding: 0 4px; scrollbar-width: none; }
