@@ -289,7 +289,7 @@ function AssistantMessage({ message, running, onOpenNote }) {
   )
 }
 
-function EvidenceTrail({ activeStage }) {
+function EvidenceTrail({ activeStage, running, hasActivity }) {
   return (
     <section className="evidence-trail">
       <div className="section-label-row">
@@ -298,8 +298,8 @@ function EvidenceTrail({ activeStage }) {
       </div>
       <div className="stage-row">
         {stages.map((stage, index) => {
-          const complete = index < activeStage
-          const current = index === activeStage
+          const complete = hasActivity && index < activeStage
+          const current = running && index === activeStage
           return (
             <div className="stage-wrap" key={stage}>
               <div className={`stage ${complete ? 'complete' : ''} ${current ? 'current' : ''}`}>
@@ -1337,7 +1337,7 @@ function App() {
                 {messages.length === 0 && <div className="conversation-empty"><Sparkles size={22} /><strong>Start a research conversation</strong><span>Ask a question or add Vault context below.</span></div>}
                 {messages.map((message) => message.role === 'user' ? <UserMessage text={message.text} key={message.id} /> : <AssistantMessage message={message} running={running} onOpenNote={setSelectedNote} key={message.id} />)}
               </div>
-              <EvidenceTrail activeStage={activeStage} />
+              <EvidenceTrail activeStage={activeStage} running={running} hasActivity={messages.length > 0 || Boolean(retrievalPacket)} />
               <Composer value={input} setValue={setInput} onSubmit={submitQuestion} disabled={anyResearchRunning} selectedModel={selectedModel} models={chatModels} onSelectModel={handleModelSelect} authStatus={authStatus} authBusy={authBusy} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} />
             </div>
             <Inspector activeStage={activeStage} running={running} hasActivity={messages.length > 0 || Boolean(retrievalPacket)} onPause={handlePause} linkedNotes={inspectorNotes} sources={inspectorSources} vaultName={vaultName} topK={modelConfig.topK} rerankLabel={rerankModel?.name || 'Disabled by profile'} packet={retrievalPacket} answerMode={answerMode} onOpenNote={setSelectedNote} />
