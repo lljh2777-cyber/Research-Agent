@@ -41,5 +41,6 @@ test('exposes only enabled, selected chat models to the application model picker
     detail: 'Discovered from OpenAI.',
     ready: true,
     discovered: true,
+    capabilities: { chat: true },
   }])
 })

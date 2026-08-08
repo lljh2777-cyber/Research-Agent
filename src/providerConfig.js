@@ -32,6 +32,8 @@ export function normalizeProviderConfigs(value) {
         name: model.name || model.id,
         ownedBy: model.ownedBy || provider.id,
         kind: model.kind || 'chat',
+        capabilities: model.capabilities && typeof model.capabilities === 'object' ? model.capabilities : { chat: (model.kind || 'chat') === 'chat' },
+        ...(Array.isArray(model.methods) ? { methods: model.methods } : {}),
         ...(model.manual ? { manual: true } : {}),
       }))
       : []
@@ -113,6 +115,7 @@ export function providerConfigsToModels(configs) {
         detail: `Discovered from ${provider?.name || providerId}.`,
         ready: true,
         discovered: true,
+        capabilities: model.capabilities || { chat: true },
       })
     }
   }

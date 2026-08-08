@@ -42,7 +42,8 @@ import { PipelinesSection, RunsSection } from './PipelineWorkspace.jsx'
 import SettingsWorkspace from './SettingsWorkspace.jsx'
 import { loadLocalVault } from './localVault.js'
 import { chatgptCatalogToModels, DEFAULT_MODEL_CONFIG, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
-import { loadProviderConfigs, providerConfigsToModels, saveProviderConfigs } from './providerConfig.js'
+import { loadProviderConfigs, loadProviderSessionKeys, providerConfigsToModels, saveProviderConfigs } from './providerConfig.js'
+import { streamProviderResponse } from './providerRuntimeClient.js'
 import { executePipeline, loadPipelineRuns, savePipelineRuns } from './pipelineEngine.js'
 import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources, retrieveEvidence } from './retrieval.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
@@ -1016,7 +1017,8 @@ function App() {
       chatgptConnected = Boolean(connected?.connected)
       if (!chatgptConnected) return
     }
-    const live = (selectedModel.authProvider === 'chatgpt' || selectedModel.id === 'smart-default') && chatgptConnected
+    const apiProvider = selectedModel.authProvider === 'api'
+    const live = apiProvider || ((selectedModel.authProvider === 'chatgpt' || selectedModel.id === 'smart-default') && chatgptConnected)
     setWorkspaceTabs((current) => current.map((tab) => tab.id === sessionId ? { ...tab, title: titleFromQuestion(question) } : tab))
     updateResearchSession(sessionId, (current) => ({
       ...current,
@@ -1049,25 +1051,42 @@ function App() {
             role: message.role,
             content: [message.text, message.closing].filter(Boolean).join('\n\n'),
           }))
-        let activeCatalog = modelCatalog
-        if (selectedModel.id === 'smart-default' && !activeCatalog.defaultModelId) {
-          activeCatalog = await refreshChatgptModels(false) || activeCatalog
+        const messages = [
+          { role: 'system', content: buildEvidenceSystemMessage(packet, { citations: modelConfig.citations }) },
+          ...history,
+          { role: 'user', content: buildEvidenceUserContext(packet) },
+          { role: 'user', content: question },
+        ]
+        const onDelta = (delta) => {
+          streamedText += delta
+          updateResearchSession(sessionId, { activeStage: 4 })
+          if (!renderFrame) renderFrame = window.requestAnimationFrame(flushStreamedText)
         }
-        const result = await streamChatgptResponse({
-          model: selectedModel.id === 'smart-default' ? activeCatalog.defaultModelId : selectedModel.id,
-          messages: [
-            { role: 'system', content: buildEvidenceSystemMessage(packet, { citations: modelConfig.citations }) },
-            ...history,
-            { role: 'user', content: buildEvidenceUserContext(packet) },
-            { role: 'user', content: question },
-          ],
-          signal: controller.signal,
-          onDelta: (delta) => {
-            streamedText += delta
-            updateResearchSession(sessionId, { activeStage: 4 })
-            if (!renderFrame) renderFrame = window.requestAnimationFrame(flushStreamedText)
-          },
-        })
+        let result
+        if (apiProvider) {
+          const providerConfig = providerConfigs[selectedModel.providerId]
+          if (!providerConfig) throw new Error(`Provider configuration is missing for ${selectedModel.provider}.`)
+          result = await streamProviderResponse({
+            providerId: selectedModel.providerId,
+            endpoint: providerConfig.endpoint,
+            apiKey: loadProviderSessionKeys()[selectedModel.providerId] || '',
+            model: selectedModel.apiModelId,
+            messages,
+            signal: controller.signal,
+            onDelta,
+          })
+        } else {
+          let activeCatalog = modelCatalog
+          if (selectedModel.id === 'smart-default' && !activeCatalog.defaultModelId) {
+            activeCatalog = await refreshChatgptModels(false) || activeCatalog
+          }
+          result = await streamChatgptResponse({
+            model: selectedModel.id === 'smart-default' ? activeCatalog.defaultModelId : selectedModel.id,
+            messages,
+            signal: controller.signal,
+            onDelta,
+          })
+        }
         if (renderFrame) window.cancelAnimationFrame(renderFrame)
         updateResearchSession(sessionId, (current) => ({
           ...current,
@@ -1075,7 +1094,7 @@ function App() {
           messages: current.messages.map((message) => message.id === assistantId ? {
             ...message,
             text: result.text || streamedText || 'The provider returned an empty response.',
-            closing: `Generated with ${result.model} through the connected ChatGPT subscription · ${packet.evidence.length} Vault evidence chunk${packet.evidence.length === 1 ? '' : 's'}.`,
+            closing: `Generated with ${result.model} through ${apiProvider ? selectedModel.provider : 'the connected ChatGPT subscription'} · ${packet.evidence.length} Vault evidence chunk${packet.evidence.length === 1 ? '' : 's'}.`,
           } : message),
         }))
       } catch (error) {
@@ -1086,7 +1105,7 @@ function App() {
           messages: current.messages.map((message) => message.id === assistantId ? {
             ...message,
             text: streamedText || message.text || (error.name === 'AbortError' ? 'Generation stopped.' : `The connected model could not complete this request: ${error.message}`),
-            closing: error.name === 'AbortError' ? 'The partial response was kept.' : 'Check the ChatGPT connection and try again.',
+            closing: error.name === 'AbortError' ? 'The partial response was kept.' : `Check the ${apiProvider ? `${selectedModel.provider} API configuration` : 'ChatGPT connection'} and try again.`,
           } : message),
         }))
       } finally {

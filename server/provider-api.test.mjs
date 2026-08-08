@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { discoverProviderModels, normalizeProviderModels } from './provider-api.mjs'
+import { discoverProviderModels, inferModelCapabilities, normalizeProviderModels } from './provider-api.mjs'
 
 test('normalizes OpenAI-compatible model payloads and infers roles', () => {
   const models = normalizeProviderModels('openai', {
@@ -26,6 +26,14 @@ test('normalizes Gemini names and supported methods', () => {
     name: 'Gemini Current',
     ownedBy: 'gemini',
     kind: 'chat',
+    capabilities: {
+      chat: true,
+      embeddings: false,
+      reasoning: false,
+      vision: true,
+      tools: true,
+      webSearch: false,
+    },
     methods: ['generateContent'],
   })
 })
@@ -62,4 +70,21 @@ test('turns network failures into actionable provider errors', async () => {
     }),
     /Could not reach the provider endpoint: fetch failed/,
   )
+})
+
+test('uses provider metadata before conservative model-name capability inference', () => {
+  const capabilities = inferModelCapabilities('openrouter', {
+    id: 'vendor/plain-chat',
+    supported_parameters: ['tools', 'tool_choice', 'web_search'],
+    architecture: { input_modalities: ['text', 'image'] },
+  }, 'chat')
+  assert.deepEqual(capabilities, {
+    chat: true,
+    embeddings: false,
+    reasoning: false,
+    vision: true,
+    tools: true,
+    webSearch: true,
+  })
+  assert.equal(inferModelCapabilities('compatible', { id: 'unknown-chat-model' }, 'chat').tools, false)
 })

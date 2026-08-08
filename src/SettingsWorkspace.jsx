@@ -287,7 +287,10 @@ function ProvidersPage({ selectedId, configs, onChange }) {
       {config.models.length ? <div className="provider-model-catalog">
         <div className="provider-model-tools"><label className="settings-search"><Search size={14} /><input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder="Search discovered models…" /></label><button className="settings-text-button" onClick={selectAllChatModels}>Add all chat models</button></div>
         <div className="provider-model-list" aria-label={`${selected.name} model list`}>
-          {filteredModels.map((model) => <div className={selectedIds.has(model.id) ? 'selected' : ''} key={model.id}><span className={`provider-model-kind ${model.kind}`}>{model.kind}</span><div><strong>{model.name}</strong><small>{model.id}{model.manual ? ' · manual' : ''}</small></div><button onClick={() => toggleModel(model.id)} disabled={model.kind !== 'chat'}>{selectedIds.has(model.id) ? 'Remove' : model.kind === 'chat' ? 'Add' : 'Not used yet'}</button></div>)}
+          {filteredModels.map((model) => {
+            const capabilityLabels = Object.entries(model.capabilities || {}).filter(([key, enabled]) => enabled && !['chat', 'embeddings'].includes(key)).map(([key]) => key === 'webSearch' ? 'web' : key)
+            return <div className={selectedIds.has(model.id) ? 'selected' : ''} key={model.id}><span className={`provider-model-kind ${model.kind}`}>{model.kind}</span><div><strong>{model.name}</strong><small>{model.id}{model.manual ? ' · manual' : ''}{capabilityLabels.length ? ` · ${capabilityLabels.join(' · ')}` : ''}</small></div><button onClick={() => toggleModel(model.id)} disabled={model.kind !== 'chat'}>{selectedIds.has(model.id) ? 'Remove' : model.kind === 'chat' ? 'Add' : 'Not used yet'}</button></div>
+          })}
           {!filteredModels.length && <div className="provider-model-no-results">No models match “{modelQuery}”.</div>}
         </div>
       </div> : <div className="provider-model-empty"><span><Database size={20} /></span><div><strong>No model catalog yet</strong><small>Enter this provider's credentials and fetch the current model list. Research Agent does not hard-code versioned model names.</small></div></div>}

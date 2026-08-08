@@ -1,3 +1,5 @@
+import { appendProviderRoute, cleanProviderBaseUrl, streamProviderChat } from './provider-runtime.mjs'
+
 const PROVIDER_MODEL_ROUTES = {
   openai: { route: 'models', auth: 'bearer' },
   anthropic: { route: 'v1/models', auth: 'anthropic' },
@@ -7,32 +9,8 @@ const PROVIDER_MODEL_ROUTES = {
   compatible: { route: 'models', auth: 'optional-bearer' },
 }
 
-const MAX_BODY_BYTES = 64 * 1024
+const MAX_BODY_BYTES = 512 * 1024
 const REQUEST_TIMEOUT_MS = 20_000
-
-function cleanBaseUrl(value) {
-  const raw = String(value || '').trim().replace(/\/+$/, '')
-  if (!raw) throw Object.assign(new Error('Enter an API endpoint first.'), { statusCode: 400 })
-  let parsed
-  try {
-    parsed = new URL(raw)
-  } catch {
-    throw Object.assign(new Error('The API endpoint is not a valid URL.'), { statusCode: 400 })
-  }
-  if (!['http:', 'https:'].includes(parsed.protocol)) {
-    throw Object.assign(new Error('Only HTTP and HTTPS API endpoints are supported.'), { statusCode: 400 })
-  }
-  if (parsed.username || parsed.password) {
-    throw Object.assign(new Error('Credentials must not be embedded in the API endpoint.'), { statusCode: 400 })
-  }
-  return raw
-}
-
-function appendRoute(baseUrl, route) {
-  const normalizedRoute = route.replace(/^\/+/, '')
-  if (baseUrl.toLowerCase().endsWith(`/${normalizedRoute.toLowerCase()}`)) return baseUrl
-  return `${baseUrl}/${normalizedRoute}`
-}
 
 function buildRequest(providerId, endpoint, apiKey = '') {
   const protocol = PROVIDER_MODEL_ROUTES[providerId]
@@ -52,7 +30,7 @@ function buildRequest(providerId, endpoint, apiKey = '') {
     headers['x-goog-api-key'] = key
   }
 
-  return { url: appendRoute(cleanBaseUrl(endpoint), protocol.route), headers }
+  return { url: appendProviderRoute(cleanProviderBaseUrl(endpoint), protocol.route), headers }
 }
 
 function inferModelKind(model) {
@@ -63,6 +41,23 @@ function inferModelKind(model) {
   if (id.includes('image') || id.includes('dall-e') || id.includes('imagen')) return 'image'
   if (id.includes('audio') || id.includes('tts') || id.includes('transcri')) return 'audio'
   return 'chat'
+}
+
+export function inferModelCapabilities(providerId, record, kind = inferModelKind(record)) {
+  const haystack = `${record?.id || ''} ${record?.name || ''}`.toLowerCase()
+  const methods = Array.isArray(record?.supportedGenerationMethods) ? record.supportedGenerationMethods : []
+  const parameters = Array.isArray(record?.supported_parameters) ? record.supported_parameters : []
+  const modalities = record?.architecture?.input_modalities || record?.input_modalities || record?.modalities?.input || []
+  const explicit = record?.capabilities || {}
+  const chat = kind === 'chat'
+  return {
+    chat,
+    embeddings: kind === 'embedding',
+    reasoning: chat && Boolean(explicit.reasoning || parameters.includes('reasoning') || /(^|[-_. ])(o1|o3|o4|r1)([-_. ]|$)|reason(er|ing)|gpt-5/i.test(haystack)),
+    vision: chat && Boolean(explicit.vision || modalities.some?.((item) => /image|vision/i.test(String(item))) || /vision|[-_.]vl([-.]|$)|gpt-4o|gpt-5|gemini/i.test(haystack)),
+    tools: chat && Boolean(explicit.tools || explicit.function_calling || parameters.some((item) => /tools|tool_choice|function/i.test(String(item))) || methods.some((item) => /generateContent/i.test(item))),
+    webSearch: chat && Boolean(explicit.web_search || parameters.some((item) => /web_search/i.test(String(item)))),
+  }
 }
 
 export function normalizeProviderModels(providerId, payload) {
@@ -83,6 +78,7 @@ export function normalizeProviderModels(providerId, payload) {
       ownedBy: record.owned_by || record.ownedBy || providerId,
       kind: inferModelKind({ ...record, id }),
     }
+    model.capabilities = inferModelCapabilities(providerId, { ...record, id }, model.kind)
     if (Array.isArray(record.supportedGenerationMethods)) {
       model.methods = record.supportedGenerationMethods
     }
@@ -148,16 +144,38 @@ function sendJson(response, statusCode, payload) {
   response.end(JSON.stringify(payload))
 }
 
+function sendEvent(response, event) {
+  response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+}
+
 export function createProviderApiMiddleware({ fetchImpl = fetch } = {}) {
   return async function providerApiMiddleware(request, response, next) {
     const path = new URL(request.url || '/', 'http://localhost').pathname
-    if (path !== '/api/providers/models') return next()
+    if (!['/api/providers/models', '/api/providers/responses/stream'].includes(path)) return next()
     if (request.method !== 'POST') {
       response.setHeader('Allow', 'POST')
       return sendJson(response, 405, { error: 'Method not allowed.' })
     }
     try {
       const body = await readJsonBody(request)
+      if (path === '/api/providers/responses/stream') {
+        const controller = new AbortController()
+        response.once('close', () => controller.abort())
+        response.statusCode = 200
+        response.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+        response.setHeader('Cache-Control', 'no-store, no-transform')
+        response.setHeader('Connection', 'keep-alive')
+        response.flushHeaders?.()
+        try {
+          for await (const event of streamProviderChat({ ...body, signal: controller.signal }, fetchImpl)) {
+            if (!response.destroyed) sendEvent(response, event)
+          }
+        } catch (error) {
+          if (!response.destroyed && error?.name !== 'AbortError') sendEvent(response, { type: 'run.failed', error: error?.message || 'Provider request failed.' })
+        }
+        if (!response.destroyed) response.end()
+        return
+      }
       const result = await discoverProviderModels(body, fetchImpl)
       return sendJson(response, 200, result)
     } catch (error) {
