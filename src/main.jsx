@@ -324,6 +324,40 @@ function EvidenceTrail({ activeStage }) {
 
 function Composer({ value, setValue, onSubmit, disabled, selectedModel, models, onSelectModel, authStatus, authBusy, modelCatalog, modelsBusy, onConnectChatgpt, onLogoutChatgpt, onRefreshModels }) {
   const textareaRef = useRef(null)
+  const fileInputRef = useRef(null)
+  const dragDepthRef = useRef(0)
+  const [attachments, setAttachments] = useState([])
+  const [isDragging, setIsDragging] = useState(false)
+
+  const addFiles = (fileList) => {
+    const incoming = Array.from(fileList ?? [])
+    if (incoming.length === 0) return
+    setAttachments((current) => {
+      const filesByIdentity = new Map(current.map((file) => [`${file.name}:${file.size}:${file.lastModified}`, file]))
+      incoming.forEach((file) => filesByIdentity.set(`${file.name}:${file.size}:${file.lastModified}`, file))
+      return Array.from(filesByIdentity.values())
+    })
+  }
+
+  const handleDragEnter = (event) => {
+    event.preventDefault()
+    dragDepthRef.current += 1
+    setIsDragging(true)
+  }
+
+  const handleDragLeave = (event) => {
+    event.preventDefault()
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+    if (dragDepthRef.current === 0) setIsDragging(false)
+  }
+
+  const handleDrop = (event) => {
+    event.preventDefault()
+    dragDepthRef.current = 0
+    setIsDragging(false)
+    addFiles(event.dataTransfer.files)
+  }
+
   const handleKeyDown = (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
@@ -332,7 +366,28 @@ function Composer({ value, setValue, onSubmit, disabled, selectedModel, models, 
   }
   return (
     <div className="composer-wrap">
-      <div className="composer">
+      <div
+        className={`composer ${isDragging ? 'drag-active' : ''}`}
+        onDragEnter={handleDragEnter}
+        onDragOver={(event) => {
+          event.preventDefault()
+          event.dataTransfer.dropEffect = 'copy'
+        }}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        <input
+          ref={fileInputRef}
+          className="composer-file-input"
+          type="file"
+          multiple
+          onChange={(event) => {
+            addFiles(event.target.files)
+            event.target.value = ''
+          }}
+          tabIndex={-1}
+          aria-hidden="true"
+        />
         <textarea
           ref={textareaRef}
           value={value}
@@ -342,9 +397,30 @@ function Composer({ value, setValue, onSubmit, disabled, selectedModel, models, 
           rows={2}
           disabled={disabled}
         />
+        <div className="composer-context" aria-live="polite">
+          {attachments.length > 0 ? (
+            <div className="composer-attachments">
+              {attachments.map((file) => (
+                <span className="attachment-chip" key={`${file.name}:${file.size}:${file.lastModified}`}>
+                  <FileText size={13} />
+                  <span>{file.name}</span>
+                  <button
+                    type="button"
+                    aria-label={`Remove ${file.name}`}
+                    onClick={() => setAttachments((current) => current.filter((item) => item !== file))}
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <span className="composer-drop-hint"><Paperclip size={13} />Drop files here to add research context</span>
+          )}
+        </div>
         <div className="composer-footer">
           <div className="composer-tools">
-            <button aria-label="Attach file"><Paperclip size={18} /></button>
+            <button type="button" aria-label="Attach file" onClick={() => fileInputRef.current?.click()}><Paperclip size={18} /></button>
             <button aria-label="Add note"><BookOpen size={18} /></button>
             <button aria-label="Insert code"><Code2 size={18} /></button>
           </div>
@@ -356,7 +432,6 @@ function Composer({ value, setValue, onSubmit, disabled, selectedModel, models, 
           </div>
         </div>
       </div>
-      <div className="drop-zone">Drop files, notes, or questions here to add context <span>Future tools and widgets will appear here</span></div>
     </div>
   )
 }

@@ -164,10 +164,21 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .composer-wrap { padding: 13px 0 0; }
-.composer { border: 1px solid var(--border-strong); background: rgba(13, 25, 45, .82); border-radius: 7px; padding: 12px 13px 10px; }
+.composer { position: relative; border: 1px solid var(--border-strong); background: rgba(13, 25, 45, .82); border-radius: 7px; padding: 12px 13px 10px; transition: border-color .16s ease, background .16s ease, box-shadow .16s ease; }
+.composer.drag-active { border-color: var(--blue); background: rgba(22, 43, 76, .95); box-shadow: inset 0 0 0 1px rgba(110, 168, 254, .22), 0 0 24px rgba(35, 103, 223, .16); }
+.composer-file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .composer textarea { resize: none; width: 100%; border: 0; background: transparent; color: var(--text); padding: 2px 3px; font-size: 13px; line-height: 1.5; min-height: 45px; }
 .composer textarea::placeholder { color: #71809a; }
 .composer textarea:focus { outline: none; }
+.composer-context { min-height: 26px; display: flex; align-items: center; padding: 2px 3px 5px; }
+.composer-drop-hint { display: inline-flex; align-items: center; gap: 6px; color: #60728e; font-family: var(--mono); font-size: 9px; }
+.composer.drag-active .composer-drop-hint { color: #9bc1ff; }
+.composer-attachments { display: flex; gap: 6px; flex-wrap: wrap; }
+.attachment-chip { max-width: 220px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid rgba(110, 168, 254, .23); background: rgba(34, 68, 115, .35); border-radius: 5px; padding: 4px 6px; color: #b9cce6; font-size: 10px; }
+.attachment-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-chip > svg { flex: 0 0 auto; color: #7eaff8; }
+.attachment-chip button { display: grid; place-items: center; flex: 0 0 auto; border: 0; background: transparent; color: #7890b0; padding: 0; cursor: pointer; }
+.attachment-chip button:hover { color: var(--text); }
 .composer-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 7px; }
 .composer-tools, .composer-submit { display: flex; align-items: center; gap: 12px; }
 .composer-tools button { border: 0; background: transparent; padding: 4px; color: #7788a1; cursor: pointer; }
@@ -204,9 +215,6 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .send-button { width: 34px; height: 34px; display: grid; place-items: center; border: 0; background: #2367df; border-radius: 6px; color: white; cursor: pointer; box-shadow: 0 7px 16px rgba(18, 83, 201, .28); }
 .send-button:hover:not(:disabled) { background: #3379ee; }
 .send-button:disabled { opacity: .45; cursor: not-allowed; }
-.drop-zone { border: 1px dashed rgba(101, 140, 196, .3); border-radius: 5px; min-height: 85px; margin-top: 12px; display: grid; place-items: center; align-content: center; color: #72839e; font-size: 12px; text-align: center; gap: 5px; }
-.drop-zone span { color: #53647e; font-family: var(--mono); font-size: 10px; }
-
 .inspector { border-left: 1px solid var(--border); background: rgba(12, 20, 36, .64); overflow: auto; padding: 22px 12px 20px; scrollbar-width: thin; scrollbar-color: rgba(110,168,254,.25) transparent; }
 .inspector-title { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 600; padding: 0 10px 15px; }
 .inspector-title svg:first-child { color: #d7e0ec; }
@@ -754,7 +762,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
   .stage-row { gap: 4px; }
   .stage { padding: 5px 6px; font-size: 9px; }
   .stage-arrow { display: none; }
-  .drop-zone { min-height: 70px; }
+  .attachment-chip { max-width: min(220px, 70vw); }
   .graph-header h2 { font-size: 24px; }
   .graph-summary { grid-template-columns: repeat(2, 1fr); }
   .graph-stat:nth-child(2) { border-right: 0; }

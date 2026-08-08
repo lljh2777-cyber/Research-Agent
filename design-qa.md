@@ -55,6 +55,57 @@ final result: passed
 
 ---
 
+# Unified Research Composer QA
+
+- Source visual truth: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\composer-before-merge.png`
+- Implementation screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\composer-after-merge.png`
+- Attachment-state screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\composer-attached-file.png`
+- Side-by-side comparison: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\composer-merge-comparison.png`
+- Source and implementation pixels: 1280 x 720
+- CSS viewport: 1280 x 720 at device scale factor 1; no density normalization required
+- State: Research conversation open; default composer empty; attachment state additionally tested with `README.md`
+
+## Full-view comparison evidence
+
+The source and implementation were combined into a single 2560 x 720 comparison image at identical viewport and application state. The separate dashed context drop zone is removed. Its essential affordance now sits inside the text composer, reducing vertical consumption while preserving the surrounding conversation, evidence trail, model selector, and inspector layout.
+
+## Focused region comparison evidence
+
+The attachment-state capture confirms that a selected file appears as a compact removable chip inside the same composer. The textarea, context controls, model selector, and send control remain visible in one bounded surface, so no secondary input panel is created.
+
+## Required fidelity surfaces
+
+- Fonts and typography: existing Manrope and mono helper-text hierarchy are preserved; the integrated drop hint uses the established compact helper style.
+- Spacing and layout rhythm: duplicate vertical padding and the 85 px secondary drop surface are removed; the composer now has one border, one radius, and a single footer rhythm.
+- Colors and visual tokens: the existing navy surface, muted helper text, blue controls, and border tokens are reused. Dragging adds a restrained blue focus treatment.
+- Image and asset quality: no raster imagery is required; attachment, file, and removal controls reuse the existing icon library.
+- Copy and content: the drop hint now truthfully describes file context; the unsupported “future tools and widgets” placeholder copy is removed.
+
+## Comparison history
+
+1. P1: Text entry and file context were presented as two separate input regions, which looked nested and consumed unnecessary conversation height. Fixed by moving the drop affordance and attachment state into the existing composer and deleting the standalone drop zone.
+2. P2: The prior attachment icon did not open a file picker or expose selected-file state. Fixed with a multiple-file chooser, deduplicated local attachment chips, and per-file removal.
+3. Post-fix evidence: the final comparison shows one unified composer; the attachment-state screenshot shows `README.md` inside that surface. No actionable P0/P1/P2 differences remain.
+
+## Browser verification
+
+- URL and page identity: `http://localhost:5173/` — `BioResearch OS`
+- Target flow: Research conversation -> choose a local context file -> file chip appears inside the composer while text/model/send controls remain available
+- DOM checks: one `.composer`, zero `.drop-zone`, one integrated hint, and a multiple-file input in the composer
+- Interaction proof: Attach file opened the chooser; `README.md` appeared; Remove returned the composer to its empty context state; entering text enabled Send
+- Blank page/framework overlay: absent
+- Console warnings/errors: none
+- Automated tests: 33 passed
+- Production build: passed
+
+## Findings
+
+No actionable P0, P1, or P2 findings remain. Files are currently staged in local React state; server-side ingestion remains intentionally outside this scoped visual merge.
+
+final result: passed
+
+---
+
 # Cherry-Style Workspace Tabs and Launcher QA
 
 - Source visual truth: `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-1c06ee88-92e5-4e0f-a185-ab8986192958.png`
