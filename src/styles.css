@@ -619,6 +619,11 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .deepseek-endpoint-heading > button small { color: #65778f; font-size: 7px; }
 .deepseek-endpoint-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .deepseek-endpoint-list.bailian-endpoint-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.bailian-region-controls { display: grid; grid-template-columns: minmax(170px, .65fr) minmax(240px, 1fr) auto; align-items: end; gap: 9px; border-bottom: 1px solid var(--border); background: rgba(15, 29, 50, .35); padding: 11px 16px; }
+.bailian-region-controls label { min-width: 0; display: grid; gap: 5px; color: #71849b; font-size: 7px; }
+.bailian-region-controls input, .bailian-region-controls select, .deepseek-thinking-section select { min-width: 0; height: 32px; border: 1px solid var(--border); border-radius: 6px; outline: 0; background: #081425; color: #aebdd0; padding: 0 9px; font-family: var(--mono); font-size: 7px; }
+.bailian-region-controls input:focus, .bailian-region-controls select:focus, .deepseek-thinking-section select:focus { border-color: rgba(110, 168, 254, .55); }
+.bailian-region-controls > small { grid-column: 1 / -1; color: #5e7088; font-size: 7px; }
 .deepseek-endpoint-list article { min-width: 0; display: grid; grid-template-rows: auto auto auto; gap: 12px; border-right: 1px solid var(--border); padding: 14px; opacity: .58; }
 .deepseek-endpoint-list article:last-child { border-right: 0; }
 .deepseek-endpoint-list article.enabled { opacity: 1; }

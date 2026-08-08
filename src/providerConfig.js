@@ -12,7 +12,7 @@ import {
   createBailianEndpoints,
   isBailianEndpointType,
   normalizeBailianEndpoints,
-  normalizeBailianThinking,
+  normalizeBailianOptions,
   resolveBailianEndpoint,
   withBailianModelProfile,
 } from '../shared/bailian-provider.mjs'
@@ -22,7 +22,7 @@ export const PROVIDER_PRESETS = [
   { id: 'anthropic', name: 'Anthropic', protocol: 'Anthropic Messages', endpoint: 'https://api.anthropic.com', tone: 'amber', keyWebsite: 'https://console.anthropic.com/settings/keys', requiresKey: true },
   { id: 'gemini', name: 'Google Gemini', protocol: 'Generative Language', endpoint: 'https://generativelanguage.googleapis.com', tone: 'violet', keyWebsite: 'https://aistudio.google.com/app/apikey', requiresKey: true },
   { id: 'deepseek', name: 'DeepSeek', protocol: 'Native / compatibility endpoints', endpoint: 'https://api.deepseek.com', tone: 'blue', keyWebsite: 'https://platform.deepseek.com/api_keys', requiresKey: true },
-  { id: 'bailian', name: 'Alibaba Cloud Model Studio', protocol: 'DashScope native / OpenAI compatible', endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1', tone: 'cyan', keyWebsite: 'https://bailian.console.aliyun.com/?tab=model#/api-key', requiresKey: true },
+  { id: 'bailian', name: 'Alibaba Cloud Model Studio', protocol: 'DashScope / OpenAI Chat / Responses / Anthropic', endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1', tone: 'cyan', keyWebsite: 'https://bailian.console.aliyun.com/?tab=model#/api-key', requiresKey: true },
   { id: 'openrouter', name: 'OpenRouter', protocol: 'Multi-provider gateway', endpoint: 'https://openrouter.ai/api/v1', tone: 'mint', keyWebsite: 'https://openrouter.ai/settings/keys', requiresKey: true },
   { id: 'compatible', name: 'OpenAI Compatible', protocol: 'Custom endpoint', endpoint: 'http://127.0.0.1:1234/v1', tone: 'slate', keyWebsite: '', requiresKey: false },
 ]
@@ -30,7 +30,7 @@ export const PROVIDER_PRESETS = [
 const CONFIG_STORAGE_KEY = 'bioresearch-os:provider-configs:v1'
 const KEY_STORAGE_KEY = 'bioresearch-os:provider-session-keys:v1'
 const DEEPSEEK_CONFIG_VERSION = 2
-const BAILIAN_CONFIG_VERSION = 1
+const BAILIAN_CONFIG_VERSION = 2
 
 export function createDefaultProviderConfigs() {
   return Object.fromEntries(PROVIDER_PRESETS.map((provider) => {
@@ -48,10 +48,12 @@ export function createDefaultProviderConfigs() {
       Object.assign(config, normalizeDeepSeekThinking())
     }
     if (provider.id === 'bailian') {
+      config.region = 'cn-beijing'
+      config.workspaceId = ''
       config.defaultEndpointType = 'auto'
-      config.endpoints = createBailianEndpoints()
+      config.endpoints = createBailianEndpoints(config.region, config.workspaceId)
       config.schemaVersion = BAILIAN_CONFIG_VERSION
-      Object.assign(config, normalizeBailianThinking())
+      Object.assign(config, normalizeBailianOptions())
     }
     return [provider.id, config]
   }))
@@ -103,12 +105,19 @@ export function normalizeProviderConfigs(value) {
       normalized.endpoint = normalized.endpoints[DEEPSEEK_ENDPOINT_TYPES.CHAT].baseUrl
     }
     if (provider.id === 'bailian') {
+      normalized.region = typeof saved.region === 'string' ? saved.region : 'cn-beijing'
+      normalized.workspaceId = typeof saved.workspaceId === 'string' ? saved.workspaceId.trim() : ''
       normalized.defaultEndpointType = saved.defaultEndpointType === 'auto' || isBailianEndpointType(saved.defaultEndpointType)
         ? saved.defaultEndpointType
         : 'auto'
-      normalized.endpoints = normalizeBailianEndpoints(saved.endpoints, normalized.endpoint)
+      normalized.endpoints = normalizeBailianEndpoints(saved.endpoints, normalized.endpoint, normalized.region, normalized.workspaceId)
+      const savedSchemaVersion = Number.isFinite(Number(saved.schemaVersion)) ? Number(saved.schemaVersion) : 0
+      if (savedSchemaVersion < BAILIAN_CONFIG_VERSION) {
+        normalized.endpoints[BAILIAN_ENDPOINT_TYPES.RESPONSES].enabled = true
+        normalized.endpoints[BAILIAN_ENDPOINT_TYPES.ANTHROPIC].enabled = true
+      }
       normalized.schemaVersion = BAILIAN_CONFIG_VERSION
-      Object.assign(normalized, normalizeBailianThinking(saved))
+      Object.assign(normalized, normalizeBailianOptions(saved))
       normalized.endpoint = normalized.endpoints[BAILIAN_ENDPOINT_TYPES.OPENAI].baseUrl
     }
     defaults[provider.id] = normalized

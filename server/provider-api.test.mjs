@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { discoverProviderModels, inferModelCapabilities, normalizeProviderModels } from './provider-api.mjs'
+import { discoverProviderModels, inferModelCapabilities, manageBailianResponse, normalizeProviderModels } from './provider-api.mjs'
 
 test('normalizes OpenAI-compatible model payloads and infers roles', () => {
   const models = normalizeProviderModels('openai', {
@@ -125,4 +125,18 @@ test('uses official Bailian Qwen3.5 profiles when the compatible endpoint has no
   assert.equal(result.catalogSource, 'official-fallback')
   assert(result.models.some((model) => model.id === 'qwen3.5-plus'))
   assert(result.models.some((model) => model.id === 'qwen3.5-flash'))
+})
+
+test('retrieves and deletes stored Bailian Responses through the local adapter boundary', async () => {
+  const captured = []
+  const fetchImpl = async (url, options) => {
+    captured.push({ url, options })
+    return new Response(JSON.stringify(options.method === 'DELETE' ? { id: 'resp_abc', deleted: true } : { id: 'resp_abc', status: 'completed' }), { status: 200 })
+  }
+  const retrieved = await manageBailianResponse({ endpoint: 'https://workspace.example/compatible-mode/v1', apiKey: 'secret', responseId: 'resp_abc' }, fetchImpl)
+  const deleted = await manageBailianResponse({ endpoint: 'https://workspace.example/compatible-mode/v1', apiKey: 'secret', responseId: 'resp_abc', operation: 'delete' }, fetchImpl)
+  assert.equal(retrieved.status, 'completed')
+  assert.equal(deleted.deleted, true)
+  assert.equal(captured[0].options.headers.Authorization, 'Bearer secret')
+  assert.equal(captured[1].options.method, 'DELETE')
 })

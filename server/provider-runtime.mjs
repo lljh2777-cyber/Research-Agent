@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { DEEPSEEK_ENDPOINT_TYPES, getDeepSeekModelProfile, isDeepSeekEndpointType } from '../shared/deepseek-provider.mjs'
-import { BAILIAN_ENDPOINT_PROFILES, BAILIAN_ENDPOINT_TYPES, isBailianEndpointType } from '../shared/bailian-provider.mjs'
+import { BAILIAN_ENDPOINT_TYPES, getBailianModelProfile, isBailianEndpointType } from '../shared/bailian-provider.mjs'
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 4096
 const REQUEST_TIMEOUT_MS = 120_000
@@ -46,7 +46,7 @@ function providerHeaders(providerId, protocol, apiKey = '') {
   const key = String(apiKey || '').trim()
   if (provider.auth !== 'optional-bearer' && !key) throw runtimeError('Enter an API key before using this provider.')
   const headers = { Accept: 'text/event-stream', 'Content-Type': 'application/json' }
-  const auth = providerId === 'deepseek' && protocol === 'anthropic-messages' ? 'anthropic' : provider.auth
+  const auth = (providerId === 'deepseek' || providerId === 'bailian') && protocol === 'anthropic-messages' ? 'anthropic' : provider.auth
   if (auth === 'bearer' || (auth === 'optional-bearer' && key)) headers.Authorization = `Bearer ${key}`
   if (auth === 'anthropic') {
     headers['x-api-key'] = key
@@ -138,17 +138,23 @@ function responsesInput(messages) {
   })
 }
 
-function openAiRequest(endpoint, model, messages, options) {
+function openAiRequest(endpoint, model, messages, options, providerId) {
   const reasoningEffort = options.thinkingEnabled === false ? 'none' : options.reasoningEffort
+  const tools = [
+    ...(options.tools || []).map((tool) => ({ type: 'function', ...tool })),
+    ...(providerId === 'bailian' && options.enableWebSearch ? [{ type: 'web_search' }] : []),
+  ]
   return {
     url: appendProviderRoute(endpoint, 'responses'),
     body: {
       model,
       input: responsesInput(messages),
       stream: true,
-      ...(options.tools?.length ? { tools: options.tools.map((tool) => ({ type: 'function', ...tool })), tool_choice: 'auto' } : {}),
+      ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
       ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
       ...(options.maxOutputTokens ? { max_output_tokens: options.maxOutputTokens } : {}),
+      ...(providerId === 'bailian' && typeof options.storeResponses === 'boolean' ? { store: options.storeResponses } : {}),
+      ...(providerId === 'bailian' && options.previousResponseId ? { previous_response_id: options.previousResponseId } : {}),
     },
   }
 }
@@ -170,6 +176,11 @@ function compatibleRequest(endpoint, model, messages, options, providerId) {
       ...(providerId === 'bailian' && typeof options.thinkingEnabled === 'boolean' ? { enable_thinking: options.thinkingEnabled } : {}),
       ...(providerId === 'bailian' && options.thinkingEnabled && options.thinkingBudget ? { thinking_budget: options.thinkingBudget } : {}),
       ...(providerId === 'bailian' && options.enableWebSearch ? { enable_search: true } : {}),
+      ...(providerId === 'bailian' && options.enableWebSearch ? { search_options: {
+        search_strategy: options.searchStrategy || 'turbo',
+        enable_source: options.returnSearchSources !== false,
+        enable_citation: options.returnSearchSources !== false,
+      } } : {}),
     },
   }
 }
@@ -184,8 +195,9 @@ function dashScopeMessage(message) {
 }
 
 function dashScopeRequest(endpoint, model, messages, options) {
+  const routeFamily = getBailianModelProfile(model).nativeRoute
   return {
-    url: appendProviderRoute(endpoint, BAILIAN_ENDPOINT_PROFILES[BAILIAN_ENDPOINT_TYPES.DASHSCOPE].route),
+    url: appendProviderRoute(endpoint, `services/aigc/${routeFamily}/generation`),
     body: {
       model,
       input: { messages: messages.map(dashScopeMessage) },
@@ -202,6 +214,11 @@ function dashScopeRequest(endpoint, model, messages, options) {
         ...(typeof options.thinkingEnabled === 'boolean' ? { enable_thinking: options.thinkingEnabled } : {}),
         ...(options.thinkingEnabled && options.thinkingBudget ? { thinking_budget: options.thinkingBudget } : {}),
         ...(options.enableWebSearch ? { enable_search: true } : {}),
+        ...(options.enableWebSearch ? { search_options: {
+          search_strategy: options.searchStrategy || 'turbo',
+          enable_source: options.returnSearchSources !== false,
+          enable_citation: options.returnSearchSources !== false,
+        } } : {}),
       },
     },
   }
@@ -224,7 +241,7 @@ function anthropicRequest(endpoint, model, messages, options, providerId) {
     }
     return { role: message.role, content: message.content }
   })
-  const thinkingActive = providerId === 'deepseek' && options.thinkingEnabled !== false
+  const thinkingActive = (providerId === 'deepseek' || providerId === 'bailian') && options.thinkingEnabled !== false
   return {
     url: appendProviderRoute(endpoint, 'v1/messages'),
     body: {
@@ -235,8 +252,8 @@ function anthropicRequest(endpoint, model, messages, options, providerId) {
       ...(system ? { system } : {}),
       ...(options.tools?.length ? { tools: options.tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })), tool_choice: { type: 'auto' } } : {}),
       ...(Number.isFinite(options.temperature) && !thinkingActive ? { temperature: options.temperature } : {}),
-      ...(providerId === 'deepseek' && typeof options.thinkingEnabled === 'boolean' ? { thinking: options.thinkingEnabled ? { type: 'enabled', budget_tokens: 1024 } : { type: 'disabled' } } : {}),
-      ...(thinkingActive && options.reasoningEffort ? { output_config: { effort: options.reasoningEffort } } : {}),
+      ...((providerId === 'deepseek' || providerId === 'bailian') && typeof options.thinkingEnabled === 'boolean' ? { thinking: options.thinkingEnabled ? { type: 'enabled', budget_tokens: options.thinkingBudget || 1024 } : { type: 'disabled' } } : {}),
+      ...(providerId === 'deepseek' && thinkingActive && options.reasoningEffort ? { output_config: { effort: options.reasoningEffort } } : {}),
     },
   }
 }
@@ -278,7 +295,7 @@ export function buildProviderChatRequest({ providerId, endpoint, endpointType, a
     throw runtimeError(`${cleanModel} is not available through the selected DeepSeek request interface.`)
   }
   const request = protocol === 'openai-responses'
-    ? openAiRequest(cleanEndpoint, cleanModel, cleanMessages, runtimeOptions)
+    ? openAiRequest(cleanEndpoint, cleanModel, cleanMessages, runtimeOptions, providerId)
     : protocol === 'anthropic-messages'
       ? anthropicRequest(cleanEndpoint, cleanModel, cleanMessages, runtimeOptions, providerId)
       : protocol === 'gemini-generate-content'
@@ -288,7 +305,28 @@ export function buildProviderChatRequest({ providerId, endpoint, endpointType, a
           : compatibleRequest(cleanEndpoint, cleanModel, cleanMessages, runtimeOptions, providerId)
   const headers = providerHeaders(providerId, protocol, apiKey)
   if (protocol === 'dashscope-generation') headers['X-DashScope-SSE'] = 'enable'
+  if (providerId === 'bailian' && protocol === 'openai-responses' && runtimeOptions.enableSessionCache) headers['x-dashscope-session-cache'] = 'enable'
   return { ...request, headers, protocol }
+}
+
+export function buildBailianResponseResourceRequest({ endpoint, apiKey, responseId, operation = 'retrieve', after, limit, order }) {
+  const cleanEndpoint = cleanProviderBaseUrl(endpoint)
+  const cleanId = String(responseId || '').trim()
+  if (!/^resp_[A-Za-z0-9-]+$/.test(cleanId)) throw runtimeError('Enter a valid Bailian Response ID (resp_xxx).')
+  const suffix = operation === 'input_items' ? `responses/${encodeURIComponent(cleanId)}/input_items` : `responses/${encodeURIComponent(cleanId)}`
+  const url = new URL(appendProviderRoute(cleanEndpoint, suffix))
+  if (operation === 'input_items') {
+    if (after) url.searchParams.set('after', String(after))
+    if (limit !== undefined) url.searchParams.set('limit', String(Math.max(1, Math.min(100, Number(limit) || 20))))
+    if (['asc', 'desc'].includes(order)) url.searchParams.set('order', order)
+  }
+  const headers = providerHeaders('bailian', BAILIAN_ENDPOINT_TYPES.RESPONSES, apiKey)
+  headers.Accept = 'application/json'
+  return {
+    url: url.toString(),
+    method: operation === 'delete' ? 'DELETE' : 'GET',
+    headers,
+  }
 }
 
 export async function* parseServerSentEvents(body) {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildProviderChatRequest, streamProviderChat } from './provider-runtime.mjs'
+import { buildBailianResponseResourceRequest, buildProviderChatRequest, streamProviderChat } from './provider-runtime.mjs'
 
 const messages = [
   { role: 'system', content: 'Use vault evidence.' },
@@ -234,6 +234,37 @@ test('builds Bailian DashScope native and OpenAI-compatible requests', () => {
   })
   assert.equal(compatible.url, 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions')
   assert.equal(compatible.body.enable_thinking, false)
+})
+
+test('builds Bailian Responses, Anthropic, text-native, and response-resource requests', () => {
+  const responses = buildProviderChatRequest({
+    providerId: 'bailian', endpoint: 'https://ws.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', endpointType: 'openai-responses', apiKey: 'sk-bailian', model: 'qwen3.8-max', messages,
+    options: { tools: [vaultTool], thinkingEnabled: true, reasoningEffort: 'high', enableWebSearch: true, enableSessionCache: true, storeResponses: true },
+  })
+  assert.equal(responses.url, 'https://ws.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/responses')
+  assert.equal(responses.headers['x-dashscope-session-cache'], 'enable')
+  assert.deepEqual(responses.body.reasoning, { effort: 'high' })
+  assert.equal(responses.body.store, true)
+  assert(responses.body.tools.some((tool) => tool.type === 'web_search'))
+  assert(responses.body.tools.some((tool) => tool.type === 'function' && tool.name === 'search_vault'))
+
+  const anthropic = buildProviderChatRequest({
+    providerId: 'bailian', endpoint: 'https://ws.cn-beijing.maas.aliyuncs.com/apps/anthropic', endpointType: 'anthropic-messages', apiKey: 'sk-bailian', model: 'qwen3.8-max', messages,
+    options: { thinkingEnabled: true, thinkingBudget: 2048 },
+  })
+  assert.equal(anthropic.url, 'https://ws.cn-beijing.maas.aliyuncs.com/apps/anthropic/v1/messages')
+  assert.equal(anthropic.headers['x-api-key'], 'sk-bailian')
+  assert.equal('Authorization' in anthropic.headers, false)
+  assert.deepEqual(anthropic.body.thinking, { type: 'enabled', budget_tokens: 2048 })
+
+  const nativeText = buildProviderChatRequest({
+    providerId: 'bailian', endpoint: 'https://dashscope.aliyuncs.com/api/v1', endpointType: 'dashscope-generation', apiKey: 'sk-bailian', model: 'qwen-plus', messages,
+  })
+  assert.equal(nativeText.url, 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation')
+
+  const resource = buildBailianResponseResourceRequest({ endpoint: 'https://ws.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', apiKey: 'sk-bailian', responseId: 'resp_abc-123', operation: 'input_items', limit: 500, order: 'asc' })
+  assert.equal(resource.method, 'GET')
+  assert.equal(resource.url, 'https://ws.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/responses/resp_abc-123/input_items?limit=100&order=asc')
 })
 
 test('normalizes Bailian DashScope reasoning, content, tools, and usage', async () => {

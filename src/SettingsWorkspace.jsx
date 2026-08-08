@@ -39,6 +39,8 @@ import {
 import {
   BAILIAN_ENDPOINT_PROFILES,
   BAILIAN_ENDPOINT_TYPES,
+  BAILIAN_REGIONS,
+  getBailianRegionalEndpoints,
   withBailianModelProfile,
 } from '../shared/bailian-provider.mjs'
 import {
@@ -250,10 +252,26 @@ function BailianEndpointSettings({ config, onUpdate }) {
     ...(endpointType === BAILIAN_ENDPOINT_TYPES.OPENAI && patch.baseUrl ? { endpoint: patch.baseUrl } : {}),
     ...(patch.enabled === false && config.defaultEndpointType === endpointType ? { defaultEndpointType: 'auto' } : {}),
   })
+  const applyRegionalEndpoints = () => {
+    const regional = getBailianRegionalEndpoints(config.region, config.workspaceId)
+    if (!regional) return
+    onUpdate({
+      endpoints: Object.fromEntries(Object.entries(config.endpoints).map(([type, endpoint]) => [type, { ...endpoint, baseUrl: regional[type] }])),
+      endpoint: regional[BAILIAN_ENDPOINT_TYPES.OPENAI],
+    })
+  }
+  const regionNeedsWorkspace = BAILIAN_REGIONS[config.region]?.requiresWorkspace
+  const regionalReady = !regionNeedsWorkspace || Boolean(config.workspaceId.trim())
   return <section className="deepseek-endpoint-section">
     <div className="deepseek-endpoint-heading">
       <div><span>Request routing</span><h3>Model Studio interfaces</h3><p>Use DashScope for native Qwen capabilities or the OpenAI-compatible interface for portable Agent integrations. API keys and endpoints must belong to the same region.</p></div>
       <button className={config.defaultEndpointType === 'auto' ? 'active' : ''} aria-pressed={config.defaultEndpointType === 'auto'} onClick={() => onUpdate({ defaultEndpointType: 'auto' })}><Sparkles size={14} /><span><strong>Auto route</strong><small>Native first</small></span></button>
+    </div>
+    <div className="bailian-region-controls">
+      <label><span>Region</span><select value={config.region} onChange={(event) => onUpdate({ region: event.target.value })}>{Object.values(BAILIAN_REGIONS).map((region) => <option value={region.id} key={region.id}>{region.label}</option>)}</select></label>
+      <label><span>Workspace ID</span><input value={config.workspaceId} onChange={(event) => onUpdate({ workspaceId: event.target.value.trim() })} placeholder={config.region === 'us-east-1' ? 'Not required in this region' : 'Required for workspace endpoint'} spellCheck="false" /></label>
+      <button className="settings-secondary-button" onClick={applyRegionalEndpoints} disabled={!regionalReady}>Apply regional endpoints</button>
+      <small>{regionNeedsWorkspace && !regionalReady ? 'This region requires a Workspace ID.' : 'Workspace domains are recommended for lower latency and higher stability.'}</small>
     </div>
     <div className="deepseek-endpoint-list bailian-endpoint-list">
       {Object.values(BAILIAN_ENDPOINT_PROFILES).map((profile) => {
@@ -271,11 +289,12 @@ function BailianEndpointSettings({ config, onUpdate }) {
 
 function BailianThinkingSettings({ config, onUpdate }) {
   return <section className="deepseek-thinking-section">
-    <div className="deepseek-thinking-copy"><span>Qwen controls</span><h3>Thinking and built-in search</h3><p>Qwen3.5 Plus and Flash are hybrid-thinking models. Reasoning streams separately from the final answer on both interfaces.</p></div>
+    <div className="deepseek-thinking-copy"><span>Qwen controls</span><h3>Thinking and built-in search</h3><p>Hybrid-thinking Qwen models stream reasoning separately from the final answer. Responses uses reasoning effort; other interfaces use thinking mode and budget.</p></div>
     <fieldset><legend>Thinking mode</legend><div className="deepseek-segmented-control">{[
       ['auto', 'Auto', 'Use model default'], ['enabled', 'On', 'Stream reasoning'], ['disabled', 'Off', 'Direct answer'],
     ].map(([value, label, detail]) => <button type="button" className={config.thinkingMode === value ? 'active' : ''} aria-pressed={config.thinkingMode === value} onClick={() => onUpdate({ thinkingMode: value })} key={value}><strong>{label}</strong><small>{detail}</small></button>)}</div></fieldset>
-    <fieldset><legend>Thinking budget</legend><div className="bailian-thinking-budget"><input type="number" min="1" max="65536" value={config.thinkingBudget} disabled={config.thinkingMode !== 'enabled'} onChange={(event) => onUpdate({ thinkingBudget: Math.max(1, Math.min(65536, Number(event.target.value) || 8192)) })} /><span>tokens</span></div><label className="bailian-search-toggle"><input type="checkbox" checked={config.enableWebSearch} onChange={(event) => onUpdate({ enableWebSearch: event.target.checked })} />Enable Model Studio built-in web search</label></fieldset>
+    <fieldset><legend>Thinking budget and Responses effort</legend><div className="bailian-thinking-budget"><input type="number" min="1" max="65536" value={config.thinkingBudget} disabled={config.thinkingMode !== 'enabled'} onChange={(event) => onUpdate({ thinkingBudget: Math.max(1, Math.min(65536, Number(event.target.value) || 8192)) })} /><span>tokens</span></div><select value={config.reasoningEffort} onChange={(event) => onUpdate({ reasoningEffort: event.target.value })} aria-label="Bailian Responses reasoning effort"><option value="auto">Responses effort: provider default</option>{['minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map((effort) => <option value={effort} key={effort}>{`Responses effort: ${effort}`}</option>)}</select></fieldset>
+    <fieldset><legend>Provider extensions</legend><label className="bailian-search-toggle"><input type="checkbox" checked={config.enableWebSearch} onChange={(event) => onUpdate({ enableWebSearch: event.target.checked })} />Enable built-in web search</label>{config.enableWebSearch && <><select value={config.searchStrategy} onChange={(event) => onUpdate({ searchStrategy: event.target.value })} aria-label="Bailian web search strategy">{['turbo', 'max', 'agent', 'agent_max'].map((strategy) => <option value={strategy} key={strategy}>{strategy}</option>)}</select><label className="bailian-search-toggle"><input type="checkbox" checked={config.returnSearchSources} onChange={(event) => onUpdate({ returnSearchSources: event.target.checked })} />Return sources and inline citations</label></>}<label className="bailian-search-toggle"><input type="checkbox" checked={config.enableSessionCache} onChange={(event) => onUpdate({ enableSessionCache: event.target.checked })} />Enable Responses session cache header</label><label className="bailian-search-toggle"><input type="checkbox" checked={config.storeResponses} onChange={(event) => onUpdate({ storeResponses: event.target.checked })} />Store Responses for retrievable IDs (7 days)</label></fieldset>
   </section>
 }
 
@@ -405,7 +424,7 @@ function ProvidersPage({ selectedId, configs, onChange }) {
       {!['deepseek', 'bailian'].includes(selected.id) ? <>
         <div className="provider-field-heading"><div><Cloud size={16} /><span><strong>API endpoint</strong><small>Override the default endpoint for gateways or compatible services.</small></span></div><span className="provider-field-status">{config.endpoint === selected.endpoint ? 'Default' : 'Custom'}</span></div>
         <div className="provider-input-row"><input value={config.endpoint} onChange={(event) => updateConfig({ endpoint: event.target.value })} aria-label="API endpoint" spellCheck="false" /><button className="settings-secondary-button" onClick={() => updateConfig({ endpoint: selected.endpoint })} disabled={config.endpoint === selected.endpoint}>Reset</button></div>
-      </> : <div className="provider-field-heading deepseek-shared-key-note"><div><Cloud size={16} /><span><strong>Shared credential</strong><small>The same {selected.id === 'deepseek' ? 'DeepSeek' : 'Model Studio'} API key is used across all enabled request interfaces below.</small></span></div><span className="provider-field-status">{selected.id === 'deepseek' ? '3 profiles' : '2 profiles'}</span></div>}
+      </> : <div className="provider-field-heading deepseek-shared-key-note"><div><Cloud size={16} /><span><strong>Shared credential</strong><small>The same {selected.id === 'deepseek' ? 'DeepSeek' : 'Model Studio'} API key is used across all enabled request interfaces below.</small></span></div><span className="provider-field-status">{selected.id === 'deepseek' ? '3 profiles' : '4 profiles'}</span></div>}
     </section>
 
     {selected.id === 'deepseek' && <><DeepSeekEndpointSettings config={config} onUpdate={updateConfig} /><DeepSeekThinkingSettings config={config} onUpdate={updateConfig} /></>}
@@ -421,7 +440,8 @@ function ProvidersPage({ selectedId, configs, onChange }) {
         <div className="provider-model-list" aria-label={`${selected.name} model list`}>
           {filteredModels.map((model) => {
             const capabilityLabels = Object.entries(model.capabilities || {}).filter(([key, enabled]) => enabled && !['chat', 'embeddings'].includes(key)).map(([key]) => key === 'webSearch' ? 'web' : key)
-            const endpointLabels = (model.endpointTypes || []).map((endpointType) => DEEPSEEK_ENDPOINT_PROFILES[endpointType]?.shortLabel || BAILIAN_ENDPOINT_PROFILES[endpointType]?.shortLabel).filter(Boolean)
+            const endpointProfiles = selected.id === 'bailian' ? BAILIAN_ENDPOINT_PROFILES : DEEPSEEK_ENDPOINT_PROFILES
+            const endpointLabels = (model.endpointTypes || []).map((endpointType) => endpointProfiles[endpointType]?.shortLabel).filter(Boolean)
             return <div className={selectedIds.has(model.id) ? 'selected' : ''} key={model.id}><span className={`provider-model-kind ${model.kind}`}>{model.kind}</span><div><strong>{model.name}</strong><small>{model.id}{model.manual ? ' · manual' : ''}{capabilityLabels.length ? ` · ${capabilityLabels.join(' · ')}` : ''}</small>{endpointLabels.length > 0 && <span className="provider-model-endpoints">{endpointLabels.map((label) => <i key={label}>{label}</i>)}</span>}</div><button onClick={() => toggleModel(model.id)} disabled={model.kind !== 'chat'}>{selectedIds.has(model.id) ? 'Remove' : model.kind === 'chat' ? 'Add' : 'Not used yet'}</button></div>
           })}
           {!filteredModels.length && <div className="provider-model-no-results">No models match “{modelQuery}”.</div>}

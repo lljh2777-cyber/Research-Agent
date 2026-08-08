@@ -1,4 +1,4 @@
-import { appendProviderRoute, cleanProviderBaseUrl, streamProviderChat } from './provider-runtime.mjs'
+import { appendProviderRoute, buildBailianResponseResourceRequest, cleanProviderBaseUrl, streamProviderChat } from './provider-runtime.mjs'
 import { withDeepSeekModelProfile } from '../shared/deepseek-provider.mjs'
 import { BAILIAN_OFFICIAL_MODELS, withBailianModelProfile } from '../shared/bailian-provider.mjs'
 
@@ -42,7 +42,7 @@ function inferModelKind(model) {
   if (id.includes('embed') || methods.some((method) => /embed/i.test(method))) return 'embedding'
   if (id.includes('rerank')) return 'rerank'
   if (id.includes('image') || id.includes('dall-e') || id.includes('imagen')) return 'image'
-  if (id.includes('audio') || id.includes('tts') || id.includes('transcri')) return 'audio'
+  if (id.includes('audio') || id.includes('tts') || id.includes('transcri') || /(^|[-_.])asr([-.]|$)/.test(id)) return 'audio'
   return 'chat'
 }
 
@@ -144,6 +144,25 @@ export async function discoverProviderModels({ providerId, endpoint, apiKey }, f
   }
 }
 
+export async function manageBailianResponse(input, fetchImpl = fetch) {
+  const request = buildBailianResponseResourceRequest(input)
+  let response
+  try {
+    response = await fetchImpl(request.url, {
+      method: request.method,
+      headers: request.headers,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    })
+  } catch (error) {
+    const message = error?.name === 'TimeoutError' ? 'The Bailian response service timed out.' : `Could not reach Bailian: ${error?.message || 'network request failed'}`
+    throw Object.assign(new Error(message), { statusCode: error?.name === 'TimeoutError' ? 504 : 502 })
+  }
+  if (!response.ok) throw await responseError(response)
+  return response.json().catch(() => {
+    throw Object.assign(new Error('Bailian returned an invalid JSON response resource.'), { statusCode: 502 })
+  })
+}
+
 async function readJsonBody(request) {
   let total = 0
   const chunks = []
@@ -173,13 +192,17 @@ function sendEvent(response, event) {
 export function createProviderApiMiddleware({ fetchImpl = fetch } = {}) {
   return async function providerApiMiddleware(request, response, next) {
     const path = new URL(request.url || '/', 'http://localhost').pathname
-    if (!['/api/providers/models', '/api/providers/responses/stream'].includes(path)) return next()
+    if (!['/api/providers/models', '/api/providers/responses/stream', '/api/providers/bailian/responses/resource'].includes(path)) return next()
     if (request.method !== 'POST') {
       response.setHeader('Allow', 'POST')
       return sendJson(response, 405, { error: 'Method not allowed.' })
     }
     try {
       const body = await readJsonBody(request)
+      if (path === '/api/providers/bailian/responses/resource') {
+        const result = await manageBailianResponse(body, fetchImpl)
+        return sendJson(response, 200, result)
+      }
       if (path === '/api/providers/responses/stream') {
         const controller = new AbortController()
         response.once('close', () => controller.abort())
