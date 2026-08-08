@@ -203,6 +203,30 @@ test('normalizes DeepSeek Responses reasoning text events', async () => {
   assert.equal(events.at(-1).text, 'Answer')
 })
 
+test('enables DeepSeek hosted web search and normalizes its Responses lifecycle', async () => {
+  const request = buildProviderChatRequest({
+    providerId: 'deepseek', endpoint: 'https://api.deepseek.com', endpointType: 'openai-responses', apiKey: 'secret', model: 'deepseek-v4-flash', messages,
+    options: { enableWebSearch: true },
+  })
+  assert(request.body.tools.some((tool) => tool.type === 'web_search'))
+
+  const events = []
+  for await (const event of streamProviderChat({
+    providerId: 'deepseek', endpoint: 'https://api.deepseek.com', endpointType: 'openai-responses', apiKey: 'secret', model: 'deepseek-v4-flash', messages,
+    options: { enableWebSearch: true },
+  }, async () => sseResponse([
+    'event: response.web_search_call.in_progress\ndata: {"type":"response.web_search_call.in_progress","item_id":"ws_1"}',
+    'event: response.web_search_call.searching\ndata: {"type":"response.web_search_call.searching","item_id":"ws_1","query":"latest spatial transcriptomics"}',
+    'event: response.web_search_call.completed\ndata: {"type":"response.web_search_call.completed","item_id":"ws_1"}',
+    'event: response.output_text.annotation.added\ndata: {"type":"response.output_text.annotation.added","annotation":{"type":"url_citation","url":"https://example.org/paper","title":"Paper"}}',
+    'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"Current evidence"}',
+    'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp-search","usage":{"total_tokens":12}}}',
+  ]))) events.push(event)
+  assert.deepEqual(events.filter((event) => event.type === 'web_search.status').map((event) => event.status), ['in_progress', 'searching', 'completed'])
+  assert.equal(events.at(-1).webSearchEvents.length, 3)
+  assert.equal(events.at(-1).citations[0].url, 'https://example.org/paper')
+})
+
 test('keeps custom OpenAI-compatible endpoints keyless and omits optional stream options', () => {
   const request = buildProviderChatRequest({
     providerId: 'compatible', endpoint: 'http://127.0.0.1:1234/v1', model: 'local-model', messages,

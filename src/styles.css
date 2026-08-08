@@ -647,6 +647,8 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .provider-model-endpoints { display: flex; flex-wrap: wrap; gap: 4px; }
 .provider-model-endpoints i { border: 1px solid rgba(110, 168, 254, .14); border-radius: 999px; color: #7293bc; padding: 2px 5px; font-family: var(--mono); font-size: 6px; font-style: normal; }
 .deepseek-thinking-section { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(280px, 1.15fr) minmax(220px, .85fr); gap: 18px; align-items: center; margin-top: 10px; border: 1px solid var(--border); border-radius: 9px; background: rgba(9, 21, 39, .5); padding: 15px 16px; }
+.deepseek-thinking-section.deepseek-provider-controls { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+.deepseek-thinking-section.deepseek-provider-controls .deepseek-thinking-copy { grid-column: 1 / -1; }
 .deepseek-thinking-copy { min-width: 0; display: grid; gap: 4px; }
 .deepseek-thinking-copy > span { color: var(--mint); font-family: var(--mono); font-size: 7px; letter-spacing: .08em; text-transform: uppercase; }
 .deepseek-thinking-copy h3 { margin: 0; color: #dce6f2; font-size: 13px; }
@@ -662,6 +664,11 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .deepseek-segmented-control button small { overflow: hidden; color: #586a82; font-size: 6px; text-overflow: ellipsis; white-space: nowrap; }
 .deepseek-segmented-control button.active, .deepseek-effort-control button.active { border-color: rgba(126, 226, 195, .32); background: rgba(34, 114, 91, .12); color: #9edbc8; }
 .deepseek-segmented-control button:disabled, .deepseek-effort-control button:disabled { opacity: .4; cursor: not-allowed; }
+.deepseek-search-toggle { min-width: 0; display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 6px; background: rgba(17, 31, 54, .65); color: #778aa3; padding: 7px 9px; cursor: pointer; text-align: left; }
+.deepseek-search-toggle > span { min-width: 0; display: grid; gap: 2px; }
+.deepseek-search-toggle strong { color: inherit; font-size: 8px; }
+.deepseek-search-toggle small { overflow: hidden; color: #586a82; font-size: 6px; text-overflow: ellipsis; white-space: nowrap; }
+.deepseek-search-toggle.active { border-color: rgba(126, 226, 195, .32); background: rgba(34, 114, 91, .12); color: #9edbc8; }
 .bailian-thinking-budget { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px; }
 .bailian-thinking-budget input { min-width: 0; height: 31px; border: 1px solid var(--border); border-radius: 6px; outline: 0; background: #081425; color: #aebdd0; padding: 0 9px; font-family: var(--mono); font-size: 8px; }
 .bailian-thinking-budget input:focus { border-color: rgba(110, 168, 254, .55); }
@@ -803,6 +810,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
   .deepseek-endpoint-list article { border-right: 0; border-bottom: 1px solid var(--border); }
   .deepseek-endpoint-list article:last-child { border-bottom: 0; }
   .deepseek-thinking-section { grid-template-columns: 1fr; }
+  .deepseek-thinking-section.deepseek-provider-controls { grid-template-columns: 1fr; }
   .provider-capability-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .provider-capability-grid > div:nth-child(2) { border-right: 0; }
   .provider-capability-grid > div:nth-child(-n+2) { border-bottom: 1px solid var(--border); }

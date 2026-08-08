@@ -22,7 +22,7 @@ export const DEEPSEEK_ENDPOINT_PROFILES = Object.freeze({
     adapterFamily: 'openai',
     defaultBaseUrl: 'https://api.deepseek.com',
     route: 'responses',
-    description: 'Official Responses API for Codex-style event streams and hosted tools. Currently limited to DeepSeek V4 Flash.',
+    description: 'Official Responses API for Codex-style event streams and hosted web search. Currently limited to DeepSeek V4 Flash.',
     maturity: 'V4 Flash only',
   }),
   [DEEPSEEK_ENDPOINT_TYPES.ANTHROPIC]: Object.freeze({
@@ -72,7 +72,7 @@ export function getDeepSeekModelProfile(modelId) {
     return {
       endpointTypes: [DEEPSEEK_ENDPOINT_TYPES.CHAT, DEEPSEEK_ENDPOINT_TYPES.RESPONSES, DEEPSEEK_ENDPOINT_TYPES.ANTHROPIC],
       preferredEndpointType: DEEPSEEK_ENDPOINT_TYPES.CHAT,
-      capabilities: { reasoning: true, tools: true, webSearch: false },
+      capabilities: { reasoning: true, tools: true, webSearch: true },
       contextWindowTokens: 1_000_000,
       maxOutputTokens: 384_000,
     }
@@ -116,8 +116,11 @@ export function resolveDeepSeekEndpoint(config, model) {
   const endpoints = normalizeDeepSeekEndpoints(config?.endpoints, config?.endpoint)
   const profile = getDeepSeekModelProfile(model?.id || model)
   const configuredDefault = config?.defaultEndpointType || 'auto'
+  const automaticTypes = config?.enableWebSearch && profile.endpointTypes.includes(DEEPSEEK_ENDPOINT_TYPES.RESPONSES)
+    ? [DEEPSEEK_ENDPOINT_TYPES.RESPONSES, ...profile.endpointTypes.filter((endpointType) => endpointType !== DEEPSEEK_ENDPOINT_TYPES.RESPONSES)]
+    : profile.endpointTypes
   const candidates = configuredDefault === 'auto'
-    ? profile.endpointTypes
+    ? automaticTypes
     : [configuredDefault, ...profile.endpointTypes.filter((endpointType) => endpointType !== configuredDefault)]
   const endpointType = candidates.find((candidate) => (
     profile.endpointTypes.includes(candidate)
@@ -140,6 +143,7 @@ export function normalizeDeepSeekThinking(config = {}) {
   return {
     thinkingMode: THINKING_MODES.has(config.thinkingMode) ? config.thinkingMode : 'auto',
     reasoningEffort: REASONING_EFFORTS.has(config.reasoningEffort) ? config.reasoningEffort : 'auto',
+    enableWebSearch: config.enableWebSearch === true,
   }
 }
 
@@ -148,6 +152,7 @@ export function getDeepSeekRuntimeOptions(config = {}) {
   return {
     ...(normalized.thinkingMode === 'auto' ? {} : { thinkingEnabled: normalized.thinkingMode === 'enabled' }),
     ...(normalized.reasoningEffort === 'auto' ? {} : { reasoningEffort: normalized.reasoningEffort }),
+    ...(normalized.enableWebSearch ? { enableWebSearch: true } : {}),
   }
 }
 

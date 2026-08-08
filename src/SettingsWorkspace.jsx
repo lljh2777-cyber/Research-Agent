@@ -224,7 +224,7 @@ function DeepSeekThinkingSettings({ config, onUpdate }) {
     ['high', 'High'],
     ['max', 'Max'],
   ]
-  return <section className="deepseek-thinking-section">
+  return <section className="deepseek-thinking-section deepseek-provider-controls">
     <div className="deepseek-thinking-copy">
       <span>Reasoning control</span>
       <h3>Thinking mode</h3>
@@ -242,6 +242,14 @@ function DeepSeekThinkingSettings({ config, onUpdate }) {
         {efforts.map(([value, label]) => <button type="button" className={config.reasoningEffort === value ? 'active' : ''} aria-pressed={config.reasoningEffort === value} onClick={() => onUpdate({ reasoningEffort: value })} disabled={config.thinkingMode === 'disabled'} key={value}>{label}</button>)}
       </div>
       <small>DeepSeek maps effort by model; V4 Pro may promote Low to High. Auto keeps the provider default.</small>
+    </fieldset>
+    <fieldset>
+      <legend>Hosted web search</legend>
+      <button type="button" className={`deepseek-search-toggle ${config.enableWebSearch ? 'active' : ''}`} aria-pressed={config.enableWebSearch} onClick={() => onUpdate({ enableWebSearch: !config.enableWebSearch })}>
+        <Search size={14} />
+        <span><strong>{config.enableWebSearch ? 'Enabled' : 'Disabled'}</strong><small>V4 Flash via Responses</small></span>
+      </button>
+      <small>In Auto mode, enabling search routes DeepSeek V4 Flash through Responses. Other built-in Responses tools remain disabled.</small>
     </fieldset>
   </section>
 }

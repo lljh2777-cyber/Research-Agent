@@ -52,11 +52,18 @@ test('auto routing stays on documented interfaces while manual routing can opt i
     automatic: true,
     fellBack: true,
   })
+
+  assert.deepEqual(resolveDeepSeekEndpoint({ endpoints, defaultEndpointType: 'auto', enableWebSearch: true }, 'deepseek-v4-flash'), {
+    endpointType: DEEPSEEK_ENDPOINT_TYPES.RESPONSES,
+    endpoint: 'https://api.deepseek.com',
+    automatic: true,
+    fellBack: false,
+  })
 })
 
 test('normalizes DeepSeek thinking settings and emits only explicit runtime options', () => {
   assert.deepEqual(normalizeDeepSeekThinking({ thinkingMode: 'invalid', reasoningEffort: 'medium' }), {
-    thinkingMode: 'auto', reasoningEffort: 'auto',
+    thinkingMode: 'auto', reasoningEffort: 'auto', enableWebSearch: false,
   })
   assert.deepEqual(getDeepSeekRuntimeOptions({ thinkingMode: 'auto', reasoningEffort: 'auto' }), {})
   assert.deepEqual(getDeepSeekRuntimeOptions({ thinkingMode: 'enabled', reasoningEffort: 'max' }), {
@@ -65,4 +72,5 @@ test('normalizes DeepSeek thinking settings and emits only explicit runtime opti
   assert.deepEqual(getDeepSeekRuntimeOptions({ thinkingMode: 'disabled', reasoningEffort: 'high' }), {
     thinkingEnabled: false, reasoningEffort: 'high',
   })
+  assert.deepEqual(getDeepSeekRuntimeOptions({ enableWebSearch: true }), { enableWebSearch: true })
 })

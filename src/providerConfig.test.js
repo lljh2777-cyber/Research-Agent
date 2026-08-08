@@ -77,7 +77,7 @@ test('migrates legacy DeepSeek settings and routes selected models through the c
   })
   assert.equal(configs.deepseek.endpoints['openai-chat-completions'].baseUrl, 'https://gateway.example/deepseek')
   assert.equal(configs.deepseek.endpoints['openai-responses'].enabled, true)
-  assert.equal(configs.deepseek.schemaVersion, 2)
+  assert.equal(configs.deepseek.schemaVersion, 3)
 
   const [model] = providerConfigsToModels(configs)
   assert.equal(model.endpointType, 'openai-chat-completions')
@@ -104,9 +104,10 @@ test('allows an explicit DeepSeek Responses compatibility endpoint without selec
 })
 
 test('normalizes persisted DeepSeek thinking controls', () => {
-  const configs = normalizeProviderConfigs({ deepseek: { thinkingMode: 'enabled', reasoningEffort: 'max' } })
+  const configs = normalizeProviderConfigs({ deepseek: { thinkingMode: 'enabled', reasoningEffort: 'max', enableWebSearch: true } })
   assert.equal(configs.deepseek.thinkingMode, 'enabled')
   assert.equal(configs.deepseek.reasoningEffort, 'max')
+  assert.equal(configs.deepseek.enableWebSearch, true)
   const defaults = normalizeProviderConfigs({ deepseek: { thinkingMode: 'sometimes', reasoningEffort: 'medium' } })
   assert.equal(defaults.deepseek.thinkingMode, 'auto')
   assert.equal(defaults.deepseek.reasoningEffort, 'auto')
@@ -132,7 +133,7 @@ test('enables the newly official Responses endpoint when migrating an unversione
       },
     },
   })
-  assert.equal(configs.deepseek.schemaVersion, 2)
+  assert.equal(configs.deepseek.schemaVersion, 3)
   assert.equal(configs.deepseek.endpoints['openai-responses'].enabled, true)
 })
 

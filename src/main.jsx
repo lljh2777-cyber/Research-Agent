@@ -1141,6 +1141,9 @@ function App() {
               signal: controller.signal,
               onDelta,
               onReasoningDelta,
+              onEvent: (event) => {
+                if (event === 'web_search.status') updateResearchSession(sessionId, { activeStage: 2 })
+              },
             }),
             executeTool: (call) => researchToolRegistry.execute(call),
             onToolRound: (_round, trace) => {
@@ -1183,7 +1186,7 @@ function App() {
             toolTrace: [...toolTrace],
             usage: result.usage || null,
             contextPlan: { estimatedInputTokens: contextPlan.estimatedInputTokens, inputBudgetTokens: contextPlan.inputBudgetTokens, retainedTurns: contextPlan.retainedTurns, omittedTurns: contextPlan.omittedTurns },
-            closing: `Generated with ${result.model} through ${apiProvider ? selectedModel.provider : 'the connected ChatGPT subscription'} · ${packet.evidence.length} Vault evidence chunk${packet.evidence.length === 1 ? '' : 's'}. ${contextLabel}${omittedLabel}${cacheLabel}.`,
+            closing: `Generated with ${result.model} through ${apiProvider ? selectedModel.provider : 'the connected ChatGPT subscription'} · ${packet.evidence.length} Vault evidence chunk${packet.evidence.length === 1 ? '' : 's'}${result.webSearchEvents?.length ? ' · hosted web search used' : ''}. ${contextLabel}${omittedLabel}${cacheLabel}.`,
           } : message),
         }))
       } catch (error) {

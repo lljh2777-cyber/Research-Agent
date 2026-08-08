@@ -29,7 +29,7 @@ export const PROVIDER_PRESETS = [
 
 const CONFIG_STORAGE_KEY = 'bioresearch-os:provider-configs:v1'
 const KEY_STORAGE_KEY = 'bioresearch-os:provider-session-keys:v1'
-const DEEPSEEK_CONFIG_VERSION = 2
+const DEEPSEEK_CONFIG_VERSION = 3
 const BAILIAN_CONFIG_VERSION = 2
 
 export function createDefaultProviderConfigs() {
@@ -97,7 +97,7 @@ export function normalizeProviderConfigs(value) {
         : 'auto'
       normalized.endpoints = normalizeDeepSeekEndpoints(saved.endpoints, normalized.endpoint)
       const savedSchemaVersion = Number.isFinite(Number(saved.schemaVersion)) ? Number(saved.schemaVersion) : 0
-      if (savedSchemaVersion < DEEPSEEK_CONFIG_VERSION) {
+      if (savedSchemaVersion < 2) {
         normalized.endpoints[DEEPSEEK_ENDPOINT_TYPES.RESPONSES].enabled = true
       }
       normalized.schemaVersion = DEEPSEEK_CONFIG_VERSION

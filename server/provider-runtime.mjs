@@ -142,7 +142,7 @@ function openAiRequest(endpoint, model, messages, options, providerId) {
   const reasoningEffort = options.thinkingEnabled === false ? 'none' : options.reasoningEffort
   const tools = [
     ...(options.tools || []).map((tool) => ({ type: 'function', ...tool })),
-    ...(providerId === 'bailian' && options.enableWebSearch ? [{ type: 'web_search' }] : []),
+    ...((providerId === 'bailian' || providerId === 'deepseek') && options.enableWebSearch ? [{ type: 'web_search' }] : []),
   ]
   return {
     url: appendProviderRoute(endpoint, 'responses'),
@@ -369,6 +369,13 @@ function extractProtocolEvents(protocol, event) {
     const type = payload.type || event.event
     if (type === 'response.output_text.delta') return [{ type: 'message.delta', delta: payload.delta || '' }]
     if (type === 'response.reasoning_text.delta' || type === 'response.reasoning_summary_text.delta') return [{ type: 'reasoning.delta', delta: payload.delta || '' }]
+    if (type === 'response.web_search_call.in_progress' || type === 'response.web_search_call.searching' || type === 'response.web_search_call.completed') return [{
+      type: 'web_search.status',
+      status: type.slice('response.web_search_call.'.length),
+      searchId: payload.item_id || payload.id || payload.item?.id || null,
+      query: payload.query || payload.item?.query || null,
+    }]
+    if (type === 'response.output_text.annotation.added' && payload.annotation) return [{ type: 'citation.added', citation: payload.annotation }]
     if (type === 'response.output_item.added' && payload.item?.type === 'function_call') return [{
       type: 'tool_call.delta',
       index: payload.output_index ?? 0,
@@ -480,6 +487,8 @@ export async function* streamProviderChat(input, fetchImpl = fetch) {
   let reasoning = ''
   let usage = null
   let responseId = null
+  const webSearchEvents = []
+  const citations = []
   const toolCallsByIndex = new Map()
   for await (const upstreamEvent of parseServerSentEvents(response.body)) {
     for (const event of extractProtocolEvents(request.protocol, upstreamEvent)) {
@@ -489,6 +498,8 @@ export async function* streamProviderChat(input, fetchImpl = fetch) {
         usage = event.usage || usage
         responseId = event.responseId || responseId
       }
+      if (event.type === 'web_search.status') webSearchEvents.push({ status: event.status, searchId: event.searchId, query: event.query })
+      if (event.type === 'citation.added') citations.push(event.citation)
       if (event.type === 'tool_call.delta') {
         const current = toolCallsByIndex.get(event.index) || { id: '', name: '', arguments: '' }
         toolCallsByIndex.set(event.index, {
@@ -504,5 +515,5 @@ export async function* streamProviderChat(input, fetchImpl = fetch) {
     .sort(([left], [right]) => left - right)
     .map(([, call]) => call)
     .filter((call) => call.id && call.name)
-  yield { type: 'run.completed', runId, providerId: input.providerId, model: input.model, endpointType: request.protocol, responseId, text, reasoning, toolCalls, usage }
+  yield { type: 'run.completed', runId, providerId: input.providerId, model: input.model, endpointType: request.protocol, responseId, text, reasoning, toolCalls, usage, webSearchEvents, citations }
 }

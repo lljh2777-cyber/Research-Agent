@@ -80,7 +80,7 @@ test('adds the documented DeepSeek endpoint matrix to discovered models', () => 
   assert.equal(model.preferredEndpointType, 'openai-chat-completions')
   assert.equal(model.capabilities.reasoning, true)
   assert.equal(model.capabilities.tools, true)
-  assert.equal(model.capabilities.webSearch, false)
+  assert.equal(model.capabilities.webSearch, true)
 })
 
 test('turns network failures into actionable provider errors', async () => {
