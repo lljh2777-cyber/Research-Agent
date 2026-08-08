@@ -727,14 +727,16 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .mcp-add-form { margin-bottom: 16px; }
 .mcp-add-form > label { min-height: 67px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, 420px); align-items: center; gap: 18px; border-bottom: 1px solid rgba(125, 157, 201, .13); padding: 12px 16px; }
 .mcp-add-form > label > span { display: grid; gap: 4px; }
-.mcp-add-form input, .mcp-add-form select { min-width: 0; height: 34px; border: 1px solid var(--border); border-radius: 6px; outline: none; background: #0b1729; color: #bdcada; padding: 0 9px; font-size: 9px; }
-.mcp-add-form input:focus, .mcp-add-form select:focus { border-color: var(--blue); }
+.mcp-add-form input, .mcp-add-form select, .mcp-add-form textarea { min-width: 0; height: 34px; border: 1px solid var(--border); border-radius: 6px; outline: none; background: #0b1729; color: #bdcada; padding: 0 9px; font-size: 9px; }
+.mcp-add-form textarea { min-height: 68px; padding-top: 8px; resize: vertical; }
+.mcp-add-form input:focus, .mcp-add-form select:focus, .mcp-add-form textarea:focus { border-color: var(--blue); }
 .mcp-form-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; }
 .mcp-server-list { display: grid; }
 .mcp-server-card { min-width: 0; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 12px; border-bottom: 1px solid rgba(125, 157, 201, .13); padding: 14px 16px; }
 .mcp-server-card:last-child { border-bottom: 0; }
 .mcp-server-icon { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 9px; background: rgba(110, 168, 254, .1); color: #83b5fb; }
 .mcp-server-card.builtin .mcp-server-icon { background: rgba(126, 226, 195, .09); color: var(--mint); }
+.mcp-server-card.connected .mcp-server-icon { background: rgba(126, 226, 195, .09); color: var(--mint); }
 .mcp-server-card > div:nth-child(2) { min-width: 0; display: grid; gap: 5px; }
 .mcp-server-card header { display: flex; align-items: center; gap: 8px; }
 .mcp-server-card header strong { color: #d3ddea; font-size: 10px; }
@@ -748,6 +750,15 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .mcp-server-actions input { accent-color: var(--blue); }
 .mcp-server-actions .settings-text-button { margin: 0; color: #c8848d; }
 .mcp-empty-state { border-bottom: 0; }
+.tool-approval-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 24px; background: rgba(3, 8, 18, .78); backdrop-filter: blur(6px); }
+.tool-approval-dialog { width: min(540px, 100%); display: grid; grid-template-columns: 46px minmax(0, 1fr); gap: 14px; border: 1px solid rgba(110, 168, 254, .28); border-radius: 12px; background: #0c1729; box-shadow: 0 24px 80px rgba(0, 0, 0, .4); padding: 20px; }
+.tool-approval-icon { width: 46px; height: 46px; display: grid; place-items: center; border-radius: 10px; background: rgba(110, 168, 254, .11); color: var(--blue); }
+.tool-approval-dialog h2 { margin: 4px 0 7px; color: #ecf3fb; font-size: 19px; }
+.tool-approval-dialog p { margin: 0; color: #8495aa; font-size: 10px; line-height: 1.55; }
+.tool-approval-dialog p strong { color: #becbda; }
+.tool-approval-dialog code { color: #8ebcfc; }
+.tool-approval-dialog pre { grid-column: 1 / -1; max-height: 220px; overflow: auto; margin: 2px 0 0; border: 1px solid var(--border); border-radius: 7px; background: #081321; color: #aebed0; padding: 12px; font-family: var(--mono); font-size: 8px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool-approval-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; }
 .local-runtime-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .local-runtime-grid > section { min-width: 0; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 11px; align-items: start; border: 1px solid var(--border); border-radius: 8px; background: rgba(13, 25, 44, .74); padding: 16px; }
 .local-runtime-grid > section > span { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 9px; background: rgba(110, 168, 254, .1); color: #83b5fb; }

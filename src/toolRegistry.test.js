@@ -17,6 +17,11 @@ test('advertises only auto-approved tools and blocks execution otherwise', async
   assert.equal((await readRegistry.execute({ id: '1', name: definition.name })).isError, undefined)
 
   const writeRegistry = createToolRegistry([{ definition, source: 'test', effect: TOOL_EFFECTS.WRITE, execute: () => ({}) }], { write: 'ask' })
-  assert.equal(writeRegistry.definitions.length, 0)
+  assert.equal(writeRegistry.definitions.length, 1)
   assert.match((await writeRegistry.execute({ id: '2', name: definition.name })).summary, /requires user confirmation/)
+
+  let executed = false
+  const approvedRegistry = createToolRegistry([{ definition, source: 'test', effect: TOOL_EFFECTS.WRITE, execute: (_call, options) => { executed = options.approved; return {} } }], { write: 'ask' }, { requestApproval: async () => true })
+  await approvedRegistry.execute({ id: '3', name: definition.name })
+  assert.equal(executed, true)
 })

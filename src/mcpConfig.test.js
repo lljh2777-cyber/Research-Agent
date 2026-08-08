@@ -16,10 +16,12 @@ test('normalizes MCP servers and enforces non-escalating permission defaults', (
 test('persists normalized MCP configuration without credentials', () => {
   const storage = new Map()
   const adapter = { getItem: (key) => storage.get(key), setItem: (key, value) => storage.set(key, value) }
-  const server = createMcpServer({ name: 'Remote MCP', transport: 'streamable-http', endpoint: ' https://example.test/mcp ' })
+  const server = createMcpServer({ name: 'Remote MCP', transport: 'streamable-http', endpoint: ' https://example.test/mcp ', args: ['--safe'] })
   saveMcpConfig({ permissions: { read: 'deny' }, servers: [server] }, adapter)
   const loaded = loadMcpConfig(adapter)
   assert.equal(loaded.permissions.read, 'deny')
   assert.equal(loaded.servers[0].endpoint, 'https://example.test/mcp')
+  assert.deepEqual(loaded.servers[0].args, ['--safe'])
+  assert.equal(loaded.schemaVersion, 2)
   assert.equal('headers' in loaded.servers[0], false)
 })

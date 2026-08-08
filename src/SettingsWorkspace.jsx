@@ -452,29 +452,34 @@ function RetrievalSettingsPage({ config, onSave }) {
   </div>
 }
 
-function McpSettingsPage({ config, onChange, vaultNoteCount }) {
+function McpSettingsPage({ config, onChange, runtime, runtimeBusy, runtimeError, onConnectServer, onDisconnectServer, vaultNoteCount }) {
   const [showAddServer, setShowAddServer] = useState(false)
-  const [draftServer, setDraftServer] = useState({ name: '', transport: 'streamable-http', endpoint: '', command: '' })
+  const [draftServer, setDraftServer] = useState({ name: '', transport: 'streamable-http', endpoint: '', command: '', argumentsText: '' })
+  const runtimeById = useMemo(() => new Map((runtime?.sessions || []).map((session) => [session.server.id, session])), [runtime?.sessions])
   const updatePermissions = (effect, value) => onChange({ ...config, permissions: { ...config.permissions, [effect]: value } })
   const updateServer = (id, patch) => onChange({
     ...config,
     servers: config.servers.map((server) => server.id === id ? { ...server, ...patch } : server),
   })
-  const removeServer = (id) => onChange({ ...config, servers: config.servers.filter((server) => server.id !== id) })
+  const removeServer = async (id) => {
+    if (runtimeById.has(id)) await onDisconnectServer(id)
+    onChange({ ...config, servers: config.servers.filter((server) => server.id !== id) })
+  }
   const target = draftServer.transport === 'stdio' ? draftServer.command : draftServer.endpoint
   const addServer = () => {
     if (!draftServer.name.trim() || !target.trim()) return
-    onChange({ ...config, servers: [...config.servers, createMcpServer(draftServer)] })
-    setDraftServer({ name: '', transport: 'streamable-http', endpoint: '', command: '' })
+    onChange({ ...config, servers: [...config.servers, createMcpServer({ ...draftServer, args: draftServer.argumentsText.split('\n').map((arg) => arg.trim()).filter(Boolean) })] })
+    setDraftServer({ name: '', transport: 'streamable-http', endpoint: '', command: '', argumentsText: '' })
     setShowAddServer(false)
   }
 
   return <div className="settings-page mcp-settings-page">
-    <SettingsPageHeader eyebrow="Tool runtime" title="MCP" description="Register research tools behind one permission boundary. External servers are configured here and executed only by a trusted local desktop runtime.">
+    <SettingsPageHeader eyebrow="Tool runtime" title="MCP" description="Register research tools behind one permission boundary. External servers connect through the trusted local runtime instead of the browser process.">
       <button className="settings-primary-button" onClick={() => setShowAddServer((current) => !current)}><Plus size={14} />{showAddServer ? 'Cancel' : 'Add server'}</button>
     </SettingsPageHeader>
 
-    <div className="provider-security-note"><ShieldCheck size={16} /><span><strong>Web milestone safety boundary</strong>External MCP configuration can be saved, but this browser build never starts STDIO commands or forwards credentials. Destructive tools remain blocked.</span></div>
+    <div className="provider-security-note"><ShieldCheck size={16} /><span><strong>Local runtime safety boundary</strong>Connections and tool calls run through the local adapter. STDIO launch requires confirmation, write tools require one-time approval, and destructive tools remain blocked.</span></div>
+    {runtimeError && <div className="settings-inline-error" role="alert">{runtimeError}</div>}
 
     <section className="settings-section-block mcp-policy-section">
       <div className="settings-section-heading"><div><h3>Tool permissions</h3><p>The policy is enforced before tools are advertised to a model and again before execution.</p></div><span>Local policy</span></div>
@@ -488,16 +493,22 @@ function McpSettingsPage({ config, onChange, vaultNoteCount }) {
     {showAddServer && <section className="settings-form-card mcp-add-form">
       <label><span><strong>Server name</strong><small>A recognizable local label; credentials are not stored here.</small></span><input value={draftServer.name} onChange={(event) => setDraftServer((current) => ({ ...current, name: event.target.value }))} placeholder="e.g. Bioinformatics tools" /></label>
       <label><span><strong>Transport</strong><small>STDIO is desktop-only. Prefer Streamable HTTP for new remote servers.</small></span><select value={draftServer.transport} onChange={(event) => setDraftServer((current) => ({ ...current, transport: event.target.value }))}>{MCP_TRANSPORTS.map((transport) => <option value={transport.id} key={transport.id}>{transport.label}</option>)}</select></label>
-      <label><span><strong>{draftServer.transport === 'stdio' ? 'Command' : 'Endpoint'}</strong><small>{draftServer.transport === 'stdio' ? 'Saved for the future desktop runtime; never launched by this page.' : 'The MCP server URL. Authentication will be handled by the local runtime.'}</small></span><input value={target} onChange={(event) => setDraftServer((current) => ({ ...current, [current.transport === 'stdio' ? 'command' : 'endpoint']: event.target.value }))} placeholder={draftServer.transport === 'stdio' ? 'npx --yes @example/mcp-server' : 'https://localhost:3001/mcp'} spellCheck="false" /></label>
+      <label><span><strong>{draftServer.transport === 'stdio' ? 'Executable' : 'Endpoint'}</strong><small>{draftServer.transport === 'stdio' ? 'The exact executable launched without a shell.' : 'The MCP server URL. Authentication will be handled by the local runtime.'}</small></span><input value={target} onChange={(event) => setDraftServer((current) => ({ ...current, [current.transport === 'stdio' ? 'command' : 'endpoint']: event.target.value }))} placeholder={draftServer.transport === 'stdio' ? 'npx' : 'https://localhost:3001/mcp'} spellCheck="false" /></label>
+      {draftServer.transport === 'stdio' && <label><span><strong>Arguments</strong><small>One argument per line, passed directly without shell parsing.</small></span><textarea value={draftServer.argumentsText} onChange={(event) => setDraftServer((current) => ({ ...current, argumentsText: event.target.value }))} placeholder={'--yes\n@example/mcp-server'} spellCheck="false" /></label>}
       <div className="mcp-form-actions"><button className="settings-secondary-button" onClick={() => setShowAddServer(false)}>Cancel</button><button className="settings-primary-button" onClick={addServer} disabled={!draftServer.name.trim() || !target.trim()}>Save disabled server</button></div>
     </section>}
 
     <section className="settings-section-block">
-      <div className="settings-section-heading"><div><h3>Tool servers</h3><p>Built-in tools are available immediately. External servers require the desktop MCP runtime.</p></div><span>{config.servers.length + 1} registered</span></div>
+      <div className="settings-section-heading"><div><h3>Tool servers</h3><p>Built-in tools are available immediately. External servers connect and discover tools through the local adapter.</p></div><span>{config.servers.length + 1} registered</span></div>
       <div className="mcp-server-list">
         <article className="mcp-server-card builtin"><span className="mcp-server-icon"><Database size={18} /></span><div><header><strong>Research Vault</strong><i>Built-in</i></header><p>Read-only hybrid search over the connected Obsidian Vault.</p><small>{vaultNoteCount ? `${vaultNoteCount} notes indexed` : 'Connect a Vault to enable search_vault'} · 1 read tool</small></div><span className={`mcp-server-state ${vaultNoteCount ? 'ready' : ''}`}>{vaultNoteCount ? 'Ready' : 'Waiting'}</span></article>
-        {config.servers.map((server) => <article className="mcp-server-card" key={server.id}><span className="mcp-server-icon"><Plug size={18} /></span><div><header><strong>{server.name}</strong><i>{MCP_TRANSPORTS.find((transport) => transport.id === server.transport)?.label || server.transport}</i></header><p>{server.transport === 'stdio' ? server.command : server.endpoint}</p><small>Configuration only · Desktop runtime required</small></div><div className="mcp-server-actions"><label><input type="checkbox" checked={server.enabled} onChange={(event) => updateServer(server.id, { enabled: event.target.checked })} /><span>{server.enabled ? 'Enabled' : 'Disabled'}</span></label><button className="settings-text-button" onClick={() => removeServer(server.id)}>Remove</button></div></article>)}
-        {!config.servers.length && <div className="settings-empty-state mcp-empty-state"><Plug size={22} /><strong>No external MCP servers</strong><span>Add one now; it remains disabled until you explicitly enable it in a desktop runtime.</span></div>}
+        {config.servers.map((server) => {
+          const session = runtimeById.get(server.id)
+          const connected = session?.state === 'connected'
+          const toolSummary = connected ? `${session.tools.length} tools · ${session.tools.filter((tool) => tool.effect === 'read').length} read · ${session.tools.filter((tool) => tool.effect === 'write').length} approval` : session?.error || 'Ready to connect through the local runtime'
+          return <article className={`mcp-server-card ${connected ? 'connected' : ''}`} key={server.id}><span className="mcp-server-icon"><Plug size={18} /></span><div><header><strong>{server.name}</strong><i>{MCP_TRANSPORTS.find((transport) => transport.id === server.transport)?.label || server.transport}</i></header><p>{server.transport === 'stdio' ? [server.command, ...(server.args || [])].join(' ') : server.endpoint}</p><small>{toolSummary}</small></div><div className="mcp-server-actions"><label><input type="checkbox" checked={server.enabled} onChange={(event) => updateServer(server.id, { enabled: event.target.checked })} disabled={connected} /><span>{server.enabled ? 'Enabled' : 'Disabled'}</span></label>{connected ? <button className="settings-secondary-button" onClick={() => onDisconnectServer(server.id)} disabled={runtimeBusy === server.id}>Disconnect</button> : <button className="settings-primary-button" onClick={() => onConnectServer(server)} disabled={!server.enabled || runtimeBusy === server.id}>{runtimeBusy === server.id ? 'Connecting…' : 'Connect'}</button>}<button className="settings-text-button" onClick={() => removeServer(server.id)} disabled={runtimeBusy === server.id}>Remove</button></div></article>
+        })}
+        {!config.servers.length && <div className="settings-empty-state mcp-empty-state"><Plug size={22} /><strong>No external MCP servers</strong><span>Add one now; it remains disabled until you explicitly enable and connect it.</span></div>}
       </div>
     </section>
   </div>
@@ -511,7 +522,7 @@ function FeaturePreviewPage({ pageId }) {
   </div>
 }
 
-export default function SettingsWorkspace({ authStatus, authBusy, authError, modelCatalog, modelsBusy, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, chatModels, modelConfig, onSaveModelConfig, providerConfigs, onSaveProviderConfigs, mcpConfig, onSaveMcpConfig, vaultNoteCount }) {
+export default function SettingsWorkspace({ authStatus, authBusy, authError, modelCatalog, modelsBusy, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, chatModels, modelConfig, onSaveModelConfig, providerConfigs, onSaveProviderConfigs, mcpConfig, onSaveMcpConfig, mcpRuntime, mcpRuntimeBusy, mcpRuntimeError, onConnectMcpServer, onDisconnectMcpServer, vaultNoteCount }) {
   const [activePage, setActivePage] = useState('providers')
   const [providerQuery, setProviderQuery] = useState('')
   const [selectedProviderId, setSelectedProviderId] = useState(API_PROVIDERS[0].id)
@@ -520,7 +531,7 @@ export default function SettingsWorkspace({ authStatus, authBusy, authError, mod
   else if (activePage === 'providers') content = <ProvidersPage selectedId={selectedProviderId} configs={providerConfigs} onChange={onSaveProviderConfigs} />
   else if (activePage === 'defaults') content = <DefaultModelsPage config={modelConfig} chatModels={chatModels} onSave={onSaveModelConfig} />
   else if (activePage === 'local-models') content = <LocalModelsPage />
-  else if (activePage === 'mcp') content = <McpSettingsPage config={mcpConfig} onChange={onSaveMcpConfig} vaultNoteCount={vaultNoteCount} />
+  else if (activePage === 'mcp') content = <McpSettingsPage config={mcpConfig} onChange={onSaveMcpConfig} runtime={mcpRuntime} runtimeBusy={mcpRuntimeBusy} runtimeError={mcpRuntimeError} onConnectServer={onConnectMcpServer} onDisconnectServer={onDisconnectMcpServer} vaultNoteCount={vaultNoteCount} />
   else if (activePage === 'retrieval') content = <RetrievalSettingsPage config={modelConfig} onSave={onSaveModelConfig} />
   else content = <FeaturePreviewPage pageId={activePage} />
 

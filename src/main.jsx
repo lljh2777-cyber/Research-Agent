@@ -31,6 +31,7 @@ import {
   Search,
   Send,
   Settings2,
+  ShieldCheck,
   Sparkles,
   ThumbsDown,
   ThumbsUp,
@@ -48,7 +49,16 @@ import { streamProviderResponse } from './providerRuntimeClient.js'
 import { buildConversationContext, compactTokenCount, providerUsageSummary } from './conversationContext.js'
 import { runProviderAgent } from './providerAgent.js'
 import { loadMcpConfig, saveMcpConfig } from './mcpConfig.js'
-import { createResearchToolRegistry } from './toolRegistry.js'
+import { createResearchToolEntries, createToolRegistry } from './toolRegistry.js'
+import {
+  bootstrapMcpRuntime,
+  callMcpTool,
+  connectMcpServer,
+  createExternalMcpToolEntries,
+  disconnectMcpServer,
+  formatMcpToolResult,
+  parseMcpCallArguments,
+} from './mcpRuntimeClient.js'
 import { executePipeline, loadPipelineRuns, savePipelineRuns } from './pipelineEngine.js'
 import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources, retrieveEvidence } from './retrieval.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
@@ -471,6 +481,18 @@ function NotePreview({ note, onClose }) {
   )
 }
 
+function ToolApprovalDialog({ approval, onResolve }) {
+  if (!approval) return null
+  return <div className="tool-approval-backdrop">
+    <section className="tool-approval-dialog" role="dialog" aria-modal="true" aria-labelledby="tool-approval-title">
+      <span className="tool-approval-icon"><ShieldCheck size={22} /></span>
+      <div><span className="eyebrow">Tool permission</span><h2 id="tool-approval-title">Allow this write operation?</h2><p><strong>{approval.serverName}</strong> wants to run <code>{approval.displayName}</code>. Review the arguments before allowing this one call.</p></div>
+      <pre>{approval.arguments}</pre>
+      <div className="tool-approval-actions"><button className="settings-secondary-button" onClick={() => onResolve(false)}>Cancel</button><button className="settings-primary-button" onClick={() => onResolve(true)}><Check size={14} />Allow once</button></div>
+    </section>
+  </div>
+}
+
 function RetrievalPath({ activeStage, vaultName, topK, rerankLabel, packet, answerMode }) {
   const evidenceCount = packet?.evidence?.length || 0
   const retrieval = packet?.retrieval
@@ -632,6 +654,10 @@ function App() {
   const [modelConfig, setModelConfig] = useState(DEFAULT_MODEL_CONFIG)
   const [providerConfigs, setProviderConfigs] = useState(loadProviderConfigs)
   const [mcpConfig, setMcpConfig] = useState(loadMcpConfig)
+  const [mcpRuntime, setMcpRuntime] = useState({ sessions: [] })
+  const [mcpRuntimeBusy, setMcpRuntimeBusy] = useState('')
+  const [mcpRuntimeError, setMcpRuntimeError] = useState('')
+  const [pendingToolApproval, setPendingToolApproval] = useState(null)
   const [authStatus, setAuthStatus] = useState({ provider: 'chatgpt', connected: false, pending: false })
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState('')
@@ -644,6 +670,7 @@ function App() {
   const requestAbortRef = useRef(null)
   const pipelineRunTimerRef = useRef(null)
   const mockRunTimersRef = useRef(new Map())
+  const toolApprovalResolverRef = useRef(null)
 
   const activeTab = workspaceTabs.find((tab) => tab.id === activeTabId) || workspaceTabs[0]
   const activeSection = activeTab?.kind || 'research'
@@ -672,15 +699,55 @@ function App() {
     window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed))
   }, [sidebarCollapsed])
 
+  useEffect(() => {
+    let cancelled = false
+    bootstrapMcpRuntime().then((status) => { if (!cancelled) setMcpRuntime(status) }).catch(() => {})
+    return () => {
+      cancelled = true
+      toolApprovalResolverRef.current?.(false)
+      toolApprovalResolverRef.current = null
+    }
+  }, [])
+
+  const requestToolApproval = useCallback(({ entry, call }) => new Promise((resolve) => {
+    toolApprovalResolverRef.current?.(false)
+    toolApprovalResolverRef.current = resolve
+    setPendingToolApproval({
+      serverName: entry.serverName || entry.source,
+      displayName: entry.displayName || entry.definition.name,
+      arguments: call.arguments || '{}',
+    })
+  }), [])
+
+  const resolveToolApproval = useCallback((approved) => {
+    const resolve = toolApprovalResolverRef.current
+    toolApprovalResolverRef.current = null
+    setPendingToolApproval(null)
+    resolve?.(approved)
+  }, [])
+
   const vaultIndex = useMemo(() => buildVaultIndex(vaultNotes), [vaultNotes])
   const retrievalIndex = useMemo(
     () => buildRetrievalIndex(vaultNotes, { chunkSize: modelConfig.chunkSize, chunkOverlap: modelConfig.chunkOverlap }),
     [vaultNotes, modelConfig.chunkSize, modelConfig.chunkOverlap],
   )
-  const researchToolRegistry = useMemo(
-    () => createResearchToolRegistry({ retrievalIndex, permissions: mcpConfig.permissions }),
-    [mcpConfig.permissions, retrievalIndex],
-  )
+  const externalMcpEntries = useMemo(() => createExternalMcpToolEntries(mcpRuntime.sessions, async ({ call, approved, serverId, toolName }) => {
+    try {
+      const payload = await callMcpTool({
+        serverId,
+        toolName,
+        arguments: parseMcpCallArguments(call),
+        confirmWrite: async () => approved,
+      })
+      return formatMcpToolResult(call, payload)
+    } catch (error) {
+      return { id: call?.id || '', name: call?.name || toolName, arguments: call?.arguments || '{}', isError: true, summary: error.message, content: JSON.stringify({ error: error.message }) }
+    }
+  }), [mcpRuntime.sessions])
+  const researchToolRegistry = useMemo(() => {
+    const builtins = retrievalIndex?.chunks?.length ? createResearchToolEntries(retrievalIndex) : []
+    return createToolRegistry([...builtins, ...externalMcpEntries], mcpConfig.permissions, { requestApproval: requestToolApproval })
+  }, [externalMcpEntries, mcpConfig.permissions, requestToolApproval, retrievalIndex])
   const staticChatModels = useMemo(() => getModelsByRole('chat'), [])
   const chatModels = useMemo(() => {
     const smartModel = staticChatModels.find((model) => model.id === 'smart-default')
@@ -1055,7 +1122,7 @@ function App() {
         if (apiProvider) {
           const providerConfig = providerConfigs[selectedModel.providerId]
           if (!providerConfig) throw new Error(`Provider configuration is missing for ${selectedModel.provider}.`)
-          const tools = selectedModel.capabilities?.tools && retrievalIndex?.chunks?.length ? researchToolRegistry.definitions : []
+          const tools = selectedModel.capabilities?.tools ? researchToolRegistry.definitions : []
           const agentOutput = await runProviderAgent({
             messages,
             tools,
@@ -1171,6 +1238,32 @@ function App() {
     setMcpConfig(normalized)
   }
 
+  const handleConnectMcpServer = async (server) => {
+    if (server.transport === 'stdio' && !window.confirm(`Launch the local MCP executable once?\n\n${server.command}\n${(server.args || []).join(' ')}`)) return
+    setMcpRuntimeBusy(server.id)
+    setMcpRuntimeError('')
+    try {
+      setMcpRuntime(await connectMcpServer(server))
+    } catch (error) {
+      setMcpRuntimeError(error.message)
+      bootstrapMcpRuntime().then(setMcpRuntime).catch(() => {})
+    } finally {
+      setMcpRuntimeBusy('')
+    }
+  }
+
+  const handleDisconnectMcpServer = async (serverId) => {
+    setMcpRuntimeBusy(serverId)
+    setMcpRuntimeError('')
+    try {
+      setMcpRuntime(await disconnectMcpServer(serverId))
+    } catch (error) {
+      setMcpRuntimeError(error.message)
+    } finally {
+      setMcpRuntimeBusy('')
+    }
+  }
+
   const handleRunPipeline = useCallback((pipelineId) => {
     if (!vaultNotes.length || pipelineRunTimerRef.current) return
     const startedAt = new Date().toISOString()
@@ -1230,7 +1323,7 @@ function App() {
           <div className="topbar-actions"><button className="icon-button mobile-settings-button" onClick={() => handleOpenSection('settings')} aria-label="Open settings"><Settings2 size={18} /></button></div>
         </header>
 
-        {activeSection === 'launcher' ? <WorkspaceLauncher onOpen={openWorkspaceTab} /> : activeSection === 'settings' ? <SettingsWorkspace authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} mcpConfig={mcpConfig} onSaveMcpConfig={handleMcpConfigSave} vaultNoteCount={vaultNotes.length} /> : activeSection === 'graph' ? <KnowledgeGraphSection key={activeTabId} index={vaultIndex} onConnectVault={handleConnectVault} /> : activeSection === 'pipelines' ? (
+        {activeSection === 'launcher' ? <WorkspaceLauncher onOpen={openWorkspaceTab} /> : activeSection === 'settings' ? <SettingsWorkspace authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} mcpConfig={mcpConfig} onSaveMcpConfig={handleMcpConfigSave} mcpRuntime={mcpRuntime} mcpRuntimeBusy={mcpRuntimeBusy} mcpRuntimeError={mcpRuntimeError} onConnectMcpServer={handleConnectMcpServer} onDisconnectMcpServer={handleDisconnectMcpServer} vaultNoteCount={vaultNotes.length} /> : activeSection === 'graph' ? <KnowledgeGraphSection key={activeTabId} index={vaultIndex} onConnectVault={handleConnectVault} /> : activeSection === 'pipelines' ? (
           <PipelinesSection vaultName={vaultName} noteCount={vaultNotes.length} runs={pipelineRuns} runningPipelineId={pipelineRunningId} onRun={handleRunPipeline} onViewRun={handleViewPipelineRun} onConnectVault={handleConnectVault} />
         ) : activeSection === 'runs' ? (
           <RunsSection runs={pipelineRuns} selectedRunId={selectedPipelineRunId} onSelectRun={setSelectedPipelineRunId} />
@@ -1249,6 +1342,7 @@ function App() {
         )}
       </main>
       {selectedNote && <NotePreview note={selectedNote} onClose={() => setSelectedNote(null)} />}
+      <ToolApprovalDialog approval={pendingToolApproval} onResolve={resolveToolApproval} />
     </div>
   )
 }

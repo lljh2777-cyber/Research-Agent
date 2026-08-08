@@ -11,7 +11,7 @@ export const DEFAULT_TOOL_PERMISSIONS = Object.freeze({
 })
 
 export const DEFAULT_MCP_CONFIG = Object.freeze({
-  schemaVersion: 1,
+  schemaVersion: 2,
   permissions: DEFAULT_TOOL_PERMISSIONS,
   servers: Object.freeze([]),
 })
@@ -35,12 +35,13 @@ function normalizeServer(server, index) {
     transport,
     endpoint: typeof server?.endpoint === 'string' ? server.endpoint.trim().slice(0, 2_000) : '',
     command: typeof server?.command === 'string' ? server.command.trim().slice(0, 500) : '',
+    args: (Array.isArray(server?.args) ? server.args : []).map((arg) => String(arg).slice(0, 2_000)).slice(0, 64),
     enabled: Boolean(server?.enabled),
   }
 }
 
 export function normalizeMcpConfig(value) {
-  if (!value || typeof value !== 'object') return { schemaVersion: 1, permissions: { ...DEFAULT_TOOL_PERMISSIONS }, servers: [] }
+  if (!value || typeof value !== 'object') return { schemaVersion: 2, permissions: { ...DEFAULT_TOOL_PERMISSIONS }, servers: [] }
   const seen = new Set()
   const servers = (Array.isArray(value.servers) ? value.servers : []).flatMap((server, index) => {
     const normalized = normalizeServer(server, index)
@@ -48,7 +49,7 @@ export function normalizeMcpConfig(value) {
     seen.add(normalized.id)
     return [normalized]
   }).slice(0, 32)
-  return { schemaVersion: 1, permissions: normalizePermissions(value.permissions), servers }
+  return { schemaVersion: 2, permissions: normalizePermissions(value.permissions), servers }
 }
 
 export function loadMcpConfig(storage = globalThis.window?.localStorage) {
