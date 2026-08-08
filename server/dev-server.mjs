@@ -1,7 +1,6 @@
 import { createServer as createViteServer } from 'vite'
 
 import { startAuthServer } from './auth-server.mjs'
-import { createProviderApiMiddleware } from './provider-api.mjs'
 
 const AUTH_HEALTH_URL = 'http://127.0.0.1:4318/api/health'
 
@@ -40,14 +39,9 @@ try {
     })
   }
 
-  viteServer = await createViteServer({
-    plugins: [{
-      name: 'bioresearch-provider-api',
-      configureServer(server) {
-        server.middlewares.use(createProviderApiMiddleware())
-      },
-    }],
-  })
+  // Provider API middleware is registered by vite.config.js so both
+  // `npm run dev` and the lightweight `npm run dev:web` expose the same API.
+  viteServer = await createViteServer()
   await viteServer.listen()
   viteServer.printUrls()
 } catch (error) {

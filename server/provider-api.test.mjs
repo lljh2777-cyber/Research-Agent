@@ -63,6 +63,15 @@ test('allows keyless OpenAI-compatible local model discovery', async () => {
   assert.equal(capturedUrl, 'http://127.0.0.1:1234/v1/models')
 })
 
+test('uses the documented DeepSeek model catalog route without adding v1', async () => {
+  let capturedUrl
+  await discoverProviderModels({ providerId: 'deepseek', endpoint: 'https://api.deepseek.com', apiKey: 'secret' }, async (url) => {
+    capturedUrl = url
+    return new Response(JSON.stringify({ data: [{ id: 'deepseek-current' }] }), { status: 200 })
+  })
+  assert.equal(capturedUrl, 'https://api.deepseek.com/models')
+})
+
 test('turns network failures into actionable provider errors', async () => {
   await assert.rejects(
     discoverProviderModels({ providerId: 'compatible', endpoint: 'http://127.0.0.1:1234/v1', apiKey: '' }, async () => {

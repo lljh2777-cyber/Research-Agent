@@ -83,15 +83,23 @@ export function saveProviderSessionKeys(keys, storage = globalThis.window?.sessi
   }
 }
 
-export async function fetchProviderModels({ providerId, endpoint, apiKey, signal }) {
-  const response = await fetch('/api/providers/models', {
+export async function fetchProviderModels({ providerId, endpoint, apiKey, signal }, fetchImpl = fetch) {
+  const response = await fetchImpl('/api/providers/models', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ providerId, endpoint, apiKey }),
     signal,
   })
-  const payload = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(payload.error || `Model discovery failed (${response.status}).`)
+  const contentType = response.headers.get('content-type') || ''
+  const payload = contentType.includes('application/json')
+    ? await response.json().catch(() => ({}))
+    : {}
+  if (!response.ok) {
+    if (response.status === 404 && !payload.error) {
+      throw new Error('Local provider adapter is unavailable. Restart Research Agent with `npm run dev`.')
+    }
+    throw new Error(payload.error || `Model discovery failed (${response.status}).`)
+  }
   return payload
 }
 

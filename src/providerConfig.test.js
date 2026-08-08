@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { createDefaultProviderConfigs, normalizeProviderConfigs, providerConfigsToModels } from './providerConfig.js'
+import { createDefaultProviderConfigs, fetchProviderModels, normalizeProviderConfigs, providerConfigsToModels } from './providerConfig.js'
 
 test('normalizes persisted provider settings without accepting stale selections', () => {
   const configs = normalizeProviderConfigs({
@@ -43,4 +43,25 @@ test('exposes only enabled, selected chat models to the application model picker
     discovered: true,
     capabilities: { chat: true },
   }])
+})
+
+test('explains when the local provider adapter route is missing', async () => {
+  await assert.rejects(
+    fetchProviderModels({ providerId: 'deepseek', endpoint: 'https://api.deepseek.com', apiKey: 'secret' }, async () => (
+      new Response('<!doctype html>', { status: 404, headers: { 'Content-Type': 'text/html' } })
+    )),
+    /Local provider adapter is unavailable.*npm run dev/,
+  )
+})
+
+test('preserves provider errors returned by the local adapter', async () => {
+  await assert.rejects(
+    fetchProviderModels({ providerId: 'deepseek', endpoint: 'https://api.deepseek.com', apiKey: 'secret' }, async () => (
+      new Response(JSON.stringify({ error: 'Provider rejected model discovery: invalid key' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    )),
+    /Provider rejected model discovery: invalid key/,
+  )
 })
