@@ -32,6 +32,11 @@ import {
 
 import { DEFAULT_MODEL_CONFIG, getModelsByRole } from './modelConfig.js'
 import {
+  DEEPSEEK_ENDPOINT_PROFILES,
+  DEEPSEEK_ENDPOINT_TYPES,
+  withDeepSeekModelProfile,
+} from '../shared/deepseek-provider.mjs'
+import {
   fetchProviderModels,
   loadProviderSessionKeys,
   PROVIDER_PRESETS,
@@ -160,6 +165,45 @@ function ProviderNavigation({ query, onQueryChange, selectedId, onSelect, config
   </aside>
 }
 
+function DeepSeekEndpointSettings({ config, onUpdate }) {
+  const profiles = Object.values(DEEPSEEK_ENDPOINT_PROFILES)
+  const updateEndpoint = (endpointType, patch) => {
+    const endpoints = {
+      ...config.endpoints,
+      [endpointType]: { ...config.endpoints[endpointType], ...patch },
+    }
+    onUpdate({
+      endpoints,
+      ...(endpointType === DEEPSEEK_ENDPOINT_TYPES.CHAT && patch.baseUrl ? { endpoint: patch.baseUrl } : {}),
+      ...(patch.enabled === false && config.defaultEndpointType === endpointType ? { defaultEndpointType: 'auto' } : {}),
+    })
+  }
+  return <section className="deepseek-endpoint-section">
+    <div className="deepseek-endpoint-heading">
+      <div><span>Request routing</span><h3>DeepSeek interfaces</h3><p>Keep one credential and choose how each model reaches DeepSeek. Auto mode respects the model endpoint matrix.</p></div>
+      <button className={config.defaultEndpointType === 'auto' ? 'active' : ''} aria-pressed={config.defaultEndpointType === 'auto'} onClick={() => onUpdate({ defaultEndpointType: 'auto' })}><Sparkles size={14} /><span><strong>Auto route</strong><small>Recommended</small></span></button>
+    </div>
+    <div className="deepseek-endpoint-list">
+      {profiles.map((profile) => {
+        const endpoint = config.endpoints[profile.id]
+        const isDefault = config.defaultEndpointType === profile.id
+        return <article className={`${endpoint.enabled ? 'enabled' : 'disabled'} ${isDefault ? 'default' : ''}`} key={profile.id}>
+          <header><span><Network size={15} /></span><div><strong>{profile.label}</strong><small>{profile.description}</small></div><i>{profile.maturity}</i></header>
+          <div className="deepseek-endpoint-controls">
+            <input value={endpoint.baseUrl} onChange={(event) => updateEndpoint(profile.id, { baseUrl: event.target.value })} aria-label={`${profile.label} base URL`} spellCheck="false" />
+            <button className="settings-secondary-button" onClick={() => updateEndpoint(profile.id, { baseUrl: profile.defaultBaseUrl })} disabled={endpoint.baseUrl === profile.defaultBaseUrl}>Reset</button>
+          </div>
+          <footer>
+            <label><input type="checkbox" checked={endpoint.enabled} onChange={(event) => updateEndpoint(profile.id, { enabled: event.target.checked })} /><span>{endpoint.enabled ? 'Enabled' : 'Disabled'}</span></label>
+            <code>/{profile.route}</code>
+            <button className={isDefault ? 'active' : ''} aria-pressed={isDefault} onClick={() => onUpdate({ defaultEndpointType: profile.id })} disabled={!endpoint.enabled}>{isDefault ? 'Default' : profile.id === DEEPSEEK_ENDPOINT_TYPES.RESPONSES ? 'Use manually' : 'Set as default'}</button>
+          </footer>
+        </article>
+      })}
+    </div>
+  </section>
+}
+
 function ProvidersPage({ selectedId, configs, onChange }) {
   const selected = API_PROVIDERS.find((provider) => provider.id === selectedId) || API_PROVIDERS[0]
   const SelectedIcon = selected.icon
@@ -199,7 +243,10 @@ function ProvidersPage({ selectedId, configs, onChange }) {
   }
 
   const handleFetchModels = async (purpose = 'fetch') => {
-    if (!config.endpoint.trim()) {
+    const discoveryEndpoint = selected.id === 'deepseek'
+      ? config.endpoints[DEEPSEEK_ENDPOINT_TYPES.CHAT].baseUrl
+      : config.endpoint
+    if (!discoveryEndpoint.trim()) {
       setFeedback({ type: 'error', message: 'Enter an API endpoint first.' })
       return
     }
@@ -210,7 +257,7 @@ function ProvidersPage({ selectedId, configs, onChange }) {
     setModelsBusy(true)
     setFeedback(null)
     try {
-      const result = await fetchProviderModels({ providerId: selected.id, endpoint: config.endpoint, apiKey })
+      const result = await fetchProviderModels({ providerId: selected.id, endpoint: discoveryEndpoint, apiKey })
       const manualModels = config.models.filter((model) => model.manual && !result.models.some((remote) => remote.id === model.id))
       const nextModels = [...result.models, ...manualModels]
       const nextIds = new Set(nextModels.map((model) => model.id))
@@ -255,8 +302,9 @@ function ProvidersPage({ selectedId, configs, onChange }) {
       setFeedback({ type: 'error', message: `${id} is already in this provider.` })
       return
     }
+    const manualModel = { id, name: id, ownedBy: selected.id, kind: 'chat', manual: true, capabilities: { chat: true } }
     updateConfig({
-      models: [...config.models, { id, name: id, ownedBy: selected.id, kind: 'chat', manual: true }],
+      models: [...config.models, selected.id === 'deepseek' ? withDeepSeekModelProfile(manualModel) : manualModel],
       selectedModelIds: [...config.selectedModelIds, id],
       enabled: true,
     })
@@ -275,9 +323,13 @@ function ProvidersPage({ selectedId, configs, onChange }) {
     <section className="provider-config-section">
       <div className="provider-field-heading"><div><KeyRound size={16} /><span><strong>API credentials</strong><small>Kept only for this browser session in the web milestone.</small></span></div>{selected.keyWebsite ? <a className="settings-text-link" href={selected.keyWebsite} target="_blank" rel="noreferrer">Get API key</a> : <span className="provider-field-status">Optional</span>}</div>
       <div className="provider-input-row provider-key-row"><div className="provider-secret-input"><input type={showApiKey ? 'text' : 'password'} value={apiKey} onChange={(event) => updateApiKey(event.target.value)} placeholder={selected.requiresKey ? 'Enter API key' : 'Optional for local servers'} autoComplete="off" aria-label="API key" /><button onClick={() => setShowApiKey((current) => !current)} aria-label={showApiKey ? 'Hide API key' : 'Show API key'}>{showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}</button></div><button className="settings-secondary-button" onClick={() => handleFetchModels('verify')} disabled={modelsBusy || (selected.requiresKey && !apiKey.trim())}>{modelsBusy ? <RefreshCw className="spin" size={14} /> : <ShieldCheck size={14} />}Verify</button></div>
-      <div className="provider-field-heading"><div><Cloud size={16} /><span><strong>API endpoint</strong><small>Override the default endpoint for gateways or compatible services.</small></span></div><span className="provider-field-status">{config.endpoint === selected.endpoint ? 'Default' : 'Custom'}</span></div>
-      <div className="provider-input-row"><input value={config.endpoint} onChange={(event) => updateConfig({ endpoint: event.target.value })} aria-label="API endpoint" spellCheck="false" /><button className="settings-secondary-button" onClick={() => updateConfig({ endpoint: selected.endpoint })} disabled={config.endpoint === selected.endpoint}>Reset</button></div>
+      {selected.id !== 'deepseek' ? <>
+        <div className="provider-field-heading"><div><Cloud size={16} /><span><strong>API endpoint</strong><small>Override the default endpoint for gateways or compatible services.</small></span></div><span className="provider-field-status">{config.endpoint === selected.endpoint ? 'Default' : 'Custom'}</span></div>
+        <div className="provider-input-row"><input value={config.endpoint} onChange={(event) => updateConfig({ endpoint: event.target.value })} aria-label="API endpoint" spellCheck="false" /><button className="settings-secondary-button" onClick={() => updateConfig({ endpoint: selected.endpoint })} disabled={config.endpoint === selected.endpoint}>Reset</button></div>
+      </> : <div className="provider-field-heading deepseek-shared-key-note"><div><Cloud size={16} /><span><strong>Shared credential</strong><small>The same DeepSeek API key is used across all enabled request interfaces below.</small></span></div><span className="provider-field-status">3 profiles</span></div>}
     </section>
+
+    {selected.id === 'deepseek' && <DeepSeekEndpointSettings config={config} onUpdate={updateConfig} />}
 
     {feedback && <div className={`provider-feedback ${feedback.type}`} role={feedback.type === 'error' ? 'alert' : 'status'}>{feedback.type === 'success' ? <CheckCircle2 size={15} /> : <Info size={15} />}<span>{feedback.message}</span></div>}
 
@@ -289,7 +341,8 @@ function ProvidersPage({ selectedId, configs, onChange }) {
         <div className="provider-model-list" aria-label={`${selected.name} model list`}>
           {filteredModels.map((model) => {
             const capabilityLabels = Object.entries(model.capabilities || {}).filter(([key, enabled]) => enabled && !['chat', 'embeddings'].includes(key)).map(([key]) => key === 'webSearch' ? 'web' : key)
-            return <div className={selectedIds.has(model.id) ? 'selected' : ''} key={model.id}><span className={`provider-model-kind ${model.kind}`}>{model.kind}</span><div><strong>{model.name}</strong><small>{model.id}{model.manual ? ' · manual' : ''}{capabilityLabels.length ? ` · ${capabilityLabels.join(' · ')}` : ''}</small></div><button onClick={() => toggleModel(model.id)} disabled={model.kind !== 'chat'}>{selectedIds.has(model.id) ? 'Remove' : model.kind === 'chat' ? 'Add' : 'Not used yet'}</button></div>
+            const endpointLabels = (model.endpointTypes || []).map((endpointType) => DEEPSEEK_ENDPOINT_PROFILES[endpointType]?.shortLabel).filter(Boolean)
+            return <div className={selectedIds.has(model.id) ? 'selected' : ''} key={model.id}><span className={`provider-model-kind ${model.kind}`}>{model.kind}</span><div><strong>{model.name}</strong><small>{model.id}{model.manual ? ' · manual' : ''}{capabilityLabels.length ? ` · ${capabilityLabels.join(' · ')}` : ''}</small>{endpointLabels.length > 0 && <span className="provider-model-endpoints">{endpointLabels.map((label) => <i key={label}>{label}</i>)}</span>}</div><button onClick={() => toggleModel(model.id)} disabled={model.kind !== 'chat'}>{selectedIds.has(model.id) ? 'Remove' : model.kind === 'chat' ? 'Add' : 'Not used yet'}</button></div>
           })}
           {!filteredModels.length && <div className="provider-model-no-results">No models match “{modelQuery}”.</div>}
         </div>

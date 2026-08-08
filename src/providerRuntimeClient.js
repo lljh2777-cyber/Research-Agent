@@ -9,11 +9,11 @@ function parseEventBlock(block) {
   }
 }
 
-export async function streamProviderResponse({ providerId, endpoint, apiKey, model, messages, signal, onDelta, onEvent }) {
+export async function streamProviderResponse({ providerId, endpoint, endpointType, apiKey, model, messages, signal, onDelta, onEvent }) {
   const response = await fetch('/api/providers/responses/stream', {
     method: 'POST',
     headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ providerId, endpoint, apiKey, model, messages }),
+    body: JSON.stringify({ providerId, endpoint, endpointType, apiKey, model, messages }),
     signal,
   })
   if (!response.ok) {

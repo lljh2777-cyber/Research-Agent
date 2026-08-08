@@ -65,3 +65,39 @@ test('preserves provider errors returned by the local adapter', async () => {
     /Provider rejected model discovery: invalid key/,
   )
 })
+
+test('migrates legacy DeepSeek settings and routes selected models through the configured interface', () => {
+  const configs = normalizeProviderConfigs({
+    deepseek: {
+      endpoint: 'https://gateway.example/deepseek',
+      enabled: true,
+      models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', kind: 'chat' }],
+      selectedModelIds: ['deepseek-v4-pro'],
+    },
+  })
+  assert.equal(configs.deepseek.endpoints['openai-chat-completions'].baseUrl, 'https://gateway.example/deepseek')
+  assert.equal(configs.deepseek.endpoints['openai-responses'].enabled, false)
+
+  const [model] = providerConfigsToModels(configs)
+  assert.equal(model.endpointType, 'openai-chat-completions')
+  assert.equal(model.endpoint, 'https://gateway.example/deepseek')
+  assert.deepEqual(model.endpointTypes, ['openai-chat-completions', 'anthropic-messages'])
+})
+
+test('allows an explicit DeepSeek Responses compatibility endpoint without selecting it automatically', () => {
+  const configs = createDefaultProviderConfigs()
+  configs.deepseek = {
+    ...configs.deepseek,
+    enabled: true,
+    defaultEndpointType: 'openai-responses',
+    endpoints: {
+      ...configs.deepseek.endpoints,
+      'openai-responses': { baseUrl: 'https://gateway.example/v1', enabled: true },
+    },
+    models: [{ id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', kind: 'chat' }],
+    selectedModelIds: ['deepseek-v4-flash'],
+  }
+  const [model] = providerConfigsToModels(configs)
+  assert.equal(model.endpointType, 'openai-responses')
+  assert.equal(model.endpoint, 'https://gateway.example/v1')
+})

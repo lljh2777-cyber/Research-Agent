@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
+import { DEEPSEEK_ENDPOINT_TYPES, getDeepSeekModelProfile, isDeepSeekEndpointType } from '../shared/deepseek-provider.mjs'
+
 const DEFAULT_MAX_OUTPUT_TOKENS = 4096
 const REQUEST_TIMEOUT_MS = 120_000
 
@@ -36,14 +38,15 @@ export function appendProviderRoute(baseUrl, route) {
   return `${baseUrl}/${normalizedRoute}`
 }
 
-function providerHeaders(providerId, apiKey = '') {
+function providerHeaders(providerId, protocol, apiKey = '') {
   const provider = PROVIDER_REGISTRY[providerId]
   if (!provider) throw runtimeError(`Unsupported provider: ${providerId}`)
   const key = String(apiKey || '').trim()
   if (provider.auth !== 'optional-bearer' && !key) throw runtimeError('Enter an API key before using this provider.')
   const headers = { Accept: 'text/event-stream', 'Content-Type': 'application/json' }
-  if (provider.auth === 'bearer' || (provider.auth === 'optional-bearer' && key)) headers.Authorization = `Bearer ${key}`
-  if (provider.auth === 'anthropic') {
+  const auth = providerId === 'deepseek' && protocol === 'anthropic-messages' ? 'anthropic' : provider.auth
+  if (auth === 'bearer' || (auth === 'optional-bearer' && key)) headers.Authorization = `Bearer ${key}`
+  if (auth === 'anthropic') {
     headers['x-api-key'] = key
     headers['anthropic-version'] = '2023-06-01'
   }
@@ -75,6 +78,9 @@ function openAiRequest(endpoint, model, messages, options) {
 }
 
 function compatibleRequest(endpoint, model, messages, options, providerId) {
+  const reasoningEffort = options.reasoningEffort === 'xhigh' ? 'max'
+    : ['low', 'medium'].includes(options.reasoningEffort) ? 'high'
+      : options.reasoningEffort
   return {
     url: appendProviderRoute(endpoint, 'chat/completions'),
     body: {
@@ -84,6 +90,8 @@ function compatibleRequest(endpoint, model, messages, options, providerId) {
       ...(providerId === 'compatible' ? {} : { stream_options: { include_usage: true } }),
       ...(Number.isFinite(options.temperature) ? { temperature: options.temperature } : {}),
       ...(options.maxOutputTokens ? { max_tokens: options.maxOutputTokens } : {}),
+      ...(providerId === 'deepseek' && options.thinkingEnabled === false ? { thinking: { type: 'disabled' } } : {}),
+      ...(providerId === 'deepseek' && reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
     },
   }
 }
@@ -123,21 +131,29 @@ function geminiRequest(endpoint, model, messages, options) {
   }
 }
 
-export function buildProviderChatRequest({ providerId, endpoint, apiKey, model, messages, options = {} }) {
+export function buildProviderChatRequest({ providerId, endpoint, endpointType, apiKey, model, messages, options = {} }) {
   const provider = PROVIDER_REGISTRY[providerId]
   if (!provider) throw runtimeError(`Unsupported provider: ${providerId}`)
   const cleanEndpoint = cleanProviderBaseUrl(endpoint)
   const cleanModel = String(model || '').trim()
   if (!cleanModel) throw runtimeError('Choose a model before starting the request.')
   const cleanMessages = normalizedMessages(messages)
-  const request = provider.protocol === 'openai-responses'
+  const protocol = providerId === 'deepseek'
+    ? (isDeepSeekEndpointType(endpointType) ? endpointType : DEEPSEEK_ENDPOINT_TYPES.CHAT)
+    : provider.protocol
+  if (providerId === 'deepseek'
+    && protocol !== DEEPSEEK_ENDPOINT_TYPES.RESPONSES
+    && !getDeepSeekModelProfile(cleanModel).endpointTypes.includes(protocol)) {
+    throw runtimeError(`${cleanModel} is not available through the selected DeepSeek request interface.`)
+  }
+  const request = protocol === 'openai-responses'
     ? openAiRequest(cleanEndpoint, cleanModel, cleanMessages, options)
-    : provider.protocol === 'anthropic-messages'
+    : protocol === 'anthropic-messages'
       ? anthropicRequest(cleanEndpoint, cleanModel, cleanMessages, options)
-      : provider.protocol === 'gemini-generate-content'
+      : protocol === 'gemini-generate-content'
         ? geminiRequest(cleanEndpoint, cleanModel, cleanMessages, options)
         : compatibleRequest(cleanEndpoint, cleanModel, cleanMessages, options, providerId)
-  return { ...request, headers: providerHeaders(providerId, apiKey), protocol: provider.protocol }
+  return { ...request, headers: providerHeaders(providerId, protocol, apiKey), protocol }
 }
 
 export async function* parseServerSentEvents(body) {
@@ -222,7 +238,7 @@ async function providerResponseError(response) {
 export async function* streamProviderChat(input, fetchImpl = fetch) {
   const request = buildProviderChatRequest(input)
   const runId = randomUUID()
-  yield { type: 'run.started', runId, providerId: input.providerId, model: input.model }
+  yield { type: 'run.started', runId, providerId: input.providerId, model: input.model, endpointType: request.protocol }
   let response
   try {
     response = await fetchImpl(request.url, {
@@ -253,5 +269,5 @@ export async function* streamProviderChat(input, fetchImpl = fetch) {
       yield { ...event, runId }
     }
   }
-  yield { type: 'run.completed', runId, providerId: input.providerId, model: input.model, responseId, text, reasoning, usage }
+  yield { type: 'run.completed', runId, providerId: input.providerId, model: input.model, endpointType: request.protocol, responseId, text, reasoning, usage }
 }

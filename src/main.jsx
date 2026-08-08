@@ -1028,7 +1028,8 @@ function App() {
           if (!providerConfig) throw new Error(`Provider configuration is missing for ${selectedModel.provider}.`)
           result = await streamProviderResponse({
             providerId: selectedModel.providerId,
-            endpoint: providerConfig.endpoint,
+            endpoint: selectedModel.endpoint || providerConfig.endpoint,
+            endpointType: selectedModel.endpointType,
             apiKey: loadProviderSessionKeys()[selectedModel.providerId] || '',
             model: selectedModel.apiModelId,
             messages,

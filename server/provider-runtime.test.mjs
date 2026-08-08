@@ -62,6 +62,38 @@ test('normalizes OpenAI-compatible streaming into runtime lifecycle events', asy
   assert.deepEqual(events.at(-1).usage, { total_tokens: 12 })
 })
 
+test('builds all three DeepSeek request profiles with protocol-specific authentication', () => {
+  const native = buildProviderChatRequest({
+    providerId: 'deepseek', endpoint: 'https://api.deepseek.com', endpointType: 'openai-chat-completions', apiKey: 'secret', model: 'deepseek-v4-pro', messages,
+    options: { reasoningEffort: 'xhigh', thinkingEnabled: false },
+  })
+  assert.equal(native.url, 'https://api.deepseek.com/chat/completions')
+  assert.equal(native.headers.Authorization, 'Bearer secret')
+  assert.equal(native.body.reasoning_effort, 'max')
+  assert.deepEqual(native.body.thinking, { type: 'disabled' })
+
+  const responses = buildProviderChatRequest({
+    providerId: 'deepseek', endpoint: 'https://gateway.example/v1', endpointType: 'openai-responses', apiKey: 'secret', model: 'deepseek-v4-flash', messages,
+  })
+  assert.equal(responses.url, 'https://gateway.example/v1/responses')
+  assert.equal(responses.headers.Authorization, 'Bearer secret')
+  assert.deepEqual(responses.body.input, messages)
+
+  const anthropic = buildProviderChatRequest({
+    providerId: 'deepseek', endpoint: 'https://api.deepseek.com/anthropic', endpointType: 'anthropic-messages', apiKey: 'secret', model: 'deepseek-v4-pro', messages,
+  })
+  assert.equal(anthropic.url, 'https://api.deepseek.com/anthropic/v1/messages')
+  assert.equal(anthropic.headers['x-api-key'], 'secret')
+  assert.equal('Authorization' in anthropic.headers, false)
+  assert.equal(anthropic.body.system, 'Use vault evidence.')
+})
+
+test('rejects unsupported automatic DeepSeek model and interface combinations', () => {
+  assert.throws(() => buildProviderChatRequest({
+    providerId: 'deepseek', endpoint: 'https://api.deepseek.com/anthropic', endpointType: 'anthropic-messages', apiKey: 'secret', model: 'legacy-model', messages,
+  }), /not available through the selected DeepSeek request interface/)
+})
+
 test('normalizes OpenAI Responses typed events', async () => {
   const events = []
   for await (const event of streamProviderChat({

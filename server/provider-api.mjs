@@ -1,4 +1,5 @@
 import { appendProviderRoute, cleanProviderBaseUrl, streamProviderChat } from './provider-runtime.mjs'
+import { withDeepSeekModelProfile } from '../shared/deepseek-provider.mjs'
 
 const PROVIDER_MODEL_ROUTES = {
   openai: { route: 'models', auth: 'bearer' },
@@ -82,7 +83,7 @@ export function normalizeProviderModels(providerId, payload) {
     if (Array.isArray(record.supportedGenerationMethods)) {
       model.methods = record.supportedGenerationMethods
     }
-    unique.set(id, model)
+    unique.set(id, providerId === 'deepseek' ? withDeepSeekModelProfile(model) : model)
   }
   return [...unique.values()].sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true }))
 }

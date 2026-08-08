@@ -72,6 +72,17 @@ test('uses the documented DeepSeek model catalog route without adding v1', async
   assert.equal(capturedUrl, 'https://api.deepseek.com/models')
 })
 
+test('adds the documented DeepSeek endpoint matrix to discovered models', () => {
+  const [model] = normalizeProviderModels('deepseek', {
+    data: [{ id: 'deepseek-v4-flash', owned_by: 'deepseek' }],
+  })
+  assert.deepEqual(model.endpointTypes, ['openai-chat-completions', 'anthropic-messages'])
+  assert.equal(model.preferredEndpointType, 'openai-chat-completions')
+  assert.equal(model.capabilities.reasoning, true)
+  assert.equal(model.capabilities.tools, true)
+  assert.equal(model.capabilities.webSearch, false)
+})
+
 test('turns network failures into actionable provider errors', async () => {
   await assert.rejects(
     discoverProviderModels({ providerId: 'compatible', endpoint: 'http://127.0.0.1:1234/v1', apiKey: '' }, async () => {

@@ -8,7 +8,7 @@
     "dev": "node server/dev-server.mjs",
     "dev:web": "vite",
     "build": "vite build",
-    "test": "node --test server/auth-server.test.mjs server/provider-api.test.mjs server/provider-runtime.test.mjs src/authClient.test.js src/knowledgeGraph.test.js src/knowledgeWorkspace.test.js src/modelConfig.test.js src/pipelineEngine.test.js src/providerConfig.test.js src/retrieval.test.js src/workspaceTabs.test.js",
+    "test": "node --test shared/deepseek-provider.test.mjs server/auth-server.test.mjs server/provider-api.test.mjs server/provider-runtime.test.mjs src/authClient.test.js src/knowledgeGraph.test.js src/knowledgeWorkspace.test.js src/modelConfig.test.js src/pipelineEngine.test.js src/providerConfig.test.js src/retrieval.test.js src/workspaceTabs.test.js",
     "test:auth": "node --test server/auth-server.test.mjs",
     "test:retrieval": "node --test src/retrieval.test.js",
     "preview": "vite preview",

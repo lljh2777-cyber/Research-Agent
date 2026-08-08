@@ -1,8 +1,16 @@
+import {
+  createDeepSeekEndpoints,
+  isDeepSeekEndpointType,
+  normalizeDeepSeekEndpoints,
+  resolveDeepSeekEndpoint,
+  withDeepSeekModelProfile,
+} from '../shared/deepseek-provider.mjs'
+
 export const PROVIDER_PRESETS = [
   { id: 'openai', name: 'OpenAI', protocol: 'Responses / Chat Completions', endpoint: 'https://api.openai.com/v1', tone: 'cyan', keyWebsite: 'https://platform.openai.com/api-keys', requiresKey: true },
   { id: 'anthropic', name: 'Anthropic', protocol: 'Anthropic Messages', endpoint: 'https://api.anthropic.com', tone: 'amber', keyWebsite: 'https://console.anthropic.com/settings/keys', requiresKey: true },
   { id: 'gemini', name: 'Google Gemini', protocol: 'Generative Language', endpoint: 'https://generativelanguage.googleapis.com', tone: 'violet', keyWebsite: 'https://aistudio.google.com/app/apikey', requiresKey: true },
-  { id: 'deepseek', name: 'DeepSeek', protocol: 'OpenAI compatible', endpoint: 'https://api.deepseek.com', tone: 'blue', keyWebsite: 'https://platform.deepseek.com/api_keys', requiresKey: true },
+  { id: 'deepseek', name: 'DeepSeek', protocol: 'Native / compatibility endpoints', endpoint: 'https://api.deepseek.com', tone: 'blue', keyWebsite: 'https://platform.deepseek.com/api_keys', requiresKey: true },
   { id: 'openrouter', name: 'OpenRouter', protocol: 'Multi-provider gateway', endpoint: 'https://openrouter.ai/api/v1', tone: 'mint', keyWebsite: 'https://openrouter.ai/settings/keys', requiresKey: true },
   { id: 'compatible', name: 'OpenAI Compatible', protocol: 'Custom endpoint', endpoint: 'http://127.0.0.1:1234/v1', tone: 'slate', keyWebsite: '', requiresKey: false },
 ]
@@ -11,13 +19,20 @@ const CONFIG_STORAGE_KEY = 'bioresearch-os:provider-configs:v1'
 const KEY_STORAGE_KEY = 'bioresearch-os:provider-session-keys:v1'
 
 export function createDefaultProviderConfigs() {
-  return Object.fromEntries(PROVIDER_PRESETS.map((provider) => [provider.id, {
-    endpoint: provider.endpoint,
-    enabled: false,
-    models: [],
-    selectedModelIds: [],
-    lastFetchedAt: null,
-  }]))
+  return Object.fromEntries(PROVIDER_PRESETS.map((provider) => {
+    const config = {
+      endpoint: provider.endpoint,
+      enabled: false,
+      models: [],
+      selectedModelIds: [],
+      lastFetchedAt: null,
+    }
+    if (provider.id === 'deepseek') {
+      config.defaultEndpointType = 'auto'
+      config.endpoints = createDeepSeekEndpoints()
+    }
+    return [provider.id, config]
+  }))
 }
 
 export function normalizeProviderConfigs(value) {
@@ -26,7 +41,7 @@ export function normalizeProviderConfigs(value) {
   for (const provider of PROVIDER_PRESETS) {
     const saved = value[provider.id]
     if (!saved || typeof saved !== 'object') continue
-    const models = Array.isArray(saved.models)
+    let models = Array.isArray(saved.models)
       ? saved.models.filter((model) => model && typeof model.id === 'string').map((model) => ({
         id: model.id,
         name: model.name || model.id,
@@ -34,18 +49,29 @@ export function normalizeProviderConfigs(value) {
         kind: model.kind || 'chat',
         capabilities: model.capabilities && typeof model.capabilities === 'object' ? model.capabilities : { chat: (model.kind || 'chat') === 'chat' },
         ...(Array.isArray(model.methods) ? { methods: model.methods } : {}),
+        ...(Array.isArray(model.endpointTypes) ? { endpointTypes: model.endpointTypes.filter(isDeepSeekEndpointType) } : {}),
+        ...(isDeepSeekEndpointType(model.preferredEndpointType) ? { preferredEndpointType: model.preferredEndpointType } : {}),
         ...(model.manual ? { manual: true } : {}),
       }))
       : []
+    if (provider.id === 'deepseek') models = models.map(withDeepSeekModelProfile)
     const validIds = new Set(models.map((model) => model.id))
     const selectedModelIds = Array.isArray(saved.selectedModelIds) ? saved.selectedModelIds.filter((id) => validIds.has(id)) : []
-    defaults[provider.id] = {
+    const normalized = {
       endpoint: typeof saved.endpoint === 'string' && saved.endpoint.trim() ? saved.endpoint : provider.endpoint,
       enabled: Boolean(saved.enabled && selectedModelIds.length),
       models,
       selectedModelIds,
       lastFetchedAt: typeof saved.lastFetchedAt === 'string' ? saved.lastFetchedAt : null,
     }
+    if (provider.id === 'deepseek') {
+      normalized.defaultEndpointType = saved.defaultEndpointType === 'auto' || isDeepSeekEndpointType(saved.defaultEndpointType)
+        ? saved.defaultEndpointType
+        : 'auto'
+      normalized.endpoints = normalizeDeepSeekEndpoints(saved.endpoints, normalized.endpoint)
+      normalized.endpoint = normalized.endpoints['openai-chat-completions'].baseUrl
+    }
+    defaults[provider.id] = normalized
   }
   return defaults
 }
@@ -112,6 +138,8 @@ export function providerConfigsToModels(configs) {
     const selected = new Set(config.selectedModelIds)
     for (const model of config.models) {
       if (!selected.has(model.id) || model.kind !== 'chat') continue
+      const resolvedEndpoint = providerId === 'deepseek' ? resolveDeepSeekEndpoint(config, model) : null
+      if (providerId === 'deepseek' && !resolvedEndpoint) continue
       models.push({
         id: `api:${providerId}:${model.id}`,
         apiModelId: model.id,
@@ -124,6 +152,13 @@ export function providerConfigsToModels(configs) {
         ready: true,
         discovered: true,
         capabilities: model.capabilities || { chat: true },
+        ...(providerId === 'deepseek' ? {
+          endpoint: resolvedEndpoint.endpoint,
+          endpointType: resolvedEndpoint.endpointType,
+          endpointAutomatic: resolvedEndpoint.automatic,
+          endpointFellBack: resolvedEndpoint.fellBack,
+          endpointTypes: model.endpointTypes,
+        } : {}),
       })
     }
   }
