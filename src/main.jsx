@@ -46,8 +46,9 @@ import { loadProviderConfigs, loadProviderSessionKeys, providerConfigsToModels, 
 import { getDeepSeekRuntimeOptions } from '../shared/deepseek-provider.mjs'
 import { streamProviderResponse } from './providerRuntimeClient.js'
 import { buildConversationContext, compactTokenCount, providerUsageSummary } from './conversationContext.js'
-import { executeResearchTool, RESEARCH_TOOL_DEFINITIONS } from './researchTools.js'
 import { runProviderAgent } from './providerAgent.js'
+import { loadMcpConfig, saveMcpConfig } from './mcpConfig.js'
+import { createResearchToolRegistry } from './toolRegistry.js'
 import { executePipeline, loadPipelineRuns, savePipelineRuns } from './pipelineEngine.js'
 import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources, retrieveEvidence } from './retrieval.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
@@ -630,6 +631,7 @@ function App() {
   const [selectedNote, setSelectedNote] = useState(null)
   const [modelConfig, setModelConfig] = useState(DEFAULT_MODEL_CONFIG)
   const [providerConfigs, setProviderConfigs] = useState(loadProviderConfigs)
+  const [mcpConfig, setMcpConfig] = useState(loadMcpConfig)
   const [authStatus, setAuthStatus] = useState({ provider: 'chatgpt', connected: false, pending: false })
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState('')
@@ -674,6 +676,10 @@ function App() {
   const retrievalIndex = useMemo(
     () => buildRetrievalIndex(vaultNotes, { chunkSize: modelConfig.chunkSize, chunkOverlap: modelConfig.chunkOverlap }),
     [vaultNotes, modelConfig.chunkSize, modelConfig.chunkOverlap],
+  )
+  const researchToolRegistry = useMemo(
+    () => createResearchToolRegistry({ retrievalIndex, permissions: mcpConfig.permissions }),
+    [mcpConfig.permissions, retrievalIndex],
   )
   const staticChatModels = useMemo(() => getModelsByRole('chat'), [])
   const chatModels = useMemo(() => {
@@ -1049,7 +1055,7 @@ function App() {
         if (apiProvider) {
           const providerConfig = providerConfigs[selectedModel.providerId]
           if (!providerConfig) throw new Error(`Provider configuration is missing for ${selectedModel.provider}.`)
-          const tools = selectedModel.capabilities?.tools && retrievalIndex?.chunks?.length ? RESEARCH_TOOL_DEFINITIONS : []
+          const tools = selectedModel.capabilities?.tools && retrievalIndex?.chunks?.length ? researchToolRegistry.definitions : []
           const agentOutput = await runProviderAgent({
             messages,
             tools,
@@ -1066,7 +1072,7 @@ function App() {
               onDelta,
               onReasoningDelta,
             }),
-            executeTool: (call) => executeResearchTool(call, { retrievalIndex }),
+            executeTool: (call) => researchToolRegistry.execute(call),
             onToolRound: (_round, trace) => {
               toolTrace.splice(0, toolTrace.length, ...trace)
               streamedText = ''
@@ -1160,6 +1166,11 @@ function App() {
     saveProviderConfigs(nextConfigs)
   }
 
+  const handleMcpConfigSave = (nextConfig) => {
+    const normalized = saveMcpConfig(nextConfig)
+    setMcpConfig(normalized)
+  }
+
   const handleRunPipeline = useCallback((pipelineId) => {
     if (!vaultNotes.length || pipelineRunTimerRef.current) return
     const startedAt = new Date().toISOString()
@@ -1219,7 +1230,7 @@ function App() {
           <div className="topbar-actions"><button className="icon-button mobile-settings-button" onClick={() => handleOpenSection('settings')} aria-label="Open settings"><Settings2 size={18} /></button></div>
         </header>
 
-        {activeSection === 'launcher' ? <WorkspaceLauncher onOpen={openWorkspaceTab} /> : activeSection === 'settings' ? <SettingsWorkspace authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} /> : activeSection === 'graph' ? <KnowledgeGraphSection key={activeTabId} index={vaultIndex} onConnectVault={handleConnectVault} /> : activeSection === 'pipelines' ? (
+        {activeSection === 'launcher' ? <WorkspaceLauncher onOpen={openWorkspaceTab} /> : activeSection === 'settings' ? <SettingsWorkspace authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} mcpConfig={mcpConfig} onSaveMcpConfig={handleMcpConfigSave} vaultNoteCount={vaultNotes.length} /> : activeSection === 'graph' ? <KnowledgeGraphSection key={activeTabId} index={vaultIndex} onConnectVault={handleConnectVault} /> : activeSection === 'pipelines' ? (
           <PipelinesSection vaultName={vaultName} noteCount={vaultNotes.length} runs={pipelineRuns} runningPipelineId={pipelineRunningId} onRun={handleRunPipeline} onViewRun={handleViewPipelineRun} onConnectVault={handleConnectVault} />
         ) : activeSection === 'runs' ? (
           <RunsSection runs={pipelineRuns} selectedRunId={selectedPipelineRunId} onSelectRun={setSelectedPipelineRunId} />
