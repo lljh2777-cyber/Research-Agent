@@ -41,6 +41,7 @@ import { PipelinesSection, RunsSection } from './PipelineWorkspace.jsx'
 import SettingsWorkspace from './SettingsWorkspace.jsx'
 import { loadLocalVault } from './localVault.js'
 import { chatgptCatalogToModels, DEFAULT_MODEL_CONFIG, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
+import { loadProviderConfigs, providerConfigsToModels, saveProviderConfigs } from './providerConfig.js'
 import { executePipeline, loadPipelineRuns, savePipelineRuns } from './pipelineEngine.js'
 import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources, retrieveEvidence } from './retrieval.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
@@ -490,6 +491,7 @@ function App() {
   const [syncState, setSyncState] = useState('idle')
   const [selectedNote, setSelectedNote] = useState(null)
   const [modelConfig, setModelConfig] = useState(DEFAULT_MODEL_CONFIG)
+  const [providerConfigs, setProviderConfigs] = useState(loadProviderConfigs)
   const [authStatus, setAuthStatus] = useState({ provider: 'chatgpt', connected: false, pending: false })
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState('')
@@ -519,8 +521,9 @@ function App() {
     const smartModel = staticChatModels.find((model) => model.id === 'smart-default')
     const futureModels = staticChatModels.filter((model) => model.id !== 'smart-default')
     const discoveredModels = chatgptCatalogToModels(modelCatalog.models)
-    return [smartModel, ...discoveredModels, ...futureModels].filter(Boolean)
-  }, [modelCatalog.models, staticChatModels])
+    const apiModels = providerConfigsToModels(providerConfigs)
+    return [smartModel, ...discoveredModels, ...apiModels, ...futureModels].filter(Boolean)
+  }, [modelCatalog.models, providerConfigs, staticChatModels])
   const selectedModel = useMemo(() => getModelById(modelConfig.chatModelId, chatModels), [chatModels, modelConfig.chatModelId])
   const rerankModel = useMemo(() => MODEL_REGISTRY.find((model) => model.id === modelConfig.rerankModelId), [modelConfig.rerankModelId])
   const notesById = useMemo(() => new Map(vaultNotes.map((note) => [note.id, note])), [vaultNotes])
@@ -884,6 +887,11 @@ function App() {
     saveModelConfig(nextConfig)
   }
 
+  const handleProviderConfigsSave = (nextConfigs) => {
+    setProviderConfigs(nextConfigs)
+    saveProviderConfigs(nextConfigs)
+  }
+
   const handleRunPipeline = useCallback((pipelineId) => {
     if (!vaultNotes.length || pipelineRunTimerRef.current) return
     const startedAt = new Date().toISOString()
@@ -956,7 +964,7 @@ function App() {
           <div className="topbar-actions"><button className="new-chat" onClick={handleNewChat}>New chat <Plus size={17} /></button><button className="icon-button mobile-settings-button" onClick={() => setActiveSection('settings')} aria-label="Open settings"><Settings2 size={18} /></button><button className="icon-button" aria-label="More options"><MoreHorizontal size={19} /></button></div>
         </header>
 
-        {activeSection === 'settings' ? <SettingsWorkspace authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} /> : activeSection === 'graph' ? <KnowledgeGraphSection index={vaultIndex} onConnectVault={handleConnectVault} /> : activeSection === 'pipelines' ? (
+        {activeSection === 'settings' ? <SettingsWorkspace authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} /> : activeSection === 'graph' ? <KnowledgeGraphSection index={vaultIndex} onConnectVault={handleConnectVault} /> : activeSection === 'pipelines' ? (
           <PipelinesSection vaultName={vaultName} noteCount={vaultNotes.length} runs={pipelineRuns} runningPipelineId={pipelineRunningId} onRun={handleRunPipeline} onViewRun={handleViewPipelineRun} onConnectVault={handleConnectVault} />
         ) : activeSection === 'runs' ? (
           <RunsSection runs={pipelineRuns} selectedRunId={selectedPipelineRunId} onSelectRun={setSelectedPipelineRunId} />

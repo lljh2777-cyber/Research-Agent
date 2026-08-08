@@ -55,6 +55,59 @@ final result: passed
 
 ---
 
+# Functional Provider Configuration and Model Discovery QA
+
+- Source visual truth: `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-a58d7257-efe0-4fea-816b-6bb721a7c5b3.png`
+- Implementation screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-agent-provider-settings.png`
+- Side-by-side comparison: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\provider-settings-comparison.png`
+- Source pixels: 2470 x 1464; implementation pixels and CSS viewport: 1280 x 720 at device scale factor 1
+- Density normalization: both artifacts were scaled into adjacent 1280 x 720 comparison regions; the implementation's persistent app sidebar and dark theme are intentional product-shell constraints
+- State: Settings → API Providers → OpenAI Compatible; one manually-added chat model; provider enabled; unreachable-local-endpoint error visible
+
+## Full-view comparison evidence
+
+The source and final implementation were opened together in a single comparison image. Both use continuous settings navigation, provider navigation, and detail columns. Provider identity, enablement, credential and endpoint controls, model management, and fetch actions are top-aligned without centered-page gutters. At the tested viewport, `body.scrollWidth` equals 1280 px and both the settings workspace and detail content report equal client and scroll widths.
+
+## Focused region comparison evidence
+
+- Credentials: the formerly disabled placeholder is now a functional masked field with show/hide, provider-specific key link, and connection verification.
+- Model discovery: the detail area supports live fetching, loading, success/error feedback, search, add/remove, bulk add, and manual model entry.
+- Provider enablement: adding the first chat model enables the provider automatically; the header switch can then remove or restore the provider in model selectors.
+- Downstream model selection: an enabled `lab/research-model` record was verified in Settings → 默认模型 under Answer and synthesis.
+
+## Required fidelity surfaces
+
+- Fonts and typography: existing Manrope/DM Mono hierarchy remains consistent; dense helper copy and status metadata match the reference's compact settings rhythm.
+- Spacing and layout rhythm: the 200/240 px responsive navigation rails preserve more width for the provider form; fields, model rows, and actions fit at 1280 px without horizontal overflow.
+- Colors and visual tokens: blue primary actions, mint enabled/success states, red error feedback, and navy surfaces use existing semantic tokens.
+- Image and asset quality: no new raster assets were required; standard interface controls use the project's existing Lucide icons. Official provider logos remain a future P3 enhancement.
+- Copy and content: labels distinguish session-only web credentials from future desktop secure storage, and model names are discovered instead of hard-coded.
+
+## Comparison history
+
+1. P1: Provider credentials, verification, enablement, and model fetching were disabled placeholders. Fixed with session credentials, provider-specific authentication, endpoint editing, verification, and model management.
+2. P1: The browser had no same-origin adapter for provider model APIs. Fixed with a local server route that performs protocol-specific discovery and returns normalized models.
+3. P2: Initial functional fields overflowed the detail column at the 1280 x 720 browser viewport. Fixed with a 1400 px responsive rail/form breakpoint; post-fix `scrollWidth` equals `clientWidth` for body, settings workspace, and detail content.
+4. P2: Raw network failures surfaced only as `fetch failed`. Fixed with an actionable endpoint-specific error while keeping credentials out of the message.
+
+## Browser verification
+
+- URL and page identity: `http://localhost:5174/` — `BioResearch OS`
+- Primary interactions: open Settings; select OpenAI Compatible; fetch against an unavailable endpoint; verify actionable error; add a model manually; enable provider; navigate to 默认模型 and verify the discovered API model appears
+- Blank page/framework overlay: absent
+- Console warnings/errors: none
+- Responsive evidence: 1280 x 720 with no horizontal overflow
+- Production build: passed
+- Automated tests: 29 passed
+
+## Findings
+
+No actionable P0, P1, or P2 findings remain. Light theme, the app-level navigation rail, and official provider logos differ intentionally from the Cherry Studio reference. P3: replace generic provider icons with licensed official marks when the asset system is introduced.
+
+final result: passed
+
+---
+
 # Three-Column Settings Navigation and Full-Width Detail QA
 
 - Source visual truth: `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-a58d7257-efe0-4fea-816b-6bb721a7c5b3.png`

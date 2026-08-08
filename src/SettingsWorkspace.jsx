@@ -9,6 +9,8 @@ import {
   Code2,
   Cpu,
   Database,
+  Eye,
+  EyeOff,
   FileText,
   HardDrive,
   Info,
@@ -29,6 +31,12 @@ import {
 } from 'lucide-react'
 
 import { DEFAULT_MODEL_CONFIG, getModelsByRole } from './modelConfig.js'
+import {
+  fetchProviderModels,
+  loadProviderSessionKeys,
+  PROVIDER_PRESETS,
+  saveProviderSessionKeys,
+} from './providerConfig.js'
 
 const SETTINGS_GROUPS = [
   {
@@ -78,14 +86,8 @@ const SETTINGS_GROUPS = [
   },
 ]
 
-const API_PROVIDERS = [
-  { id: 'openai', name: 'OpenAI', protocol: 'Responses / Chat Completions', endpoint: 'https://api.openai.com/v1', icon: Sparkles, tone: 'cyan' },
-  { id: 'anthropic', name: 'Anthropic', protocol: 'Anthropic Messages', endpoint: 'https://api.anthropic.com', icon: Network, tone: 'amber' },
-  { id: 'gemini', name: 'Google Gemini', protocol: 'Generative Language', endpoint: 'https://generativelanguage.googleapis.com', icon: Sparkles, tone: 'violet' },
-  { id: 'deepseek', name: 'DeepSeek', protocol: 'OpenAI compatible', endpoint: 'https://api.deepseek.com', icon: Search, tone: 'blue' },
-  { id: 'openrouter', name: 'OpenRouter', protocol: 'Multi-provider gateway', endpoint: 'https://openrouter.ai/api/v1', icon: Network, tone: 'mint' },
-  { id: 'compatible', name: 'OpenAI Compatible', protocol: 'Custom endpoint', endpoint: 'User supplied', icon: Code2, tone: 'slate' },
-]
+const PROVIDER_ICONS = { openai: Sparkles, anthropic: Network, gemini: Sparkles, deepseek: Search, openrouter: Network, compatible: Code2 }
+const API_PROVIDERS = PROVIDER_PRESETS.map((provider) => ({ ...provider, icon: PROVIDER_ICONS[provider.id] || Cloud }))
 
 const FEATURE_PREVIEWS = {
   mcp: ['MCP', 'Connect research databases, filesystems, and analysis tools through local or remote MCP servers.', ['Server registry', 'Tool permission review', 'Connection health']],
@@ -135,7 +137,7 @@ function SubscriptionPage({ authStatus, authBusy, authError, modelCatalog, model
   </div>
 }
 
-function ProviderNavigation({ query, onQueryChange, selectedId, onSelect }) {
+function ProviderNavigation({ query, onQueryChange, selectedId, onSelect, configs }) {
   const filteredProviders = useMemo(() => API_PROVIDERS.filter((provider) => `${provider.name} ${provider.protocol}`.toLowerCase().includes(query.trim().toLowerCase())), [query])
   return <aside className="settings-secondary-navigation" aria-label="API provider navigation">
     <div className="settings-secondary-search">
@@ -148,7 +150,7 @@ function ProviderNavigation({ query, onQueryChange, selectedId, onSelect }) {
         return <button className={provider.id === selectedId ? 'active' : ''} onClick={() => onSelect(provider.id)} key={provider.id}>
           <span className={`provider-icon ${provider.tone}`}><Icon size={15} /></span>
           <div><strong>{provider.name}</strong><small>{provider.protocol}</small></div>
-          <i aria-hidden="true" />
+          <i className={configs?.[provider.id]?.enabled ? 'enabled' : ''} aria-hidden="true" />
         </button>
       })}
       {!filteredProviders.length && <div className="provider-list-empty">No matching providers</div>}
@@ -157,38 +159,146 @@ function ProviderNavigation({ query, onQueryChange, selectedId, onSelect }) {
   </aside>
 }
 
-function ProvidersPage({ selectedId }) {
+function ProvidersPage({ selectedId, configs, onChange }) {
   const selected = API_PROVIDERS.find((provider) => provider.id === selectedId) || API_PROVIDERS[0]
   const SelectedIcon = selected.icon
-  const [endpoint, setEndpoint] = useState(selected.endpoint)
-  useEffect(() => setEndpoint(selected.endpoint), [selected.endpoint])
+  const config = configs[selected.id]
+  const [apiKeys, setApiKeys] = useState(loadProviderSessionKeys)
+  const [showApiKey, setShowApiKey] = useState(false)
+  const [modelsBusy, setModelsBusy] = useState(false)
+  const [feedback, setFeedback] = useState(null)
+  const [modelQuery, setModelQuery] = useState('')
+  const [manualModelId, setManualModelId] = useState('')
+  const [showManualModel, setShowManualModel] = useState(false)
+  const apiKey = apiKeys[selected.id] || ''
+  const selectedIds = new Set(config.selectedModelIds)
+  const filteredModels = useMemo(
+    () => config.models.filter((model) => `${model.name} ${model.id} ${model.kind}`.toLowerCase().includes(modelQuery.trim().toLowerCase())),
+    [config.models, modelQuery],
+  )
+
+  useEffect(() => {
+    setShowApiKey(false)
+    setFeedback(null)
+    setModelQuery('')
+    setShowManualModel(false)
+    setManualModelId('')
+  }, [selected.id])
+
+  const updateConfig = (patch) => onChange({
+    ...configs,
+    [selected.id]: { ...config, ...patch },
+  })
+
+  const updateApiKey = (value) => {
+    const next = { ...apiKeys, [selected.id]: value }
+    setApiKeys(next)
+    saveProviderSessionKeys(next)
+    setFeedback(null)
+  }
+
+  const handleFetchModels = async (purpose = 'fetch') => {
+    if (!config.endpoint.trim()) {
+      setFeedback({ type: 'error', message: 'Enter an API endpoint first.' })
+      return
+    }
+    if (selected.requiresKey && !apiKey.trim()) {
+      setFeedback({ type: 'error', message: 'Enter an API key before fetching models.' })
+      return
+    }
+    setModelsBusy(true)
+    setFeedback(null)
+    try {
+      const result = await fetchProviderModels({ providerId: selected.id, endpoint: config.endpoint, apiKey })
+      const manualModels = config.models.filter((model) => model.manual && !result.models.some((remote) => remote.id === model.id))
+      const nextModels = [...result.models, ...manualModels]
+      const nextIds = new Set(nextModels.map((model) => model.id))
+      const nextSelectedModelIds = config.selectedModelIds.filter((id) => nextIds.has(id))
+      updateConfig({
+        models: nextModels,
+        selectedModelIds: nextSelectedModelIds,
+        enabled: config.enabled && nextSelectedModelIds.length > 0,
+        lastFetchedAt: result.fetchedAt,
+      })
+      setFeedback({
+        type: 'success',
+        message: purpose === 'verify'
+          ? `Connection verified. ${result.models.length} models are available.`
+          : `Fetched ${result.models.length} models from ${selected.name}.`,
+      })
+    } catch (error) {
+      setFeedback({ type: 'error', message: error.message || 'Could not fetch the model list.' })
+    } finally {
+      setModelsBusy(false)
+    }
+  }
+
+  const toggleModel = (modelId) => {
+    const removing = selectedIds.has(modelId)
+    const nextSelected = removing
+      ? config.selectedModelIds.filter((id) => id !== modelId)
+      : [...config.selectedModelIds, modelId]
+    updateConfig({ selectedModelIds: nextSelected, enabled: nextSelected.length ? (removing ? config.enabled : true) : false })
+  }
+
+  const selectAllChatModels = () => {
+    const chatIds = config.models.filter((model) => model.kind === 'chat').map((model) => model.id)
+    const nextSelected = [...new Set([...config.selectedModelIds, ...chatIds])]
+    updateConfig({ selectedModelIds: nextSelected, enabled: nextSelected.length ? true : config.enabled })
+  }
+
+  const addManualModel = () => {
+    const id = manualModelId.trim()
+    if (!id) return
+    if (config.models.some((model) => model.id === id)) {
+      setFeedback({ type: 'error', message: `${id} is already in this provider.` })
+      return
+    }
+    updateConfig({
+      models: [...config.models, { id, name: id, ownedBy: selected.id, kind: 'chat', manual: true }],
+      selectedModelIds: [...config.selectedModelIds, id],
+      enabled: true,
+    })
+    setManualModelId('')
+    setShowManualModel(false)
+    setFeedback({ type: 'success', message: `Added ${id} manually.` })
+  }
 
   return <div className="settings-page provider-settings-page">
     <header className="provider-page-header">
       <span className={`provider-icon provider-icon-large ${selected.tone}`}><SelectedIcon size={21} /></span>
       <div><span>API Provider</span><h2>{selected.name}</h2><p>{selected.protocol}</p></div>
-      <label className="provider-enable-toggle"><input type="checkbox" disabled /><span /><small>Disabled</small></label>
+      <label className={`provider-enable-toggle ${config.enabled ? 'enabled' : ''}`} title={config.selectedModelIds.length ? 'Enable this provider in model selectors' : 'Add at least one model first'}><input type="checkbox" checked={config.enabled} disabled={!config.selectedModelIds.length} onChange={(event) => updateConfig({ enabled: event.target.checked })} /><span /><small>{config.enabled ? 'Enabled' : 'Disabled'}</small></label>
     </header>
 
     <section className="provider-config-section">
-      <div className="provider-field-heading"><div><KeyRound size={16} /><span><strong>API credentials</strong><small>Credentials will be encrypted by the desktop secure store.</small></span></div><button className="settings-text-button" disabled>Get API key</button></div>
-      <div className="provider-input-row"><input type="password" value="desktop-secure-store" readOnly disabled aria-label="API key" /><button className="settings-secondary-button" disabled>Verify</button></div>
-      <div className="provider-field-heading"><div><Cloud size={16} /><span><strong>API endpoint</strong><small>Override the default endpoint for gateways or compatible services.</small></span></div><span className="provider-field-status">Default</span></div>
-      <div className="provider-input-row"><input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} aria-label="API endpoint" /><button className="settings-secondary-button" onClick={() => setEndpoint(selected.endpoint)}>Reset</button></div>
+      <div className="provider-field-heading"><div><KeyRound size={16} /><span><strong>API credentials</strong><small>Kept only for this browser session in the web milestone.</small></span></div>{selected.keyWebsite ? <a className="settings-text-link" href={selected.keyWebsite} target="_blank" rel="noreferrer">Get API key</a> : <span className="provider-field-status">Optional</span>}</div>
+      <div className="provider-input-row provider-key-row"><div className="provider-secret-input"><input type={showApiKey ? 'text' : 'password'} value={apiKey} onChange={(event) => updateApiKey(event.target.value)} placeholder={selected.requiresKey ? 'Enter API key' : 'Optional for local servers'} autoComplete="off" aria-label="API key" /><button onClick={() => setShowApiKey((current) => !current)} aria-label={showApiKey ? 'Hide API key' : 'Show API key'}>{showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}</button></div><button className="settings-secondary-button" onClick={() => handleFetchModels('verify')} disabled={modelsBusy || (selected.requiresKey && !apiKey.trim())}>{modelsBusy ? <RefreshCw className="spin" size={14} /> : <ShieldCheck size={14} />}Verify</button></div>
+      <div className="provider-field-heading"><div><Cloud size={16} /><span><strong>API endpoint</strong><small>Override the default endpoint for gateways or compatible services.</small></span></div><span className="provider-field-status">{config.endpoint === selected.endpoint ? 'Default' : 'Custom'}</span></div>
+      <div className="provider-input-row"><input value={config.endpoint} onChange={(event) => updateConfig({ endpoint: event.target.value })} aria-label="API endpoint" spellCheck="false" /><button className="settings-secondary-button" onClick={() => updateConfig({ endpoint: selected.endpoint })} disabled={config.endpoint === selected.endpoint}>Reset</button></div>
     </section>
 
+    {feedback && <div className={`provider-feedback ${feedback.type}`} role={feedback.type === 'error' ? 'alert' : 'status'}>{feedback.type === 'success' ? <CheckCircle2 size={15} /> : <Info size={15} />}<span>{feedback.message}</span></div>}
+
     <section className="provider-model-section">
-      <div className="provider-model-heading"><div><strong>Models</strong><small>Fetched from the provider after a successful connection.</small></div><button className="settings-secondary-button" disabled><RefreshCw size={14} />Fetch model list</button></div>
-      <div className="provider-model-empty"><span><Database size={20} /></span><div><strong>No model catalog yet</strong><small>Configure this provider, then fetch the model list automatically instead of maintaining hard-coded model names.</small></div></div>
+      <div className="provider-model-heading"><div><strong>Models</strong><small>{config.models.length ? `${config.selectedModelIds.length} added · ${config.models.length} discovered${config.lastFetchedAt ? ` · updated ${new Date(config.lastFetchedAt).toLocaleString()}` : ''}` : 'Fetch the live catalog, then choose which models appear in Research.'}</small></div><div className="provider-model-actions"><button className="settings-secondary-button" onClick={() => setShowManualModel((current) => !current)}><Plus size={14} />Add manually</button><button className="settings-primary-button" onClick={() => handleFetchModels('fetch')} disabled={modelsBusy || (selected.requiresKey && !apiKey.trim())}><RefreshCw className={modelsBusy ? 'spin' : ''} size={14} />{modelsBusy ? 'Fetching…' : 'Fetch model list'}</button></div></div>
+      {showManualModel && <div className="provider-manual-model"><input value={manualModelId} onChange={(event) => setManualModelId(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') addManualModel() }} placeholder="Model ID, e.g. organization/model-name" autoFocus /><button className="settings-primary-button" onClick={addManualModel} disabled={!manualModelId.trim()}>Add model</button></div>}
+      {config.models.length ? <div className="provider-model-catalog">
+        <div className="provider-model-tools"><label className="settings-search"><Search size={14} /><input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder="Search discovered models…" /></label><button className="settings-text-button" onClick={selectAllChatModels}>Add all chat models</button></div>
+        <div className="provider-model-list" aria-label={`${selected.name} model list`}>
+          {filteredModels.map((model) => <div className={selectedIds.has(model.id) ? 'selected' : ''} key={model.id}><span className={`provider-model-kind ${model.kind}`}>{model.kind}</span><div><strong>{model.name}</strong><small>{model.id}{model.manual ? ' · manual' : ''}</small></div><button onClick={() => toggleModel(model.id)} disabled={model.kind !== 'chat'}>{selectedIds.has(model.id) ? 'Remove' : model.kind === 'chat' ? 'Add' : 'Not used yet'}</button></div>)}
+          {!filteredModels.length && <div className="provider-model-no-results">No models match “{modelQuery}”.</div>}
+        </div>
+      </div> : <div className="provider-model-empty"><span><Database size={20} /></span><div><strong>No model catalog yet</strong><small>Enter this provider's credentials and fetch the current model list. Research Agent does not hard-code versioned model names.</small></div></div>}
       <div className="provider-capability-grid">
         <div><span>Model discovery</span><strong>Dynamic catalog</strong></div>
-        <div><span>Authentication</span><strong>API key</strong></div>
+        <div><span>Authentication</span><strong>{selected.requiresKey ? 'API key' : 'Optional API key'}</strong></div>
         <div><span>Protocol</span><strong>{selected.protocol}</strong></div>
-        <div><span>Storage</span><strong>Desktop secure store</strong></div>
+        <div><span>Web credential storage</span><strong>Session only</strong></div>
       </div>
     </section>
 
-    <div className="provider-security-note"><ShieldCheck size={16} /><span><strong>Web-first safety boundary</strong>API keys are not stored in this web milestone. The navigation and provider schema are ready; credential entry becomes available with encrypted desktop storage.</span></div>
+    <div className="provider-security-note"><ShieldCheck size={16} /><span><strong>Web-first safety boundary</strong>API keys are sent only to the local adapter for provider requests and cleared when the browser session ends. The desktop build will move them into the operating system secure store.</span></div>
   </div>
 }
 
@@ -258,13 +368,13 @@ function FeaturePreviewPage({ pageId }) {
   </div>
 }
 
-export default function SettingsWorkspace({ authStatus, authBusy, authError, modelCatalog, modelsBusy, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, chatModels, modelConfig, onSaveModelConfig }) {
+export default function SettingsWorkspace({ authStatus, authBusy, authError, modelCatalog, modelsBusy, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, chatModels, modelConfig, onSaveModelConfig, providerConfigs, onSaveProviderConfigs }) {
   const [activePage, setActivePage] = useState('providers')
   const [providerQuery, setProviderQuery] = useState('')
   const [selectedProviderId, setSelectedProviderId] = useState(API_PROVIDERS[0].id)
   let content
   if (activePage === 'subscription') content = <SubscriptionPage authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnect={onConnectChatgpt} onLogout={onLogoutChatgpt} onRefreshModels={onRefreshModels} />
-  else if (activePage === 'providers') content = <ProvidersPage selectedId={selectedProviderId} />
+  else if (activePage === 'providers') content = <ProvidersPage selectedId={selectedProviderId} configs={providerConfigs} onChange={onSaveProviderConfigs} />
   else if (activePage === 'defaults') content = <DefaultModelsPage config={modelConfig} chatModels={chatModels} onSave={onSaveModelConfig} />
   else if (activePage === 'local-models') content = <LocalModelsPage />
   else if (activePage === 'retrieval') content = <RetrievalSettingsPage config={modelConfig} onSave={onSaveModelConfig} />
@@ -277,7 +387,7 @@ export default function SettingsWorkspace({ authStatus, authBusy, authError, mod
       <div className="settings-navigation-title"><Settings2 size={17} /><strong>Settings</strong></div>
       {SETTINGS_GROUPS.map((group) => <section key={group.label}><span>{group.label}</span>{group.items.map((item) => { const Icon = item.icon; return <button className={activePage === item.id ? 'active' : ''} onClick={() => setActivePage(item.id)} key={item.id}><Icon size={15} /><span>{item.label}</span></button> })}</section>)}
     </aside>
-    {hasSecondaryNavigation && <ProviderNavigation query={providerQuery} onQueryChange={setProviderQuery} selectedId={selectedProviderId} onSelect={setSelectedProviderId} />}
+    {hasSecondaryNavigation && <ProviderNavigation query={providerQuery} onQueryChange={setProviderQuery} selectedId={selectedProviderId} onSelect={setSelectedProviderId} configs={providerConfigs} />}
     <main className="settings-content">{content}</main>
   </div>
 }
