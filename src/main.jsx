@@ -161,7 +161,7 @@ function LogoMark() {
   )
 }
 
-function ModelPicker({ selectedModel, models, onSelect, disabled = false, authStatus, authBusy, modelCatalog, modelsBusy, onConnect, onLogout, onRefreshModels }) {
+function ModelPicker({ selectedModel, models, onSelect, disabled = false, placement = 'top', authStatus, authBusy, modelCatalog, modelsBusy, onConnect, onLogout, onRefreshModels }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef(null)
 
@@ -182,7 +182,7 @@ function ModelPicker({ selectedModel, models, onSelect, disabled = false, authSt
   }, [open])
 
   return (
-    <div className="model-picker" ref={rootRef}>
+    <div className="model-picker" data-placement={placement} ref={rootRef}>
       <button className="model-select" onClick={() => setOpen(!open)} disabled={disabled} aria-haspopup="menu" aria-expanded={open}>
         <span>{selectedModel.name}</span><ChevronDown size={14} />
       </button>
@@ -523,7 +523,7 @@ function ResearchSetup({
           <div className="research-config-heading"><span><Atom size={16} />Model</span><small>Temporary for this conversation</small></div>
           <div className="research-model-choice">
             <div><strong>{selectedModel.name}</strong><small>{selectedModel.provider} · {selectedModel.detail || 'Research model'}</small></div>
-            <ModelPicker selectedModel={selectedModel} models={models} onSelect={onSelectModel} authStatus={authStatus} authBusy={authBusy} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnect={onConnectChatgpt} onLogout={onLogoutChatgpt} onRefreshModels={onRefreshModels} />
+            <ModelPicker selectedModel={selectedModel} models={models} onSelect={onSelectModel} placement="bottom" authStatus={authStatus} authBusy={authBusy} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnect={onConnectChatgpt} onLogout={onLogoutChatgpt} onRefreshModels={onRefreshModels} />
           </div>
         </section>
         <section className="research-config-block">
