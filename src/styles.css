@@ -122,6 +122,10 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .workspace-content { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(520px, 1fr) 335px; }
 .chat-column { min-width: 0; padding: 0 13px 18px 18px; display: flex; flex-direction: column; overflow: hidden; }
 .conversation { flex: 1; min-height: 0; overflow: auto; padding: 24px 0 12px; scrollbar-width: thin; scrollbar-color: rgba(110,168,254,.25) transparent; }
+.conversation-empty { min-height: 100%; display: grid; place-content: center; justify-items: center; gap: 7px; color: #60738f; text-align: center; }
+.conversation-empty svg { color: var(--mint); margin-bottom: 3px; }
+.conversation-empty strong { color: #a8b8cc; font-size: 13px; font-weight: 600; }
+.conversation-empty span { font-size: 10px; }
 .user-message { width: min(700px, 92%); margin: 0 13px 20px auto; background: linear-gradient(135deg, #2464d8, #1d54bd); border: 1px solid rgba(130, 191, 255, .3); border-radius: 7px 7px 3px 7px; padding: 13px 16px 14px; box-shadow: 0 14px 28px rgba(0, 38, 119, .23); }
 .message-meta { color: rgba(230, 241, 255, .74); display: flex; justify-content: space-between; gap: 16px; font-size: 10px; font-family: var(--mono); margin-bottom: 9px; }
 .message-meta span:last-child { display: flex; align-items: center; gap: 3px; }

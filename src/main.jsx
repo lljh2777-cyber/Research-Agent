@@ -59,46 +59,7 @@ const navItems = [
 ]
 
 const SIDEBAR_COLLAPSED_KEY = 'bioresearch-os:sidebar-collapsed'
-const INITIAL_RESEARCH_TAB_ID = 'research-tumor-niche'
-
-const sampleLinkedNotes = [
-  { title: 'Spatial transcriptomics', type: 'concept', path: 'wiki/concepts/spatial-transcriptomics.md' },
-  { title: 'CellChat', type: 'method', path: 'wiki/methods/cellchat.md' },
-  { title: 'scRNA-seq QC', type: 'method', path: 'wiki/methods/scrna-seq-qc.md' },
-  { title: 'CosMx SMI protocols', type: 'method', path: 'wiki/methods/cosmx-smi-protocols.md' },
-  { title: 'MERFISH', type: 'method', path: 'wiki/methods/merfish.md' },
-]
-
-const sampleSources = [
-  { name: 'Spatial_transcriptomics.md', kind: 'note' },
-  { name: 'CosMx_SMI_protocols.md', kind: 'note' },
-  { name: 'MERFISH.md', kind: 'note' },
-  { name: 'Slide-seqV2.md', kind: 'note' },
-  { name: 'DBiT-seq.md', kind: 'note' },
-  { name: 'Nature_2023_Benchmark_ST.pdf', kind: 'paper' },
-]
-
-const initialMessages = [
-  {
-    id: 'user-1',
-    role: 'user',
-    text: 'Which spatial transcriptomics methods are used for tumor niche analysis?',
-  },
-  {
-    id: 'assistant-1',
-    role: 'assistant',
-    text: 'Spatial transcriptomics methods widely used for tumor niche analysis include Visium (10x Genomics), CosMx SMI, MERFISH, seqFISH+, Slide-seqV2, and DBiT-seq. These platforms vary in spatial resolution, throughput, and gene coverage, making them suitable for complementary niches and scales.',
-    bullets: [
-      ['Visium (10x Genomics)', 'whole-transcriptome capture at ~55 μm spot size, commonly used for broad compartment mapping.', 'Spatial transcriptomics'],
-      ['CosMx SMI', 'subcellular-resolution RNA detection with high plex capability, useful for cell-cell interaction studies.', 'CosMx SMI protocols'],
-      ['MERFISH', 'multiplexed smFISH with subcellular resolution and high gene coverage.', 'MERFISH'],
-      ['seqFISH+', 'highly multiplexed smFISH with improved sensitivity and speed.', 'seqFISH+'],
-      ['Slide-seqV2', 'bead-based method with high resolution (~10 μm) and whole-transcriptome coverage.', 'Slide-seqV2'],
-      ['DBiT-seq', 'combinatorial indexing for large-scale, cost-effective spatial profiling.', 'DBiT-seq'],
-    ],
-    closing: 'Choose methods based on the biological question, required resolution, and available resources. See linked notes for protocols and benchmarking.',
-  },
-]
+const INITIAL_RESEARCH_TAB_ID = 'research-initial'
 
 function createResearchSession(messages = []) {
   return {
@@ -440,7 +401,6 @@ function Composer({ value, setValue, onSubmit, disabled, selectedModel, models, 
 function LinkedNotes({ notes, onOpenNote }) {
   const [expanded, setExpanded] = useState(false)
   const visibleNotes = expanded ? notes : notes.slice(0, 5)
-  const noteCountLabel = notes === sampleLinkedNotes ? 12 : notes.length
   return (
     <section className="inspector-section linked-notes">
       <div className="inspector-heading"><span>Linked notes</span><ChevronUp size={15} /></div>
@@ -452,10 +412,11 @@ function LinkedNotes({ notes, onOpenNote }) {
             <button onClick={() => onOpenNote(note)}>Open linked note <ExternalLink size={13} /></button>
           </div>
         ))}
+        {visibleNotes.length === 0 && <div className="source-empty">No linked notes yet.</div>}
       </div>
-      <button className="show-more" onClick={() => setExpanded(!expanded)}>
-        {expanded ? 'Show fewer linked notes' : `Show all ${noteCountLabel} linked notes`} <ChevronDown size={15} />
-      </button>
+      {notes.length > 5 && <button className="show-more" onClick={() => setExpanded(!expanded)}>
+        {expanded ? 'Show fewer linked notes' : `Show all ${notes.length} linked notes`} <ChevronDown size={15} />
+      </button>}
     </section>
   )
 }
@@ -519,20 +480,19 @@ function RetrievalPath({ activeStage, vaultName, topK, rerankLabel, packet, answ
   )
 }
 
-function AgentStatus({ activeStage, running, onPause }) {
-  const percentage = running ? Math.min(91, Math.round(((activeStage + 0.7) / stages.length) * 100)) : 100
+function AgentStatus({ activeStage, running, hasActivity, onPause }) {
+  const percentage = hasActivity ? running ? Math.min(91, Math.round(((activeStage + 0.7) / stages.length) * 100)) : 100 : 0
   return (
     <section className="inspector-section agent-status">
       <div className="inspector-heading"><span>Agent status</span><ChevronUp size={15} /></div>
-      <div className="status-line"><span className="live-dot" /> <strong>{running ? 'Agent running' : 'Agent ready'}</strong><span className="run-id">Run #1024</span>{running && <button onClick={onPause} aria-label="Pause run"><Pause size={15} /></button>}</div>
+      <div className="status-line"><span className="live-dot" /> <strong>{running ? 'Agent running' : 'Agent ready'}</strong>{hasActivity && <span className="run-id">Current run</span>}{running && <button onClick={onPause} aria-label="Pause run"><Pause size={15} /></button>}</div>
       <div className="run-card">
         <div className="run-icon"><Atom size={18} /></div>
-        <div className="run-copy"><strong>Research agent</strong><span>{running ? 'Synthesizing answer and citing sources...' : 'Ready for the next question'}</span></div>
-        <span className="run-percent">{percentage}%</span>
+        <div className="run-copy"><strong>Research agent</strong><span>{running ? 'Synthesizing answer and citing sources...' : hasActivity ? 'Run complete' : 'Ready for your first question'}</span></div>
+        {hasActivity && <span className="run-percent">{percentage}%</span>}
       </div>
       <div className="progress-track"><span style={{ width: `${percentage}%` }} /></div>
-      <div className="run-metrics"><span><small>Started</small>10:24:12 AM</span><span><small>Elapsed</small>{running ? '00:00:18' : '00:00:24'}</span><span><small>ETA</small>{running ? '~00:00:07' : 'Complete'}</span></div>
-      <button className="full-run">View full run details <ArrowRight size={15} /></button>
+      {hasActivity && <button className="full-run">View full run details <ArrowRight size={15} /></button>}
     </section>
   )
 }
@@ -549,18 +509,18 @@ function Sources({ sources, onOpenNote }) {
         ))}
         {sources.length === 0 && <div className="source-empty">No evidence retrieved yet.</div>}
       </div>
-      <button className="show-more">Show all sources <ChevronDown size={15} /></button>
+      {sources.length > 5 && <button className="show-more">Show all sources <ChevronDown size={15} /></button>}
     </section>
   )
 }
 
-function Inspector({ activeStage, running, onPause, linkedNotes, sources, vaultName, topK, rerankLabel, packet, answerMode, onOpenNote }) {
+function Inspector({ activeStage, running, hasActivity, onPause, linkedNotes, sources, vaultName, topK, rerankLabel, packet, answerMode, onOpenNote }) {
   return (
     <aside className="inspector">
       <div className="inspector-title"><BookOpen size={18} /> <span>Knowledge context</span><ChevronUp size={16} /></div>
       <LinkedNotes notes={linkedNotes} onOpenNote={onOpenNote} />
       <RetrievalPath activeStage={activeStage} vaultName={vaultName} topK={topK} rerankLabel={rerankLabel} packet={packet} answerMode={answerMode} />
-      <AgentStatus activeStage={activeStage} running={running} onPause={onPause} />
+      <AgentStatus activeStage={activeStage} running={running} hasActivity={hasActivity} onPause={onPause} />
       <Sources sources={sources} onOpenNote={onOpenNote} />
     </aside>
   )
@@ -637,9 +597,9 @@ function WorkspaceLauncher({ onOpen }) {
 }
 
 function App() {
-  const [workspaceTabs, setWorkspaceTabs] = useState(() => [createWorkspaceTab('research', { id: INITIAL_RESEARCH_TAB_ID, title: 'Tumor niche methods' })])
+  const [workspaceTabs, setWorkspaceTabs] = useState(() => [createWorkspaceTab('research', { id: INITIAL_RESEARCH_TAB_ID })])
   const [activeTabId, setActiveTabId] = useState(INITIAL_RESEARCH_TAB_ID)
-  const [researchSessions, setResearchSessions] = useState(() => ({ [INITIAL_RESEARCH_TAB_ID]: createResearchSession(initialMessages) }))
+  const [researchSessions, setResearchSessions] = useState(() => ({ [INITIAL_RESEARCH_TAB_ID]: createResearchSession() }))
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true')
   const [vaultNotes, setVaultNotes] = useState([])
   const [vaultName, setVaultName] = useState('')
@@ -723,8 +683,8 @@ function App() {
     ...source,
     note: notesById.get(source.id) || null,
   })), [notesById, vaultIndex.sources])
-  const inspectorNotes = retrievalPacket ? retrievedNotes : vaultIndex.notes.length ? vaultIndex.linkedNotes : sampleLinkedNotes
-  const inspectorSources = retrievalPacket ? retrievedSources : vaultSources.length ? vaultSources : sampleSources
+  const inspectorNotes = retrievalPacket ? retrievedNotes : vaultIndex.notes.length ? vaultIndex.linkedNotes : []
+  const inspectorSources = retrievalPacket ? retrievedSources : vaultSources
 
   const applyVault = async (notes, nextVaultName, { handle = null, source = 'manual', revision = '' } = {}) => {
     if (!notes.length) {
@@ -736,7 +696,7 @@ function App() {
     setVaultHandle(handle)
     setVaultSource(source)
     setLocalRevision(revision)
-    setResearchSessions((current) => Object.fromEntries(Object.entries(current).map(([id, session]) => [id, { ...session, retrievalPacket: null, answerMode: 'sample' }])))
+    setResearchSessions((current) => Object.fromEntries(Object.entries(current).map(([id, session]) => [id, { ...session, retrievalPacket: null, answerMode: 'idle' }])))
     await saveVaultSnapshot({ vaultName: nextVaultName, notes, source, revision })
     if (handle) await saveVaultHandle(handle)
     setSyncState(source === 'local-adapter' || handle ? 'ready' : 'manual')
@@ -780,7 +740,7 @@ function App() {
         setVaultHandle(null)
         setVaultSource('local-adapter')
         setLocalRevision(payload.revision || '')
-        setResearchSessions((current) => Object.fromEntries(Object.entries(current).map(([id, session]) => [id, { ...session, retrievalPacket: null, answerMode: 'sample' }])))
+        setResearchSessions((current) => Object.fromEntries(Object.entries(current).map(([id, session]) => [id, { ...session, retrievalPacket: null, answerMode: 'idle' }])))
         await saveVaultSnapshot({ vaultName: payload.vaultName || 'local-vault', notes: [], source: 'local-adapter', revision: payload.revision || '' })
         setSyncState('empty')
         return true
@@ -1212,12 +1172,13 @@ function App() {
           <div className="workspace-content">
             <div className="chat-column">
               <div className="conversation">
+                {messages.length === 0 && <div className="conversation-empty"><Sparkles size={22} /><strong>Start a research conversation</strong><span>Ask a question or add Vault context below.</span></div>}
                 {messages.map((message) => message.role === 'user' ? <UserMessage text={message.text} key={message.id} /> : <AssistantMessage message={message} running={running} onOpenNote={setSelectedNote} key={message.id} />)}
               </div>
               <EvidenceTrail activeStage={activeStage} />
               <Composer value={input} setValue={setInput} onSubmit={submitQuestion} disabled={anyResearchRunning} selectedModel={selectedModel} models={chatModels} onSelectModel={handleModelSelect} authStatus={authStatus} authBusy={authBusy} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} />
             </div>
-            <Inspector activeStage={activeStage} running={running} onPause={handlePause} linkedNotes={inspectorNotes} sources={inspectorSources} vaultName={vaultName} topK={modelConfig.topK} rerankLabel={rerankModel?.name || 'Disabled by profile'} packet={retrievalPacket} answerMode={answerMode} onOpenNote={setSelectedNote} />
+            <Inspector activeStage={activeStage} running={running} hasActivity={messages.length > 0 || Boolean(retrievalPacket)} onPause={handlePause} linkedNotes={inspectorNotes} sources={inspectorSources} vaultName={vaultName} topK={modelConfig.topK} rerankLabel={rerankModel?.name || 'Disabled by profile'} packet={retrievalPacket} answerMode={answerMode} onOpenNote={setSelectedNote} />
           </div>
         )}
       </main>
