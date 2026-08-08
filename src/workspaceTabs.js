@@ -32,11 +32,11 @@ export function titleFromQuestion(question, fallback = 'New research') {
 }
 
 export function closeWorkspaceTab(tabs, activeTabId, closingTabId) {
-  if (tabs.length <= 1) return { tabs, activeTabId }
   const closingIndex = tabs.findIndex((tab) => tab.id === closingTabId)
   if (closingIndex < 0) return { tabs, activeTabId }
   const nextTabs = tabs.filter((tab) => tab.id !== closingTabId)
   if (activeTabId !== closingTabId) return { tabs: nextTabs, activeTabId }
+  if (nextTabs.length === 0) return { tabs: nextTabs, activeTabId: null }
   const nextActive = nextTabs[Math.min(closingIndex, nextTabs.length - 1)]
   return { tabs: nextTabs, activeTabId: nextActive.id }
 }

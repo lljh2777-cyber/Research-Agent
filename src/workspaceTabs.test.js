@@ -22,9 +22,9 @@ test('closing the active tab selects the adjacent surviving tab', () => {
   assert.equal(result.activeTabId, 'runs-1')
 })
 
-test('the final workspace tab cannot be closed', () => {
+test('closing the final workspace tab returns an empty launcher state', () => {
   const tabs = [createWorkspaceTab('research', { id: 'research-1' })]
-  assert.deepEqual(closeWorkspaceTab(tabs, 'research-1', 'research-1'), { tabs, activeTabId: 'research-1' })
+  assert.deepEqual(closeWorkspaceTab(tabs, 'research-1', 'research-1'), { tabs: [], activeTabId: null })
 })
 
 test('conversation titles are compact and reusable tools stay singleton', () => {

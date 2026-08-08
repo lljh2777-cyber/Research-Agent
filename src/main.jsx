@@ -749,7 +749,7 @@ function WorkspaceTabs({ tabs, activeTabId, onSelect, onClose, onCreate }) {
             <button className="workspace-tab-main" type="button" role="tab" aria-selected={active} title={tab.title} onClick={() => onSelect(tab.id)}>
               <Icon size={14} /><span>{tab.title}</span>
             </button>
-            <button className="workspace-tab-close" type="button" aria-label={`Close ${tab.title}`} title={`Close ${tab.title}`} disabled={tabs.length === 1} onClick={() => onClose(tab.id)}>
+            <button className="workspace-tab-close" type="button" aria-label={`Close ${tab.title}`} title={`Close ${tab.title}`} onClick={() => onClose(tab.id)}>
               <X size={13} />
             </button>
           </div>
@@ -822,7 +822,7 @@ function App() {
   const toolApprovalResolverRef = useRef(null)
 
   const activeTab = workspaceTabs.find((tab) => tab.id === activeTabId) || workspaceTabs[0]
-  const activeSection = activeTab?.kind || 'research'
+  const activeSection = activeTab?.kind || 'launcher'
   const activeResearchSession = researchSessions[activeTabId] || createResearchSession({ modelId: modelConfig.chatModelId, knowledgeBaseId: vaultName })
   const { phase, input, messages, running, activeStage, answerMode, retrievalPacket } = activeResearchSession
   const activeHasVaultScope = Boolean(vaultName && activeResearchSession.configSnapshot?.knowledgeScopes?.some((scope) => scope.vaultId === vaultName))
