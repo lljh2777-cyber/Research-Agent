@@ -73,6 +73,8 @@ export function getDeepSeekModelProfile(modelId) {
       endpointTypes: [DEEPSEEK_ENDPOINT_TYPES.CHAT, DEEPSEEK_ENDPOINT_TYPES.RESPONSES, DEEPSEEK_ENDPOINT_TYPES.ANTHROPIC],
       preferredEndpointType: DEEPSEEK_ENDPOINT_TYPES.CHAT,
       capabilities: { reasoning: true, tools: true, webSearch: false },
+      contextWindowTokens: 1_000_000,
+      maxOutputTokens: 384_000,
     }
   }
   if (id === 'deepseek-v4-pro' || id.startsWith('deepseek-v4-pro[')) {
@@ -80,6 +82,8 @@ export function getDeepSeekModelProfile(modelId) {
       endpointTypes: [DEEPSEEK_ENDPOINT_TYPES.CHAT, DEEPSEEK_ENDPOINT_TYPES.ANTHROPIC],
       preferredEndpointType: DEEPSEEK_ENDPOINT_TYPES.CHAT,
       capabilities: { reasoning: true, tools: true, webSearch: false },
+      contextWindowTokens: 1_000_000,
+      maxOutputTokens: 384_000,
     }
   }
   if (id === 'deepseek-reasoner') {
@@ -103,6 +107,8 @@ export function withDeepSeekModelProfile(model) {
     endpointTypes: profile.endpointTypes,
     preferredEndpointType: profile.preferredEndpointType,
     capabilities: { ...(model?.capabilities || {}), ...profile.capabilities },
+    ...(profile.contextWindowTokens ? { contextWindowTokens: profile.contextWindowTokens } : {}),
+    ...(profile.maxOutputTokens ? { maxOutputTokens: profile.maxOutputTokens } : {}),
   }
 }
 

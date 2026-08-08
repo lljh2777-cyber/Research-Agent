@@ -56,6 +56,8 @@ export function normalizeProviderConfigs(value) {
         ...(Array.isArray(model.methods) ? { methods: model.methods } : {}),
         ...(Array.isArray(model.endpointTypes) ? { endpointTypes: model.endpointTypes.filter(isDeepSeekEndpointType) } : {}),
         ...(isDeepSeekEndpointType(model.preferredEndpointType) ? { preferredEndpointType: model.preferredEndpointType } : {}),
+        ...(Number.isFinite(model.contextWindowTokens) ? { contextWindowTokens: model.contextWindowTokens } : {}),
+        ...(Number.isFinite(model.maxOutputTokens) ? { maxOutputTokens: model.maxOutputTokens } : {}),
         ...(model.manual ? { manual: true } : {}),
       }))
       : []
@@ -169,6 +171,8 @@ export function providerConfigsToModels(configs) {
           endpointAutomatic: resolvedEndpoint.automatic,
           endpointFellBack: resolvedEndpoint.fellBack,
           endpointTypes: model.endpointTypes,
+          contextWindowTokens: model.contextWindowTokens,
+          maxOutputTokens: model.maxOutputTokens,
         } : {}),
       })
     }

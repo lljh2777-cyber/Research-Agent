@@ -45,6 +45,7 @@ import { chatgptCatalogToModels, DEFAULT_MODEL_CONFIG, getModelById, getModelsBy
 import { loadProviderConfigs, loadProviderSessionKeys, providerConfigsToModels, saveProviderConfigs } from './providerConfig.js'
 import { getDeepSeekRuntimeOptions } from '../shared/deepseek-provider.mjs'
 import { streamProviderResponse } from './providerRuntimeClient.js'
+import { buildConversationContext, compactTokenCount, providerUsageSummary } from './conversationContext.js'
 import { executePipeline, loadPipelineRuns, savePipelineRuns } from './pipelineEngine.js'
 import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources, retrieveEvidence } from './retrieval.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
@@ -980,6 +981,7 @@ function App() {
       topK: modelConfig.topK,
       similarityThreshold: modelConfig.similarityThreshold,
     })
+    const evidenceContext = buildEvidenceUserContext(packet)
     updateResearchSession(sessionId, { retrievalPacket: packet })
     let chatgptConnected = authStatus.connected
     if (selectedModel.authProvider === 'chatgpt' && !chatgptConnected) {
@@ -993,7 +995,7 @@ function App() {
     updateResearchSession(sessionId, (current) => ({
       ...current,
       answerMode: live ? 'chatgpt' : 'retrieval-only',
-      messages: [...current.messages, { id: `user-${Date.now()}`, role: 'user', text: question }],
+      messages: [...current.messages, { id: `user-${Date.now()}`, role: 'user', text: question, evidenceContext }],
       input: '',
     }))
     if (live) {
@@ -1015,19 +1017,15 @@ function App() {
         updateResearchSession(sessionId, (current) => ({ ...current, messages: current.messages.map((message) => message.id === assistantId ? { ...message, text: streamedText, reasoning: streamedReasoning } : message) }))
       }
       try {
-        const history = session.messages
-          .filter((message) => message.role === 'user' || message.role === 'assistant')
-          .slice(-20)
-          .map((message) => ({
-            role: message.role,
-            content: [message.text, message.closing].filter(Boolean).join('\n\n'),
-          }))
-        const messages = [
-          { role: 'system', content: buildEvidenceSystemMessage(packet, { citations: modelConfig.citations }) },
-          ...history,
-          { role: 'user', content: buildEvidenceUserContext(packet) },
-          { role: 'user', content: question },
-        ]
+        const contextPlan = buildConversationContext({
+          history: session.messages,
+          systemMessage: buildEvidenceSystemMessage(packet, { citations: modelConfig.citations }),
+          evidenceContext,
+          question,
+          contextWindowTokens: selectedModel.contextWindowTokens,
+          maxOutputTokens: 4_096,
+        })
+        const messages = contextPlan.messages
         const onDelta = (delta) => {
           streamedText += delta
           updateResearchSession(sessionId, { activeStage: 4 })
@@ -1049,7 +1047,7 @@ function App() {
             apiKey: loadProviderSessionKeys()[selectedModel.providerId] || '',
             model: selectedModel.apiModelId,
             messages,
-            options: selectedModel.providerId === 'deepseek' ? getDeepSeekRuntimeOptions(providerConfig) : undefined,
+            options: selectedModel.providerId === 'deepseek' ? { ...getDeepSeekRuntimeOptions(providerConfig), maxOutputTokens: 4_096 } : undefined,
             signal: controller.signal,
             onDelta,
             onReasoningDelta,
@@ -1067,6 +1065,12 @@ function App() {
           })
         }
         if (renderFrame) window.cancelAnimationFrame(renderFrame)
+        const usage = providerUsageSummary(result.usage)
+        const contextLabel = `Context ${compactTokenCount(contextPlan.estimatedInputTokens)}/${compactTokenCount(contextPlan.inputBudgetTokens)}`
+        const omittedLabel = contextPlan.omittedTurns ? ` · ${contextPlan.omittedTurns} older turn${contextPlan.omittedTurns === 1 ? '' : 's'} omitted` : ''
+        const cacheLabel = apiProvider && selectedModel.providerId === 'deepseek' && usage && usage.hitTokens !== null
+          ? ` · cache ${compactTokenCount(usage.hitTokens)} hit${usage.missTokens !== null ? ` / ${compactTokenCount(usage.missTokens)} miss` : ''}`
+          : ''
         updateResearchSession(sessionId, (current) => ({
           ...current,
           activeStage: 5,
@@ -1074,7 +1078,9 @@ function App() {
             ...message,
             text: result.text || streamedText || 'The provider returned an empty response.',
             reasoning: result.reasoning || streamedReasoning,
-            closing: `Generated with ${result.model} through ${apiProvider ? selectedModel.provider : 'the connected ChatGPT subscription'} · ${packet.evidence.length} Vault evidence chunk${packet.evidence.length === 1 ? '' : 's'}.`,
+            usage: result.usage || null,
+            contextPlan: { estimatedInputTokens: contextPlan.estimatedInputTokens, inputBudgetTokens: contextPlan.inputBudgetTokens, retainedTurns: contextPlan.retainedTurns, omittedTurns: contextPlan.omittedTurns },
+            closing: `Generated with ${result.model} through ${apiProvider ? selectedModel.provider : 'the connected ChatGPT subscription'} · ${packet.evidence.length} Vault evidence chunk${packet.evidence.length === 1 ? '' : 's'}. ${contextLabel}${omittedLabel}${cacheLabel}.`,
           } : message),
         }))
       } catch (error) {
