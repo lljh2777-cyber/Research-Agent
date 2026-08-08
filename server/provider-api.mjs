@@ -189,7 +189,7 @@ function sendEvent(response, event) {
   response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
 }
 
-export function createProviderApiMiddleware({ fetchImpl = fetch } = {}) {
+export function createProviderApiMiddleware({ fetchImpl = fetch, credentialResolver } = {}) {
   return async function providerApiMiddleware(request, response, next) {
     const path = new URL(request.url || '/', 'http://localhost').pathname
     if (!['/api/providers/models', '/api/providers/responses/stream', '/api/providers/bailian/responses/resource'].includes(path)) return next()
@@ -199,8 +199,11 @@ export function createProviderApiMiddleware({ fetchImpl = fetch } = {}) {
     }
     try {
       const body = await readJsonBody(request)
+      const providerId = path === '/api/providers/bailian/responses/resource' ? 'bailian' : body.providerId
+      const resolvedApiKey = String(body.apiKey || '').trim() || (typeof credentialResolver === 'function' ? await credentialResolver(providerId, body.endpoint) : '')
+      const authorizedBody = { ...body, providerId, apiKey: resolvedApiKey }
       if (path === '/api/providers/bailian/responses/resource') {
-        const result = await manageBailianResponse(body, fetchImpl)
+        const result = await manageBailianResponse(authorizedBody, fetchImpl)
         return sendJson(response, 200, result)
       }
       if (path === '/api/providers/responses/stream') {
@@ -212,7 +215,7 @@ export function createProviderApiMiddleware({ fetchImpl = fetch } = {}) {
         response.setHeader('Connection', 'keep-alive')
         response.flushHeaders?.()
         try {
-          for await (const event of streamProviderChat({ ...body, signal: controller.signal }, fetchImpl)) {
+          for await (const event of streamProviderChat({ ...authorizedBody, signal: controller.signal }, fetchImpl)) {
             if (!response.destroyed) sendEvent(response, event)
           }
         } catch (error) {
@@ -221,7 +224,7 @@ export function createProviderApiMiddleware({ fetchImpl = fetch } = {}) {
         if (!response.destroyed) response.end()
         return
       }
-      const result = await discoverProviderModels(body, fetchImpl)
+      const result = await discoverProviderModels(authorizedBody, fetchImpl)
       return sendJson(response, 200, result)
     } catch (error) {
       const statusCode = Number(error?.statusCode) || (error?.name === 'TimeoutError' ? 504 : 502)

@@ -43,7 +43,7 @@ import { PipelinesSection, RunsSection } from './PipelineWorkspace.jsx'
 import SettingsWorkspace from './SettingsWorkspace.jsx'
 import { loadLocalVault } from './localVault.js'
 import { chatgptCatalogToModels, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
-import { loadProviderConfigs, loadProviderSessionKeys, providerConfigsToModels, saveProviderConfigs } from './providerConfig.js'
+import { getProviderSessionKey, hydrateProviderSessionKeys, loadProviderConfigs, providerConfigsToModels, saveProviderConfigs } from './providerConfig.js'
 import { getDeepSeekRuntimeOptions } from '../shared/deepseek-provider.mjs'
 import { getBailianRuntimeOptions } from '../shared/bailian-provider.mjs'
 import { streamProviderResponse } from './providerRuntimeClient.js'
@@ -826,6 +826,7 @@ function App() {
   const [selectedNote, setSelectedNote] = useState(null)
   const [modelConfig, setModelConfig] = useState(loadModelConfig)
   const [providerConfigs, setProviderConfigs] = useState(loadProviderConfigs)
+  const [providerCredentialsRevision, setProviderCredentialsRevision] = useState(0)
   const [mcpConfig, setMcpConfig] = useState(loadMcpConfig)
   const [mcpRuntime, setMcpRuntime] = useState({ sessions: [] })
   const [mcpRuntimeBusy, setMcpRuntimeBusy] = useState('')
@@ -850,7 +851,7 @@ function App() {
   const activeSection = activeTab?.kind || 'launcher'
   const runtimeCapabilities = runtimeManifest?.capabilities
   const runtimeReady = Boolean(runtimeCapabilities)
-  const supportsLoopbackMcp = runtimeCapabilities?.mcp === 'loopback'
+  const supportsLoopbackMcp = ['loopback', 'desktop-loopback'].includes(runtimeCapabilities?.mcp)
   const supportsChatgptSubscription = runtimeCapabilities?.chatgptSubscriptionOAuth === true
   const supportsLocalVault = runtimeCapabilities?.localVault.available === true
   const supportsLoopbackVault = runtimeCapabilities?.localVault.adapters.includes('loopback-adapter') === true
@@ -883,6 +884,15 @@ function App() {
     })
     return () => { cancelled = true }
   }, [])
+
+  useEffect(() => {
+    if (runtimeCapabilities?.credentials.providerApiKeys !== 'os-keychain') return undefined
+    let cancelled = false
+    hydrateProviderSessionKeys().then(() => {
+      if (!cancelled) setProviderCredentialsRevision((current) => current + 1)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [runtimeCapabilities?.credentials.providerApiKeys])
 
   useEffect(() => {
     window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed))
@@ -1427,6 +1437,7 @@ function App() {
             enableWebSearch: enabledTools.has(TOOL_IDS.WEB_SEARCH) && baseProviderOptions.enableWebSearch,
             maxOutputTokens: 4_096,
           } : undefined
+          const providerApiKey = await getProviderSessionKey(selectedModel.providerId)
           const agentOutput = await runProviderAgent({
             messages,
             tools,
@@ -1434,7 +1445,7 @@ function App() {
               providerId: selectedModel.providerId,
               endpoint: selectedModel.endpoint || providerConfig.endpoint,
               endpointType: selectedModel.endpointType,
-              apiKey: loadProviderSessionKeys()[selectedModel.providerId] || '',
+              apiKey: providerApiKey,
               model: selectedModel.apiModelId,
               messages: agentMessages,
               tools,
@@ -1639,7 +1650,7 @@ function App() {
           <div className="topbar-actions"><button className="icon-button mobile-settings-button" onClick={() => handleOpenSection('settings')} aria-label="Open settings"><Settings2 size={18} /></button></div>
         </header>
 
-        {activeSection === 'launcher' ? <WorkspaceLauncher onOpen={openWorkspaceTab} /> : activeSection === 'settings' ? <SettingsWorkspace authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} mcpConfig={mcpConfig} onSaveMcpConfig={handleMcpConfigSave} mcpRuntime={mcpRuntime} mcpRuntimeBusy={mcpRuntimeBusy} mcpRuntimeError={mcpRuntimeError} onConnectMcpServer={handleConnectMcpServer} onDisconnectMcpServer={handleDisconnectMcpServer} vaultNoteCount={vaultNotes.length} /> : activeSection === 'graph' ? <KnowledgeGraphSection key={activeTabId} index={vaultIndex} onConnectVault={handleConnectVault} /> : activeSection === 'pipelines' ? (
+        {activeSection === 'launcher' ? <WorkspaceLauncher onOpen={openWorkspaceTab} /> : activeSection === 'settings' ? <SettingsWorkspace key={`settings-${providerCredentialsRevision}`} authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} mcpConfig={mcpConfig} onSaveMcpConfig={handleMcpConfigSave} mcpRuntime={mcpRuntime} mcpRuntimeBusy={mcpRuntimeBusy} mcpRuntimeError={mcpRuntimeError} onConnectMcpServer={handleConnectMcpServer} onDisconnectMcpServer={handleDisconnectMcpServer} vaultNoteCount={vaultNotes.length} /> : activeSection === 'graph' ? <KnowledgeGraphSection key={activeTabId} index={vaultIndex} onConnectVault={handleConnectVault} /> : activeSection === 'pipelines' ? (
           <PipelinesSection vaultName={vaultName} noteCount={vaultNotes.length} runs={pipelineRuns} runningPipelineId={pipelineRunningId} onRun={handleRunPipeline} onViewRun={handleViewPipelineRun} onConnectVault={handleConnectVault} />
         ) : activeSection === 'runs' ? (
           <RunsSection runs={pipelineRuns} selectedRunId={selectedPipelineRunId} onSelectRun={setSelectedPipelineRunId} />

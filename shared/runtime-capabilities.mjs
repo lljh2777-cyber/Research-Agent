@@ -31,16 +31,16 @@ const CAPABILITY_PROFILES = Object.freeze({
   [RUNTIME_TARGETS.DESKTOP]: Object.freeze({
     localVault: Object.freeze({
       available: true,
-      adapters: Object.freeze(['desktop-fs']),
-      preferred: 'desktop-fs',
+      adapters: Object.freeze(['browser-picker', 'loopback-adapter']),
+      preferred: 'browser-picker',
     }),
     credentials: Object.freeze({
       providerApiKeys: 'os-keychain',
       subscriptionOAuth: 'os-keychain',
     }),
     chatgptSubscriptionOAuth: true,
-    providerTransport: 'desktop-ipc',
-    mcp: 'desktop',
+    providerTransport: 'desktop-loopback',
+    mcp: 'desktop-loopback',
   }),
   [RUNTIME_TARGETS.HOSTED_WEB]: Object.freeze({
     localVault: Object.freeze({
@@ -89,6 +89,10 @@ export function isRuntimeManifest(value) {
   return Boolean(
     capabilities
     && capabilities.localVault?.available === expected.localVault.available
+    && capabilities.localVault?.preferred === expected.localVault.preferred
+    && Array.isArray(capabilities.localVault?.adapters)
+    && capabilities.localVault.adapters.length === expected.localVault.adapters.length
+    && capabilities.localVault.adapters.every((adapter, index) => adapter === expected.localVault.adapters[index])
     && capabilities.credentials?.providerApiKeys === expected.credentials.providerApiKeys
     && capabilities.credentials?.subscriptionOAuth === expected.credentials.subscriptionOAuth
     && capabilities.chatgptSubscriptionOAuth === expected.chatgptSubscriptionOAuth
@@ -96,4 +100,3 @@ export function isRuntimeManifest(value) {
     && capabilities.mcp === expected.mcp
   )
 }
-

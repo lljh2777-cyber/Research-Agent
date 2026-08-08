@@ -31,6 +31,21 @@ const CONFIG_STORAGE_KEY = 'bioresearch-os:provider-configs:v1'
 const KEY_STORAGE_KEY = 'bioresearch-os:provider-session-keys:v1'
 const DEEPSEEK_CONFIG_VERSION = 3
 const BAILIAN_CONFIG_VERSION = 2
+export const DESKTOP_STORED_KEY = '__stored_in_os_keychain__'
+let desktopProviderKeys = {}
+let desktopTransientProviderKeys = {}
+let desktopProviderKeysHydration
+
+function desktopCredentialBridge() {
+  return globalThis.window?.researchDesktop?.credentials
+}
+
+function normalizeProviderKeys(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return Object.fromEntries(Object.entries(value).flatMap(([providerId, key]) => (
+    typeof key === 'string' && key ? [[providerId, key]] : []
+  )))
+}
 
 export function createDefaultProviderConfigs() {
   return Object.fromEntries(PROVIDER_PRESETS.map((provider) => {
@@ -142,27 +157,76 @@ export function saveProviderConfigs(configs, storage = globalThis.window?.localS
 }
 
 export function loadProviderSessionKeys(storage = globalThis.window?.sessionStorage) {
+  if (desktopCredentialBridge()) return { ...desktopProviderKeys }
   try {
-    const value = JSON.parse(storage?.getItem(KEY_STORAGE_KEY) || '{}')
-    return value && typeof value === 'object' ? value : {}
+    return normalizeProviderKeys(JSON.parse(storage?.getItem(KEY_STORAGE_KEY) || '{}'))
   } catch {
     return {}
   }
 }
 
-export function saveProviderSessionKeys(keys, storage = globalThis.window?.sessionStorage) {
+export function providerCredentialEndpoints(providerId, config) {
+  if (!config || typeof config !== 'object') return []
+  if (['deepseek', 'bailian'].includes(providerId)) {
+    return [...new Set(Object.values(config.endpoints || {}).map((endpoint) => endpoint?.baseUrl).filter(Boolean))]
+  }
+  return config.endpoint ? [config.endpoint] : []
+}
+
+export function saveProviderSessionKeys(keys, storage = globalThis.window?.sessionStorage, endpointScopes = {}) {
+  const normalized = normalizeProviderKeys(keys)
+  const bridge = desktopCredentialBridge()
+  if (bridge) {
+    const previous = desktopProviderKeys
+    desktopProviderKeys = normalized
+    const providerIds = new Set([...Object.keys(previous), ...Object.keys(normalized)].filter((providerId) => previous[providerId] !== normalized[providerId]))
+    return Promise.all([...providerIds].map((providerId) => (
+      normalized[providerId] === DESKTOP_STORED_KEY
+        ? Promise.resolve()
+        : normalized[providerId]
+        ? bridge.setProviderKey(providerId, normalized[providerId], endpointScopes[providerId] || [])
+        : bridge.deleteProviderKey(providerId)
+    ))).then(() => {
+      desktopTransientProviderKeys = Object.fromEntries(Object.entries(normalized).flatMap(([providerId, value]) => (
+        value && value !== DESKTOP_STORED_KEY ? [[providerId, value]] : []
+      )))
+      desktopProviderKeys = Object.fromEntries(Object.entries(desktopProviderKeys).map(([providerId, value]) => [
+        providerId,
+        value ? DESKTOP_STORED_KEY : value,
+      ]))
+    })
+  }
   try {
-    storage?.setItem(KEY_STORAGE_KEY, JSON.stringify(keys))
+    storage?.setItem(KEY_STORAGE_KEY, JSON.stringify(normalized))
   } catch {
     // Session-only credentials can remain in component state if storage is unavailable.
   }
+  return Promise.resolve()
+}
+
+export async function hydrateProviderSessionKeys(providerIds = PROVIDER_PRESETS.map((provider) => provider.id), bridge = desktopCredentialBridge()) {
+  if (!bridge) return loadProviderSessionKeys()
+  desktopProviderKeysHydration = Promise.all(providerIds.map(async (providerId) => [providerId, await bridge.hasProviderKey(providerId) ? DESKTOP_STORED_KEY : '']))
+    .then((entries) => {
+      desktopProviderKeys = normalizeProviderKeys(Object.fromEntries(entries))
+      return { ...desktopProviderKeys }
+    })
+  return desktopProviderKeysHydration
+}
+
+export async function getProviderSessionKey(providerId) {
+  if (desktopCredentialBridge()) {
+    await (desktopProviderKeysHydration || hydrateProviderSessionKeys())
+    return desktopTransientProviderKeys[String(providerId || '')] || ''
+  }
+  return loadProviderSessionKeys()[providerId] || ''
 }
 
 export async function fetchProviderModels({ providerId, endpoint, apiKey, signal }, fetchImpl = fetch) {
   const response = await fetchImpl('/api/providers/models', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ providerId, endpoint, apiKey }),
+    body: JSON.stringify({ providerId, endpoint, apiKey: desktopCredentialBridge() && apiKey === DESKTOP_STORED_KEY ? '' : apiKey }),
     signal,
   })
   const contentType = response.headers.get('content-type') || ''

@@ -41,8 +41,22 @@ describe('runtime capability matrix', () => {
 
     expect(manifest.buildMode).toBe(BUILD_MODES.DEVELOPMENT)
     expect(manifest.capabilities.credentials.providerApiKeys).toBe('os-keychain')
-    expect(manifest.capabilities.providerTransport).toBe('desktop-ipc')
-    expect(manifest.capabilities.localVault.preferred).toBe('desktop-fs')
+    expect(manifest.capabilities.providerTransport).toBe('desktop-loopback')
+    expect(manifest.capabilities.localVault.preferred).toBe('browser-picker')
+    expect(manifest.capabilities.mcp).toBe('desktop-loopback')
+  })
+
+  it('rejects a manifest with injected local adapters', () => {
+    const manifest = createRuntimeManifest({ target: RUNTIME_TARGETS.DESKTOP })
+    const tampered = {
+      ...manifest,
+      capabilities: {
+        ...manifest.capabilities,
+        localVault: { ...manifest.capabilities.localVault, adapters: [...manifest.capabilities.localVault.adapters, 'untrusted-adapter'] },
+      },
+    }
+
+    expect(isRuntimeManifest(tampered)).toBe(false)
   })
 
   it('creates the current Vite runtime as local Web', () => {
@@ -56,4 +70,3 @@ describe('runtime capability matrix', () => {
     })
   })
 })
-

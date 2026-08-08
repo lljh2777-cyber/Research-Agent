@@ -24,15 +24,30 @@ The application uses one codebase with separate build and runtime dimensions. Th
 | Runtime target | Current status | Credential and local-data boundary |
 | --- | --- | --- |
 | `local-web` | Active development target | Provider keys stay in the browser session; ChatGPT OAuth stays in Codex/keyring; Vault access is user-selected or loopback-only |
-| `desktop` | Capability profile defined; Electron host not implemented yet | Provider keys and subscription credentials use the OS keychain; filesystem and MCP access move behind desktop IPC |
+| `desktop` | Electron host and unpacked/package build are available | Provider keys are encrypted with the OS credential service and resolved only inside the desktop host; subscription OAuth remains in Codex/keyring; Provider and MCP adapters stay on an ephemeral loopback origin |
 | `hosted-web` | Restricted profile only; not deployable yet | Local Vault, ChatGPT subscription OAuth, and local MCP are disabled until a separate multi-user backend is designed |
 
 Build mode (`development`, `test`, or `production`) is intentionally independent from runtime target.
+
+## Desktop development
+
+The desktop target reuses the same React application and starts it inside a hardened Electron window:
+
+```bash
+npm run dev:desktop       # Vite on loopback + Electron
+npm run build:desktop     # unpacked desktop application under release/
+npm run dist:desktop      # platform installer/package under release/
+```
+
+The renderer has no Node.js integration and receives only a narrow preload API. Existing provider keys are never returned to the renderer: Electron encrypts them with the operating-system credential service, binds each saved key to the endpoint origins confirmed when it was entered, and resolves it inside the desktop Provider adapter only for those origins. Changing a provider to a new gateway therefore requires entering its key again. The static application, Provider adapter, and MCP adapter use a random `127.0.0.1` port with exact Host/Origin checks. ChatGPT subscription login still requires the official `codex` executable and keeps OAuth credentials in Codex's keyring.
+
+Desktop packages are currently unsigned development artifacts. Production distribution still requires platform signing, release provenance, and installer testing. API keys must never be embedded in the application bundle or supplied through `VITE_*` variables, because Vite variables are readable by the renderer.
 
 ## Testing
 
 ```bash
 npm test                 # existing Node tests + Vitest unit and provider contracts
+npm run test:desktop     # desktop host and encrypted-credential boundary tests
 npm run test:e2e         # Playwright local-Web smoke tests
 npm run build            # production bundle
 npm run test:all         # all of the above
@@ -69,6 +84,7 @@ Provider API credentials entered in the current Web prototype are intended for a
 - Provider-neutral evidence packets injected into the user-selected ChatGPT answer model with numbered source citations
 - Loopback-only ChatGPT/Codex OAuth bridge with PKCE, refresh-token rotation, account status, logout, and streaming Responses proxy
 - Runtime target capability matrix with fail-closed local feature discovery
+- Electron main process, sandboxed renderer, allowlisted preload IPC, and OS-encrypted provider credential storage
 - Vitest unit tests, provider contract tests, Playwright smoke tests, and GitHub Actions CI
 - Visual concept in `design/concept-desktop.png`
 
@@ -92,6 +108,7 @@ This is a local integration with the official Codex client, not the public OpenA
 
 The implementation notes and source comparison are in [`docs/chatgpt-api-integration.md`](docs/chatgpt-api-integration.md).
 The multi-provider protocol boundary is documented in [`docs/provider-api-architecture.md`](docs/provider-api-architecture.md). DeepSeek and Alibaba Cloud Model Studio adapters are implemented; additional providers remain incremental integrations.
+The Electron process, credential, and loopback boundaries are documented in [`docs/desktop-runtime.md`](docs/desktop-runtime.md).
 
 ## Local Vault adapter
 
@@ -116,4 +133,5 @@ The `Settings` action opens the knowledge-base profile with Markdown parsing, em
 1. Add optional embedding and reranker adapters behind the existing evidence-packet boundary.
 2. Persist stream state so an interrupted Web view can reattach to an active run.
 3. Add note editing safeguards and explicit change conflict handling.
-4. Move the stable local services behind an Electron main-process and preload IPC boundary, then store provider API keys in the OS credential manager.
+4. Move long-running stream ownership and user-approved filesystem operations from loopback adapters into dedicated desktop IPC services.
+5. Add signed desktop release workflows and platform-specific installer smoke tests.

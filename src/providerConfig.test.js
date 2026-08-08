@@ -1,7 +1,44 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { createDefaultProviderConfigs, fetchProviderModels, normalizeProviderConfigs, providerConfigsToModels } from './providerConfig.js'
+import { createDefaultProviderConfigs, DESKTOP_STORED_KEY, fetchProviderModels, getProviderSessionKey, hydrateProviderSessionKeys, loadProviderSessionKeys, normalizeProviderConfigs, providerConfigsToModels, providerCredentialEndpoints, saveProviderSessionKeys } from './providerConfig.js'
+
+test('hydrates and persists desktop provider keys through the narrow credential bridge', async () => {
+  const credentials = new Map([['deepseek', 'desktop-secret']])
+  const bridge = {
+    hasProviderKey: async (providerId) => credentials.has(providerId),
+    setProviderKey: async (providerId, value, allowedEndpoints) => { credentials.set(providerId, value); credentials.set(`${providerId}:endpoints`, allowedEndpoints) },
+    deleteProviderKey: async (providerId) => { credentials.delete(providerId) },
+  }
+  globalThis.window = { researchDesktop: { credentials: bridge } }
+  try {
+    await hydrateProviderSessionKeys(['deepseek', 'bailian'], bridge)
+    assert.deepEqual(loadProviderSessionKeys(), { deepseek: DESKTOP_STORED_KEY })
+    assert.equal(await getProviderSessionKey('deepseek'), '')
+
+    await saveProviderSessionKeys({ bailian: 'new-secret' }, undefined, { bailian: ['https://dashscope.aliyuncs.com/compatible-mode/v1'] })
+    assert.equal(credentials.has('deepseek'), false)
+    assert.equal(credentials.get('bailian'), 'new-secret')
+    assert.deepEqual(credentials.get('bailian:endpoints'), ['https://dashscope.aliyuncs.com/compatible-mode/v1'])
+    assert.equal(await getProviderSessionKey('bailian'), 'new-secret')
+
+    let requestBody
+    await fetchProviderModels({ providerId: 'deepseek', endpoint: 'https://api.deepseek.com', apiKey: DESKTOP_STORED_KEY }, async (_url, options) => {
+      requestBody = JSON.parse(options.body)
+      return new Response(JSON.stringify({ models: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+    assert.equal(requestBody.apiKey, '')
+  } finally {
+    delete globalThis.window
+  }
+})
+
+test('derives endpoint scopes from provider configuration profiles', () => {
+  const configs = createDefaultProviderConfigs()
+  assert.deepEqual(providerCredentialEndpoints('openai', configs.openai), ['https://api.openai.com/v1'])
+  assert(providerCredentialEndpoints('deepseek', configs.deepseek).includes('https://api.deepseek.com'))
+  assert(providerCredentialEndpoints('bailian', configs.bailian).length >= 3)
+})
 
 test('normalizes persisted provider settings without accepting stale selections', () => {
   const configs = normalizeProviderConfigs({

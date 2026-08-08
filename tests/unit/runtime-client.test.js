@@ -9,7 +9,10 @@ import {
 } from '../../src/runtime/client.js'
 import { getAuthServiceBaseUrl, getVaultServiceBaseUrl } from '../../src/runtime/services.js'
 
-afterEach(() => resetRuntimeManifestForTests())
+afterEach(() => {
+  resetRuntimeManifestForTests()
+  vi.unstubAllGlobals()
+})
 
 describe('runtime discovery client', () => {
   it('accepts a valid trusted runtime response', async () => {
@@ -21,6 +24,15 @@ describe('runtime discovery client', () => {
 
     await expect(fetchRuntimeManifest(fetchImpl)).resolves.toEqual(manifest)
     expect(fetchImpl).toHaveBeenCalledWith('/api/runtime', expect.objectContaining({ cache: 'no-store' }))
+  })
+
+  it('prefers the allowlisted desktop preload bridge over HTTP discovery', async () => {
+    const manifest = createRuntimeManifest({ target: RUNTIME_TARGETS.DESKTOP })
+    vi.stubGlobal('window', { researchDesktop: { runtime: { getManifest: vi.fn(async () => manifest) } } })
+    const fetchImpl = vi.fn()
+
+    await expect(fetchRuntimeManifest(fetchImpl)).resolves.toEqual(manifest)
+    expect(fetchImpl).not.toHaveBeenCalled()
   })
 
   it('falls back to the restricted hosted profile when discovery fails', async () => {
@@ -38,4 +50,3 @@ describe('runtime discovery client', () => {
     expect(getVaultServiceBaseUrl({ VITE_VAULT_API_URL: 'http://localhost:9001/' })).toBe('http://localhost:9001')
   })
 })
-

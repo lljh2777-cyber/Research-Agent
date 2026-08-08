@@ -7,6 +7,12 @@ export function failClosedRuntimeManifest() {
 }
 
 export async function fetchRuntimeManifest(fetchImpl = fetch) {
+  const desktopBridge = globalThis.window?.researchDesktop?.runtime
+  if (desktopBridge?.getManifest) {
+    const payload = await desktopBridge.getManifest()
+    if (!isRuntimeManifest(payload)) throw new Error('Desktop runtime returned an invalid manifest.')
+    return payload
+  }
   const response = await fetchImpl('/api/runtime', {
     headers: { Accept: 'application/json' },
     cache: 'no-store',
@@ -27,4 +33,3 @@ export function loadRuntimeManifest(fetchImpl = fetch) {
 export function resetRuntimeManifestForTests() {
   manifestPromise = undefined
 }
-

@@ -18,7 +18,7 @@ export function createLocalWebRuntimeManifest({
 }
 
 export function createRuntimeApiMiddleware(options = {}) {
-  const manifest = createLocalWebRuntimeManifest(options)
+  const manifest = options.manifest || createLocalWebRuntimeManifest(options)
   return function runtimeApiMiddleware(request, response, next) {
     const path = new URL(request.url || '/', 'http://localhost').pathname
     if (path !== '/api/runtime') return next()
@@ -37,4 +37,3 @@ export function createRuntimeApiMiddleware(options = {}) {
     response.end(JSON.stringify(manifest))
   }
 }
-

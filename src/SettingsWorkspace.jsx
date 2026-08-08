@@ -44,8 +44,10 @@ import {
   withBailianModelProfile,
 } from '../shared/bailian-provider.mjs'
 import {
+  DESKTOP_STORED_KEY,
   fetchProviderModels,
   loadProviderSessionKeys,
+  providerCredentialEndpoints,
   PROVIDER_PRESETS,
   saveProviderSessionKeys,
 } from './providerConfig.js'
@@ -318,6 +320,10 @@ function ProvidersPage({ selectedId, configs, onChange }) {
   const [manualModelId, setManualModelId] = useState('')
   const [showManualModel, setShowManualModel] = useState(false)
   const apiKey = apiKeys[selected.id] || ''
+  const apiKeyStoredByDesktop = apiKey === DESKTOP_STORED_KEY
+  const apiKeyInputValue = apiKeyStoredByDesktop ? '' : apiKey
+  const hasApiKey = Boolean(apiKey.trim())
+  const isDesktopRuntime = Boolean(globalThis.window?.researchDesktop)
   const selectedIds = new Set(config.selectedModelIds)
   const filteredModels = useMemo(
     () => config.models.filter((model) => `${model.name} ${model.id} ${model.kind}`.toLowerCase().includes(modelQuery.trim().toLowerCase())),
@@ -340,7 +346,9 @@ function ProvidersPage({ selectedId, configs, onChange }) {
   const updateApiKey = (value) => {
     const next = { ...apiKeys, [selected.id]: value }
     setApiKeys(next)
-    saveProviderSessionKeys(next)
+    void saveProviderSessionKeys(next, undefined, { [selected.id]: providerCredentialEndpoints(selected.id, config) }).catch(() => {
+      setFeedback({ type: 'error', message: 'The provider credential could not be saved securely.' })
+    })
     setFeedback(null)
   }
 
@@ -352,7 +360,7 @@ function ProvidersPage({ selectedId, configs, onChange }) {
       setFeedback({ type: 'error', message: 'Enter an API endpoint first.' })
       return
     }
-    if (selected.requiresKey && !apiKey.trim()) {
+    if (selected.requiresKey && !hasApiKey) {
       setFeedback({ type: 'error', message: 'Enter an API key before fetching models.' })
       return
     }
@@ -427,8 +435,8 @@ function ProvidersPage({ selectedId, configs, onChange }) {
     </header>
 
     <section className="provider-config-section">
-      <div className="provider-field-heading"><div><KeyRound size={16} /><span><strong>API credentials</strong><small>Kept only for this browser session in the web milestone.</small></span></div>{selected.keyWebsite ? <a className="settings-text-link" href={selected.keyWebsite} target="_blank" rel="noreferrer">Get API key</a> : <span className="provider-field-status">Optional</span>}</div>
-      <div className="provider-input-row provider-key-row"><div className="provider-secret-input"><input type={showApiKey ? 'text' : 'password'} value={apiKey} onChange={(event) => updateApiKey(event.target.value)} placeholder={selected.requiresKey ? 'Enter API key' : 'Optional for local servers'} autoComplete="off" aria-label="API key" /><button onClick={() => setShowApiKey((current) => !current)} aria-label={showApiKey ? 'Hide API key' : 'Show API key'}>{showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}</button></div><button className="settings-secondary-button" onClick={() => handleFetchModels('verify')} disabled={modelsBusy || (selected.requiresKey && !apiKey.trim())}>{modelsBusy ? <RefreshCw className="spin" size={14} /> : <ShieldCheck size={14} />}Verify</button></div>
+      <div className="provider-field-heading"><div><KeyRound size={16} /><span><strong>API credentials</strong><small>{isDesktopRuntime ? 'Encrypted by the operating system; saved keys are never returned to this page.' : 'Kept only for this browser session in the web milestone.'}</small></span></div>{selected.keyWebsite ? <a className="settings-text-link" href={selected.keyWebsite} target="_blank" rel="noreferrer">Get API key</a> : <span className="provider-field-status">Optional</span>}</div>
+      <div className="provider-input-row provider-key-row"><div className="provider-secret-input"><input type={showApiKey ? 'text' : 'password'} value={apiKeyInputValue} onChange={(event) => updateApiKey(event.target.value)} placeholder={apiKeyStoredByDesktop ? 'Stored securely · enter a new key to replace it' : selected.requiresKey ? 'Enter API key' : 'Optional for local servers'} autoComplete="off" aria-label="API key" /><button onClick={() => setShowApiKey((current) => !current)} aria-label={showApiKey ? 'Hide API key' : 'Show API key'}>{showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}</button></div>{apiKeyStoredByDesktop && <button className="settings-secondary-button" onClick={() => updateApiKey('')}>Remove</button>}<button className="settings-secondary-button" onClick={() => handleFetchModels('verify')} disabled={modelsBusy || (selected.requiresKey && !hasApiKey)}>{modelsBusy ? <RefreshCw className="spin" size={14} /> : <ShieldCheck size={14} />}Verify</button></div>
       {!['deepseek', 'bailian'].includes(selected.id) ? <>
         <div className="provider-field-heading"><div><Cloud size={16} /><span><strong>API endpoint</strong><small>Override the default endpoint for gateways or compatible services.</small></span></div><span className="provider-field-status">{config.endpoint === selected.endpoint ? 'Default' : 'Custom'}</span></div>
         <div className="provider-input-row"><input value={config.endpoint} onChange={(event) => updateConfig({ endpoint: event.target.value })} aria-label="API endpoint" spellCheck="false" /><button className="settings-secondary-button" onClick={() => updateConfig({ endpoint: selected.endpoint })} disabled={config.endpoint === selected.endpoint}>Reset</button></div>
@@ -441,7 +449,7 @@ function ProvidersPage({ selectedId, configs, onChange }) {
     {feedback && <div className={`provider-feedback ${feedback.type}`} role={feedback.type === 'error' ? 'alert' : 'status'}>{feedback.type === 'success' ? <CheckCircle2 size={15} /> : <Info size={15} />}<span>{feedback.message}</span></div>}
 
     <section className="provider-model-section">
-      <div className="provider-model-heading"><div><strong>Models</strong><small>{config.models.length ? `${config.selectedModelIds.length} added · ${config.models.length} discovered${config.lastFetchedAt ? ` · updated ${new Date(config.lastFetchedAt).toLocaleString()}` : ''}` : 'Fetch the live catalog, then choose which models appear in Research.'}</small></div><div className="provider-model-actions"><button className="settings-secondary-button" onClick={() => setShowManualModel((current) => !current)}><Plus size={14} />Add manually</button><button className="settings-primary-button" onClick={() => handleFetchModels('fetch')} disabled={modelsBusy || (selected.requiresKey && !apiKey.trim())}><RefreshCw className={modelsBusy ? 'spin' : ''} size={14} />{modelsBusy ? 'Fetching…' : 'Fetch model list'}</button></div></div>
+      <div className="provider-model-heading"><div><strong>Models</strong><small>{config.models.length ? `${config.selectedModelIds.length} added · ${config.models.length} discovered${config.lastFetchedAt ? ` · updated ${new Date(config.lastFetchedAt).toLocaleString()}` : ''}` : 'Fetch the live catalog, then choose which models appear in Research.'}</small></div><div className="provider-model-actions"><button className="settings-secondary-button" onClick={() => setShowManualModel((current) => !current)}><Plus size={14} />Add manually</button><button className="settings-primary-button" onClick={() => handleFetchModels('fetch')} disabled={modelsBusy || (selected.requiresKey && !hasApiKey)}><RefreshCw className={modelsBusy ? 'spin' : ''} size={14} />{modelsBusy ? 'Fetching…' : 'Fetch model list'}</button></div></div>
       {showManualModel && <div className="provider-manual-model"><input value={manualModelId} onChange={(event) => setManualModelId(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') addManualModel() }} placeholder="Model ID, e.g. organization/model-name" autoFocus /><button className="settings-primary-button" onClick={addManualModel} disabled={!manualModelId.trim()}>Add model</button></div>}
       {config.models.length ? <div className="provider-model-catalog">
         <div className="provider-model-tools"><label className="settings-search"><Search size={14} /><input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder="Search discovered models…" /></label><button className="settings-text-button" onClick={selectAllChatModels}>Add all chat models</button></div>
@@ -459,11 +467,11 @@ function ProvidersPage({ selectedId, configs, onChange }) {
         <div><span>Model discovery</span><strong>Dynamic catalog</strong></div>
         <div><span>Authentication</span><strong>{selected.requiresKey ? 'API key' : 'Optional API key'}</strong></div>
         <div><span>Protocol</span><strong>{selected.protocol}</strong></div>
-        <div><span>Web credential storage</span><strong>Session only</strong></div>
+        <div><span>{isDesktopRuntime ? 'Desktop credential storage' : 'Web credential storage'}</span><strong>{isDesktopRuntime ? 'OS encrypted' : 'Session only'}</strong></div>
       </div>
     </section>
 
-    <div className="provider-security-note"><ShieldCheck size={16} /><span><strong>Web-first safety boundary</strong>API keys are sent only to the local adapter for provider requests and cleared when the browser session ends. The desktop build will move them into the operating system secure store.</span></div>
+    <div className="provider-security-note"><ShieldCheck size={16} /><span><strong>{isDesktopRuntime ? 'Desktop credential boundary' : 'Web-first safety boundary'}</strong>{isDesktopRuntime ? 'Saved keys are encrypted by the operating system and resolved inside the desktop host; the renderer receives only configured status.' : 'API keys are sent only to the local adapter for provider requests and cleared when the browser session ends.'}</span></div>
   </div>
 }
 
