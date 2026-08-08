@@ -1,0 +1,40 @@
+import { BUILD_MODES, createRuntimeManifest, RUNTIME_TARGETS } from '../shared/runtime-capabilities.mjs'
+
+function buildModeFromEnvironment(value) {
+  if (value === 'test') return BUILD_MODES.TEST
+  if (value === 'production') return BUILD_MODES.PRODUCTION
+  return BUILD_MODES.DEVELOPMENT
+}
+
+export function createLocalWebRuntimeManifest({
+  nodeEnv = process.env.NODE_ENV,
+  version = process.env.npm_package_version || '0.1.0',
+} = {}) {
+  return createRuntimeManifest({
+    buildMode: buildModeFromEnvironment(nodeEnv),
+    target: RUNTIME_TARGETS.LOCAL_WEB,
+    version,
+  })
+}
+
+export function createRuntimeApiMiddleware(options = {}) {
+  const manifest = createLocalWebRuntimeManifest(options)
+  return function runtimeApiMiddleware(request, response, next) {
+    const path = new URL(request.url || '/', 'http://localhost').pathname
+    if (path !== '/api/runtime') return next()
+    if (request.method !== 'GET') {
+      response.statusCode = 405
+      response.setHeader('Allow', 'GET')
+      response.setHeader('Content-Type', 'application/json; charset=utf-8')
+      response.setHeader('Cache-Control', 'no-store')
+      response.end(JSON.stringify({ error: 'Method not allowed.' }))
+      return
+    }
+    response.statusCode = 200
+    response.setHeader('Content-Type', 'application/json; charset=utf-8')
+    response.setHeader('Cache-Control', 'no-store')
+    response.setHeader('X-Content-Type-Options', 'nosniff')
+    response.end(JSON.stringify(manifest))
+  }
+}
+

@@ -1,9 +1,8 @@
 import { parseVaultTextEntries } from './vault.js'
-
-const DEFAULT_ADAPTER_URL = 'http://127.0.0.1:4317'
+import { getVaultServiceBaseUrl } from './runtime/services.js'
 
 function adapterUrl() {
-  return (import.meta.env.VITE_VAULT_API_URL || DEFAULT_ADAPTER_URL).replace(/\/$/, '')
+  return getVaultServiceBaseUrl()
 }
 
 async function requestAdapter(path, timeout = 900) {
