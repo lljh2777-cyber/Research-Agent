@@ -27,10 +27,11 @@ test('builds OpenAI Responses requests without translating them to chat completi
 
 test('builds provider-native Anthropic and Gemini requests', () => {
   const anthropic = buildProviderChatRequest({
-    providerId: 'anthropic', endpoint: 'https://api.anthropic.com', apiKey: 'a-key', model: 'claude-current', messages,
+    providerId: 'anthropic', endpoint: 'https://api.anthropic.com', apiKey: 'a-key', model: 'claude-current', messages, options: { temperature: 0.4 },
   })
   assert.equal(anthropic.url, 'https://api.anthropic.com/v1/messages')
   assert.equal(anthropic.body.system, 'Use vault evidence.')
+  assert.equal(anthropic.body.temperature, 0.4)
   assert.deepEqual(anthropic.body.messages, [{ role: 'user', content: 'Summarize this result.' }])
 
   const gemini = buildProviderChatRequest({
@@ -65,27 +66,32 @@ test('normalizes OpenAI-compatible streaming into runtime lifecycle events', asy
 test('builds all three DeepSeek request profiles with protocol-specific authentication', () => {
   const native = buildProviderChatRequest({
     providerId: 'deepseek', endpoint: 'https://api.deepseek.com', endpointType: 'openai-chat-completions', apiKey: 'secret', model: 'deepseek-v4-pro', messages,
-    options: { reasoningEffort: 'xhigh', thinkingEnabled: false },
+    options: { reasoningEffort: 'max', thinkingEnabled: false },
   })
   assert.equal(native.url, 'https://api.deepseek.com/chat/completions')
   assert.equal(native.headers.Authorization, 'Bearer secret')
-  assert.equal(native.body.reasoning_effort, 'max')
+  assert.equal('reasoning_effort' in native.body, false)
   assert.deepEqual(native.body.thinking, { type: 'disabled' })
 
   const responses = buildProviderChatRequest({
     providerId: 'deepseek', endpoint: 'https://gateway.example/v1', endpointType: 'openai-responses', apiKey: 'secret', model: 'deepseek-v4-flash', messages,
+    options: { thinkingEnabled: false, reasoningEffort: 'max' },
   })
   assert.equal(responses.url, 'https://gateway.example/v1/responses')
   assert.equal(responses.headers.Authorization, 'Bearer secret')
   assert.deepEqual(responses.body.input, messages)
+  assert.deepEqual(responses.body.reasoning, { effort: 'none' })
 
   const anthropic = buildProviderChatRequest({
     providerId: 'deepseek', endpoint: 'https://api.deepseek.com/anthropic', endpointType: 'anthropic-messages', apiKey: 'secret', model: 'deepseek-v4-pro', messages,
+    options: { thinkingEnabled: true, reasoningEffort: 'max' },
   })
   assert.equal(anthropic.url, 'https://api.deepseek.com/anthropic/v1/messages')
   assert.equal(anthropic.headers['x-api-key'], 'secret')
   assert.equal('Authorization' in anthropic.headers, false)
   assert.equal(anthropic.body.system, 'Use vault evidence.')
+  assert.deepEqual(anthropic.body.thinking, { type: 'enabled', budget_tokens: 1024 })
+  assert.deepEqual(anthropic.body.output_config, { effort: 'max' })
 })
 
 test('rejects unsupported automatic DeepSeek model and interface combinations', () => {
@@ -104,6 +110,19 @@ test('normalizes OpenAI Responses typed events', async () => {
   ]))) events.push(event)
   assert.equal(events.at(-1).text, 'Evidence')
   assert.equal(events.at(-1).responseId, 'resp-1')
+})
+
+test('normalizes DeepSeek Responses reasoning text events', async () => {
+  const events = []
+  for await (const event of streamProviderChat({
+    providerId: 'deepseek', endpoint: 'https://api.deepseek.com', endpointType: 'openai-responses', apiKey: 'secret', model: 'deepseek-v4-flash', messages,
+  }, async () => sseResponse([
+    'event: response.reasoning_text.delta\ndata: {"type":"response.reasoning_text.delta","delta":"Inspect evidence"}',
+    'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"Answer"}',
+    'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp-ds","usage":{"total_tokens":9}}}',
+  ]))) events.push(event)
+  assert.equal(events.at(-1).reasoning, 'Inspect evidence')
+  assert.equal(events.at(-1).text, 'Answer')
 })
 
 test('keeps custom OpenAI-compatible endpoints keyless and omits optional stream options', () => {

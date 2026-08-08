@@ -204,6 +204,40 @@ function DeepSeekEndpointSettings({ config, onUpdate }) {
   </section>
 }
 
+function DeepSeekThinkingSettings({ config, onUpdate }) {
+  const modes = [
+    ['auto', 'Auto', 'Use the model default'],
+    ['enabled', 'On', 'Always return reasoning'],
+    ['disabled', 'Off', 'Answer without reasoning'],
+  ]
+  const efforts = [
+    ['auto', 'Auto'],
+    ['low', 'Low'],
+    ['high', 'High'],
+    ['max', 'Max'],
+  ]
+  return <section className="deepseek-thinking-section">
+    <div className="deepseek-thinking-copy">
+      <span>Reasoning control</span>
+      <h3>Thinking mode</h3>
+      <p>Applied to DeepSeek Chat, Responses, and Anthropic requests with protocol-specific parameters. Sampling controls are omitted while thinking is active.</p>
+    </div>
+    <fieldset>
+      <legend>Mode</legend>
+      <div className="deepseek-segmented-control">
+        {modes.map(([value, label, detail]) => <button type="button" className={config.thinkingMode === value ? 'active' : ''} aria-pressed={config.thinkingMode === value} onClick={() => onUpdate({ thinkingMode: value })} key={value}><strong>{label}</strong><small>{detail}</small></button>)}
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>Reasoning effort</legend>
+      <div className="deepseek-effort-control">
+        {efforts.map(([value, label]) => <button type="button" className={config.reasoningEffort === value ? 'active' : ''} aria-pressed={config.reasoningEffort === value} onClick={() => onUpdate({ reasoningEffort: value })} disabled={config.thinkingMode === 'disabled'} key={value}>{label}</button>)}
+      </div>
+      <small>DeepSeek maps effort by model; V4 Pro may promote Low to High. Auto keeps the provider default.</small>
+    </fieldset>
+  </section>
+}
+
 function ProvidersPage({ selectedId, configs, onChange }) {
   const selected = API_PROVIDERS.find((provider) => provider.id === selectedId) || API_PROVIDERS[0]
   const SelectedIcon = selected.icon
@@ -329,7 +363,7 @@ function ProvidersPage({ selectedId, configs, onChange }) {
       </> : <div className="provider-field-heading deepseek-shared-key-note"><div><Cloud size={16} /><span><strong>Shared credential</strong><small>The same DeepSeek API key is used across all enabled request interfaces below.</small></span></div><span className="provider-field-status">3 profiles</span></div>}
     </section>
 
-    {selected.id === 'deepseek' && <DeepSeekEndpointSettings config={config} onUpdate={updateConfig} />}
+    {selected.id === 'deepseek' && <><DeepSeekEndpointSettings config={config} onUpdate={updateConfig} /><DeepSeekThinkingSettings config={config} onUpdate={updateConfig} /></>}
 
     {feedback && <div className={`provider-feedback ${feedback.type}`} role={feedback.type === 'error' ? 'alert' : 'status'}>{feedback.type === 'success' ? <CheckCircle2 size={15} /> : <Info size={15} />}<span>{feedback.message}</span></div>}
 

@@ -1,7 +1,9 @@
 import {
   createDeepSeekEndpoints,
+  DEEPSEEK_ENDPOINT_TYPES,
   isDeepSeekEndpointType,
   normalizeDeepSeekEndpoints,
+  normalizeDeepSeekThinking,
   resolveDeepSeekEndpoint,
   withDeepSeekModelProfile,
 } from '../shared/deepseek-provider.mjs'
@@ -17,6 +19,7 @@ export const PROVIDER_PRESETS = [
 
 const CONFIG_STORAGE_KEY = 'bioresearch-os:provider-configs:v1'
 const KEY_STORAGE_KEY = 'bioresearch-os:provider-session-keys:v1'
+const DEEPSEEK_CONFIG_VERSION = 2
 
 export function createDefaultProviderConfigs() {
   return Object.fromEntries(PROVIDER_PRESETS.map((provider) => {
@@ -30,6 +33,8 @@ export function createDefaultProviderConfigs() {
     if (provider.id === 'deepseek') {
       config.defaultEndpointType = 'auto'
       config.endpoints = createDeepSeekEndpoints()
+      config.schemaVersion = DEEPSEEK_CONFIG_VERSION
+      Object.assign(config, normalizeDeepSeekThinking())
     }
     return [provider.id, config]
   }))
@@ -69,7 +74,13 @@ export function normalizeProviderConfigs(value) {
         ? saved.defaultEndpointType
         : 'auto'
       normalized.endpoints = normalizeDeepSeekEndpoints(saved.endpoints, normalized.endpoint)
-      normalized.endpoint = normalized.endpoints['openai-chat-completions'].baseUrl
+      const savedSchemaVersion = Number.isFinite(Number(saved.schemaVersion)) ? Number(saved.schemaVersion) : 0
+      if (savedSchemaVersion < DEEPSEEK_CONFIG_VERSION) {
+        normalized.endpoints[DEEPSEEK_ENDPOINT_TYPES.RESPONSES].enabled = true
+      }
+      normalized.schemaVersion = DEEPSEEK_CONFIG_VERSION
+      Object.assign(normalized, normalizeDeepSeekThinking(saved))
+      normalized.endpoint = normalized.endpoints[DEEPSEEK_ENDPOINT_TYPES.CHAT].baseUrl
     }
     defaults[provider.id] = normalized
   }

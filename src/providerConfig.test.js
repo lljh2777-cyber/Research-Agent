@@ -76,7 +76,8 @@ test('migrates legacy DeepSeek settings and routes selected models through the c
     },
   })
   assert.equal(configs.deepseek.endpoints['openai-chat-completions'].baseUrl, 'https://gateway.example/deepseek')
-  assert.equal(configs.deepseek.endpoints['openai-responses'].enabled, false)
+  assert.equal(configs.deepseek.endpoints['openai-responses'].enabled, true)
+  assert.equal(configs.deepseek.schemaVersion, 2)
 
   const [model] = providerConfigsToModels(configs)
   assert.equal(model.endpointType, 'openai-chat-completions')
@@ -100,4 +101,37 @@ test('allows an explicit DeepSeek Responses compatibility endpoint without selec
   const [model] = providerConfigsToModels(configs)
   assert.equal(model.endpointType, 'openai-responses')
   assert.equal(model.endpoint, 'https://gateway.example/v1')
+})
+
+test('normalizes persisted DeepSeek thinking controls', () => {
+  const configs = normalizeProviderConfigs({ deepseek: { thinkingMode: 'enabled', reasoningEffort: 'max' } })
+  assert.equal(configs.deepseek.thinkingMode, 'enabled')
+  assert.equal(configs.deepseek.reasoningEffort, 'max')
+  const defaults = normalizeProviderConfigs({ deepseek: { thinkingMode: 'sometimes', reasoningEffort: 'medium' } })
+  assert.equal(defaults.deepseek.thinkingMode, 'auto')
+  assert.equal(defaults.deepseek.reasoningEffort, 'auto')
+})
+
+test('preserves an intentional Responses disable after the DeepSeek v2 migration', () => {
+  const configs = normalizeProviderConfigs({
+    deepseek: {
+      schemaVersion: 2,
+      endpoints: {
+        'openai-responses': { baseUrl: 'https://api.deepseek.com', enabled: false },
+      },
+    },
+  })
+  assert.equal(configs.deepseek.endpoints['openai-responses'].enabled, false)
+})
+
+test('enables the newly official Responses endpoint when migrating an unversioned DeepSeek config', () => {
+  const configs = normalizeProviderConfigs({
+    deepseek: {
+      endpoints: {
+        'openai-responses': { baseUrl: 'https://api.deepseek.com', enabled: false },
+      },
+    },
+  })
+  assert.equal(configs.deepseek.schemaVersion, 2)
+  assert.equal(configs.deepseek.endpoints['openai-responses'].enabled, true)
 })

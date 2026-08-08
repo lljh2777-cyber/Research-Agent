@@ -22,9 +22,8 @@ export const DEEPSEEK_ENDPOINT_PROFILES = Object.freeze({
     adapterFamily: 'openai',
     defaultBaseUrl: 'https://api.deepseek.com',
     route: 'responses',
-    description: 'Optional compatibility endpoint for gateways that implement the OpenAI Responses protocol. DeepSeek does not currently document it as an official API.',
-    maturity: 'Experimental',
-    defaultEnabled: false,
+    description: 'Official Responses API for Codex-style event streams and hosted tools. Currently limited to DeepSeek V4 Flash.',
+    maturity: 'V4 Flash only',
   }),
   [DEEPSEEK_ENDPOINT_TYPES.ANTHROPIC]: Object.freeze({
     id: DEEPSEEK_ENDPOINT_TYPES.ANTHROPIC,
@@ -71,7 +70,7 @@ export function getDeepSeekModelProfile(modelId) {
   const id = String(modelId || '').trim().toLowerCase()
   if (id === 'deepseek-v4-flash' || id.startsWith('deepseek-v4-flash[')) {
     return {
-      endpointTypes: [DEEPSEEK_ENDPOINT_TYPES.CHAT, DEEPSEEK_ENDPOINT_TYPES.ANTHROPIC],
+      endpointTypes: [DEEPSEEK_ENDPOINT_TYPES.CHAT, DEEPSEEK_ENDPOINT_TYPES.RESPONSES, DEEPSEEK_ENDPOINT_TYPES.ANTHROPIC],
       preferredEndpointType: DEEPSEEK_ENDPOINT_TYPES.CHAT,
       capabilities: { reasoning: true, tools: true, webSearch: false },
     }
@@ -115,7 +114,7 @@ export function resolveDeepSeekEndpoint(config, model) {
     ? profile.endpointTypes
     : [configuredDefault, ...profile.endpointTypes.filter((endpointType) => endpointType !== configuredDefault)]
   const endpointType = candidates.find((candidate) => (
-    (configuredDefault !== 'auto' || profile.endpointTypes.includes(candidate))
+    profile.endpointTypes.includes(candidate)
     && endpoints[candidate]?.enabled
     && endpoints[candidate]?.baseUrl?.trim()
   ))
@@ -125,6 +124,24 @@ export function resolveDeepSeekEndpoint(config, model) {
     endpoint: endpoints[endpointType].baseUrl,
     automatic: configuredDefault === 'auto' || configuredDefault !== endpointType,
     fellBack: configuredDefault !== 'auto' && configuredDefault !== endpointType,
+  }
+}
+
+const THINKING_MODES = new Set(['auto', 'enabled', 'disabled'])
+const REASONING_EFFORTS = new Set(['auto', 'low', 'high', 'max'])
+
+export function normalizeDeepSeekThinking(config = {}) {
+  return {
+    thinkingMode: THINKING_MODES.has(config.thinkingMode) ? config.thinkingMode : 'auto',
+    reasoningEffort: REASONING_EFFORTS.has(config.reasoningEffort) ? config.reasoningEffort : 'auto',
+  }
+}
+
+export function getDeepSeekRuntimeOptions(config = {}) {
+  const normalized = normalizeDeepSeekThinking(config)
+  return {
+    ...(normalized.thinkingMode === 'auto' ? {} : { thinkingEnabled: normalized.thinkingMode === 'enabled' }),
+    ...(normalized.reasoningEffort === 'auto' ? {} : { reasoningEffort: normalized.reasoningEffort }),
   }
 }
 

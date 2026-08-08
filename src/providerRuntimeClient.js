@@ -9,11 +9,11 @@ function parseEventBlock(block) {
   }
 }
 
-export async function streamProviderResponse({ providerId, endpoint, endpointType, apiKey, model, messages, signal, onDelta, onEvent }) {
+export async function streamProviderResponse({ providerId, endpoint, endpointType, apiKey, model, messages, options, signal, onDelta, onReasoningDelta, onEvent }) {
   const response = await fetch('/api/providers/responses/stream', {
     method: 'POST',
     headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ providerId, endpoint, endpointType, apiKey, model, messages }),
+    body: JSON.stringify({ providerId, endpoint, endpointType, apiKey, model, messages, options }),
     signal,
   })
   if (!response.ok) {
@@ -30,6 +30,7 @@ export async function streamProviderResponse({ providerId, endpoint, endpointTyp
     if (!parsed) return
     onEvent?.(parsed.event, parsed.payload)
     if (parsed.event === 'message.delta' && typeof parsed.payload.delta === 'string') onDelta?.(parsed.payload.delta)
+    if (parsed.event === 'reasoning.delta' && typeof parsed.payload.delta === 'string') onReasoningDelta?.(parsed.payload.delta)
     if (parsed.event === 'run.completed') completed = parsed.payload
     if (parsed.event === 'run.failed') throw new Error(parsed.payload.error || 'Provider stream failed.')
   }

@@ -76,7 +76,7 @@ test('adds the documented DeepSeek endpoint matrix to discovered models', () => 
   const [model] = normalizeProviderModels('deepseek', {
     data: [{ id: 'deepseek-v4-flash', owned_by: 'deepseek' }],
   })
-  assert.deepEqual(model.endpointTypes, ['openai-chat-completions', 'anthropic-messages'])
+  assert.deepEqual(model.endpointTypes, ['openai-chat-completions', 'openai-responses', 'anthropic-messages'])
   assert.equal(model.preferredEndpointType, 'openai-chat-completions')
   assert.equal(model.capabilities.reasoning, true)
   assert.equal(model.capabilities.tools, true)

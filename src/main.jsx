@@ -43,6 +43,7 @@ import SettingsWorkspace from './SettingsWorkspace.jsx'
 import { loadLocalVault } from './localVault.js'
 import { chatgptCatalogToModels, DEFAULT_MODEL_CONFIG, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
 import { loadProviderConfigs, loadProviderSessionKeys, providerConfigsToModels, saveProviderConfigs } from './providerConfig.js'
+import { getDeepSeekRuntimeOptions } from '../shared/deepseek-provider.mjs'
 import { streamProviderResponse } from './providerRuntimeClient.js'
 import { executePipeline, loadPipelineRuns, savePipelineRuns } from './pipelineEngine.js'
 import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources, retrieveEvidence } from './retrieval.js'
@@ -220,8 +221,10 @@ function UserMessage({ text }) {
 }
 
 function AssistantMessage({ message, running, onOpenNote }) {
+  const [reasoningOpen, setReasoningOpen] = useState(false)
   const evidence = message.evidence || []
   const sourceCount = new Set(evidence.map((item) => item.noteId)).size
+  const reasoning = message.reasoning || ''
   return (
     <article className="assistant-message">
       <div className="assistant-avatar"><Sparkles size={17} /></div>
@@ -230,6 +233,13 @@ function AssistantMessage({ message, running, onOpenNote }) {
           <strong>Research agent</strong>
           {running && <span className="live-label"><span className="live-dot" /> composing</span>}
         </div>
+        {reasoning && <section className={`reasoning-panel ${reasoningOpen ? 'open' : ''}`}>
+          <button type="button" onClick={() => setReasoningOpen((current) => !current)} aria-expanded={reasoningOpen}>
+            <span><Sparkles size={13} /><strong>{running ? 'Thinking' : 'Reasoning'}</strong><small>{reasoning.length.toLocaleString()} characters</small></span>
+            {reasoningOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+          {reasoningOpen && <pre>{reasoning}</pre>}
+        </section>}
         <p>{message.text}</p>
         <ul>
           {(message.bullets || []).map(([name, detail, link]) => (
@@ -995,13 +1005,14 @@ function App() {
         runMode: 'live',
         activeStage: 3,
         running: true,
-        messages: [...current.messages, { id: assistantId, role: 'assistant', text: '', bullets: [], closing: '', evidence: packet.evidence }],
+        messages: [...current.messages, { id: assistantId, role: 'assistant', text: '', reasoning: '', bullets: [], closing: '', evidence: packet.evidence }],
       }))
       let streamedText = ''
+      let streamedReasoning = ''
       let renderFrame = 0
       const flushStreamedText = () => {
         renderFrame = 0
-        updateResearchSession(sessionId, (current) => ({ ...current, messages: current.messages.map((message) => message.id === assistantId ? { ...message, text: streamedText } : message) }))
+        updateResearchSession(sessionId, (current) => ({ ...current, messages: current.messages.map((message) => message.id === assistantId ? { ...message, text: streamedText, reasoning: streamedReasoning } : message) }))
       }
       try {
         const history = session.messages
@@ -1022,6 +1033,11 @@ function App() {
           updateResearchSession(sessionId, { activeStage: 4 })
           if (!renderFrame) renderFrame = window.requestAnimationFrame(flushStreamedText)
         }
+        const onReasoningDelta = (delta) => {
+          streamedReasoning += delta
+          updateResearchSession(sessionId, { activeStage: 3 })
+          if (!renderFrame) renderFrame = window.requestAnimationFrame(flushStreamedText)
+        }
         let result
         if (apiProvider) {
           const providerConfig = providerConfigs[selectedModel.providerId]
@@ -1033,8 +1049,10 @@ function App() {
             apiKey: loadProviderSessionKeys()[selectedModel.providerId] || '',
             model: selectedModel.apiModelId,
             messages,
+            options: selectedModel.providerId === 'deepseek' ? getDeepSeekRuntimeOptions(providerConfig) : undefined,
             signal: controller.signal,
             onDelta,
+            onReasoningDelta,
           })
         } else {
           let activeCatalog = modelCatalog
@@ -1055,6 +1073,7 @@ function App() {
           messages: current.messages.map((message) => message.id === assistantId ? {
             ...message,
             text: result.text || streamedText || 'The provider returned an empty response.',
+            reasoning: result.reasoning || streamedReasoning,
             closing: `Generated with ${result.model} through ${apiProvider ? selectedModel.provider : 'the connected ChatGPT subscription'} · ${packet.evidence.length} Vault evidence chunk${packet.evidence.length === 1 ? '' : 's'}.`,
           } : message),
         }))
@@ -1066,6 +1085,7 @@ function App() {
           messages: current.messages.map((message) => message.id === assistantId ? {
             ...message,
             text: streamedText || message.text || (error.name === 'AbortError' ? 'Generation stopped.' : `The connected model could not complete this request: ${error.message}`),
+            reasoning: streamedReasoning || message.reasoning,
             closing: error.name === 'AbortError' ? 'The partial response was kept.' : `Check the ${apiProvider ? `${selectedModel.provider} API configuration` : 'ChatGPT connection'} and try again.`,
           } : message),
         }))

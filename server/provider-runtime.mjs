@@ -65,22 +65,21 @@ function normalizedMessages(messages) {
 }
 
 function openAiRequest(endpoint, model, messages, options) {
+  const reasoningEffort = options.thinkingEnabled === false ? 'none' : options.reasoningEffort
   return {
     url: appendProviderRoute(endpoint, 'responses'),
     body: {
       model,
       input: messages,
       stream: true,
-      ...(options.reasoningEffort ? { reasoning: { effort: options.reasoningEffort } } : {}),
+      ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
       ...(options.maxOutputTokens ? { max_output_tokens: options.maxOutputTokens } : {}),
     },
   }
 }
 
 function compatibleRequest(endpoint, model, messages, options, providerId) {
-  const reasoningEffort = options.reasoningEffort === 'xhigh' ? 'max'
-    : ['low', 'medium'].includes(options.reasoningEffort) ? 'high'
-      : options.reasoningEffort
+  const thinkingActive = providerId === 'deepseek' && options.thinkingEnabled !== false
   return {
     url: appendProviderRoute(endpoint, 'chat/completions'),
     body: {
@@ -88,17 +87,18 @@ function compatibleRequest(endpoint, model, messages, options, providerId) {
       messages,
       stream: true,
       ...(providerId === 'compatible' ? {} : { stream_options: { include_usage: true } }),
-      ...(Number.isFinite(options.temperature) ? { temperature: options.temperature } : {}),
+      ...(Number.isFinite(options.temperature) && !thinkingActive ? { temperature: options.temperature } : {}),
       ...(options.maxOutputTokens ? { max_tokens: options.maxOutputTokens } : {}),
       ...(providerId === 'deepseek' && options.thinkingEnabled === false ? { thinking: { type: 'disabled' } } : {}),
-      ...(providerId === 'deepseek' && reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+      ...(providerId === 'deepseek' && thinkingActive && options.reasoningEffort ? { reasoning_effort: options.reasoningEffort } : {}),
     },
   }
 }
 
-function anthropicRequest(endpoint, model, messages, options) {
+function anthropicRequest(endpoint, model, messages, options, providerId) {
   const system = messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n\n')
   const conversational = messages.filter((message) => message.role !== 'system')
+  const thinkingActive = providerId === 'deepseek' && options.thinkingEnabled !== false
   return {
     url: appendProviderRoute(endpoint, 'v1/messages'),
     body: {
@@ -107,7 +107,9 @@ function anthropicRequest(endpoint, model, messages, options) {
       max_tokens: options.maxOutputTokens || DEFAULT_MAX_OUTPUT_TOKENS,
       stream: true,
       ...(system ? { system } : {}),
-      ...(Number.isFinite(options.temperature) ? { temperature: options.temperature } : {}),
+      ...(Number.isFinite(options.temperature) && !thinkingActive ? { temperature: options.temperature } : {}),
+      ...(providerId === 'deepseek' && typeof options.thinkingEnabled === 'boolean' ? { thinking: options.thinkingEnabled ? { type: 'enabled', budget_tokens: 1024 } : { type: 'disabled' } } : {}),
+      ...(thinkingActive && options.reasoningEffort ? { output_config: { effort: options.reasoningEffort } } : {}),
     },
   }
 }
@@ -141,15 +143,13 @@ export function buildProviderChatRequest({ providerId, endpoint, endpointType, a
   const protocol = providerId === 'deepseek'
     ? (isDeepSeekEndpointType(endpointType) ? endpointType : DEEPSEEK_ENDPOINT_TYPES.CHAT)
     : provider.protocol
-  if (providerId === 'deepseek'
-    && protocol !== DEEPSEEK_ENDPOINT_TYPES.RESPONSES
-    && !getDeepSeekModelProfile(cleanModel).endpointTypes.includes(protocol)) {
+  if (providerId === 'deepseek' && !getDeepSeekModelProfile(cleanModel).endpointTypes.includes(protocol)) {
     throw runtimeError(`${cleanModel} is not available through the selected DeepSeek request interface.`)
   }
   const request = protocol === 'openai-responses'
     ? openAiRequest(cleanEndpoint, cleanModel, cleanMessages, options)
     : protocol === 'anthropic-messages'
-      ? anthropicRequest(cleanEndpoint, cleanModel, cleanMessages, options)
+      ? anthropicRequest(cleanEndpoint, cleanModel, cleanMessages, options, providerId)
       : protocol === 'gemini-generate-content'
         ? geminiRequest(cleanEndpoint, cleanModel, cleanMessages, options)
         : compatibleRequest(cleanEndpoint, cleanModel, cleanMessages, options, providerId)
@@ -195,7 +195,7 @@ function extractProtocolEvents(protocol, event) {
   if (protocol === 'openai-responses') {
     const type = payload.type || event.event
     if (type === 'response.output_text.delta') return [{ type: 'message.delta', delta: payload.delta || '' }]
-    if (type === 'response.reasoning_summary_text.delta') return [{ type: 'reasoning.delta', delta: payload.delta || '' }]
+    if (type === 'response.reasoning_text.delta' || type === 'response.reasoning_summary_text.delta') return [{ type: 'reasoning.delta', delta: payload.delta || '' }]
     if (type === 'response.completed') return [{ type: 'usage.updated', usage: payload.response?.usage || null, responseId: payload.response?.id }]
     if (type === 'error' || type === 'response.failed') throw runtimeError(payload.error?.message || payload.response?.error?.message || 'OpenAI response failed.', 502)
     return []
