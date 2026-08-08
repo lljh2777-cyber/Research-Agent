@@ -61,6 +61,15 @@ test('retrieveEvidence ranks lexical evidence and adds one-hop wikilinks', () =>
   assert(!packet.evidence.some((item) => item.title === 'Mass spectrometry'))
 })
 
+test('retrieveEvidence can keep a conversation inside lexical Vault search', () => {
+  const index = buildRetrievalIndex(notes)
+  const packet = retrieveEvidence(index, 'tumor niche signaling', { topK: 6, similarityThreshold: 0, expandWikilinks: false })
+
+  assert.equal(packet.retrieval.strategy, 'bm25')
+  assert.equal(packet.retrieval.graphExpanded, 0)
+  assert(packet.evidence.every((item) => item.relationship === 'direct'))
+})
+
 test('retrieveEvidence prevents one long note from monopolizing Top K', () => {
   const repeatedNotes = [
     { ...notes[0], body: `# CellChat\n${'ligand receptor communication. '.repeat(120)}` },

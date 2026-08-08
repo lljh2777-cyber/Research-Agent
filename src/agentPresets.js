@@ -185,6 +185,21 @@ export function updateConversationModel(snapshot, model) {
   }
 }
 
+export function updateConversationKnowledgeScopes(snapshot, knowledgeScopes) {
+  return {
+    ...clone(snapshot),
+    knowledgeScopes: clone(knowledgeScopes || []),
+  }
+}
+
+export function updateConversationTools(snapshot, enabledTools) {
+  const config = clone(snapshot || createConversationConfigSnapshot())
+  return {
+    ...config,
+    enabledTools: intersectTools(config.allowedTools || [], unique(enabledTools)),
+  }
+}
+
 export function createRunSnapshot(conversationConfig, {
   id = `run-${Date.now()}`,
   createdAt = new Date().toISOString(),

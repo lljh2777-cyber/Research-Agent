@@ -229,11 +229,13 @@ function toEvidence(candidate, maxScore) {
 export function retrieveEvidence(index, question, options = {}) {
   const topK = Math.min(50, Math.max(1, Number(options.topK) || 6))
   const threshold = Math.min(1, Math.max(0, Number(options.similarityThreshold) || 0))
+  const expandWikilinks = options.expandWikilinks !== false
+  const strategy = expandWikilinks ? 'bm25+wikilink' : 'bm25'
   const queryTokens = tokenize(question)
   if (!index?.chunks?.length || !queryTokens.length) {
     return {
       question,
-      retrieval: { strategy: 'bm25+wikilink', topK, candidateCount: 0, directCount: 0, graphExpanded: 0 },
+      retrieval: { strategy, topK, candidateCount: 0, directCount: 0, graphExpanded: 0 },
       evidence: [],
     }
   }
@@ -244,7 +246,7 @@ export function retrieveEvidence(index, question, options = {}) {
     .sort((left, right) => right.score - left.score || left.chunk.path.localeCompare(right.chunk.path))
 
   const bestByChunk = new Map(direct.map((candidate) => [candidate.chunk.id, candidate]))
-  const seeds = direct.slice(0, Math.min(4, topK))
+  const seeds = expandWikilinks ? direct.slice(0, Math.min(4, topK)) : []
   seeds.forEach((seed) => {
     for (const relatedNoteId of index.graph.get(seed.chunk.noteId) || []) {
       const relatedChunks = index.chunksByNote.get(relatedNoteId) || []
@@ -283,7 +285,7 @@ export function retrieveEvidence(index, question, options = {}) {
   return {
     question,
     retrieval: {
-      strategy: 'bm25+wikilink',
+      strategy,
       topK,
       candidateCount: direct.length,
       directCount: evidence.filter((item) => item.relationship === 'direct').length,

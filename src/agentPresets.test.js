@@ -6,7 +6,9 @@ import {
   createRunSnapshot,
   resolveConversationConfig,
   TOOL_IDS,
+  updateConversationKnowledgeScopes,
   updateConversationModel,
+  updateConversationTools,
 } from './agentPresets.js'
 
 test('ships focused, versioned research agent presets', () => {
@@ -79,4 +81,14 @@ test('conversation and run snapshots are detached from later changes', () => {
   assert.deepEqual(run.knowledgeScopes[0].paths, ['wiki'])
   assert.equal(run.model.modelId, 'deepseek-v4-flash-202608')
   assert.equal(run.source.agentId, 'biologist')
+})
+
+test('conversation editors preserve the permission-filtered configuration boundary', () => {
+  const initial = createConversationConfigSnapshot({ agentId: 'biologist' })
+  const withTools = updateConversationTools(initial, [TOOL_IDS.WEB_SEARCH, TOOL_IDS.CODE_EXECUTE])
+  const withVault = updateConversationKnowledgeScopes(withTools, [{ vaultId: 'knowledge-base', paths: [], tags: [] }])
+
+  assert.deepEqual(withTools.enabledTools, [TOOL_IDS.WEB_SEARCH])
+  assert.deepEqual(withVault.knowledgeScopes, [{ vaultId: 'knowledge-base', paths: [], tags: [] }])
+  assert.deepEqual(initial.knowledgeScopes, [])
 })

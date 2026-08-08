@@ -65,7 +65,16 @@ import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalInd
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
 import { AUTH_SERVICE_UNAVAILABLE, getAuthStatus, getChatgptModels, logoutChatgpt, startChatgptLogin, streamChatgptResponse, waitForChatgptAuth } from './authClient.js'
 import { closeWorkspaceTab, createWorkspaceTab, findReusableTab, MAX_WORKSPACE_TABS, titleFromQuestion } from './workspaceTabs.js'
-import { createConversationConfigSnapshot, createRunSnapshot, updateConversationModel } from './agentPresets.js'
+import {
+  AGENT_PRESETS,
+  createConversationConfigSnapshot,
+  createRunSnapshot,
+  getAgentPreset,
+  TOOL_IDS,
+  updateConversationKnowledgeScopes,
+  updateConversationModel,
+  updateConversationTools,
+} from './agentPresets.js'
 import './styles.css'
 
 const navItems = [
@@ -78,6 +87,15 @@ const navItems = [
 const SIDEBAR_COLLAPSED_KEY = 'bioresearch-os:sidebar-collapsed'
 const INITIAL_RESEARCH_TAB_ID = 'research-initial'
 
+const RESEARCH_TOOL_OPTIONS = Object.freeze({
+  [TOOL_IDS.VAULT_SEARCH]: { label: 'Vault retrieval', detail: 'Retrieve relevant Markdown evidence before answering.', icon: Search },
+  [TOOL_IDS.VAULT_WIKILINKS]: { label: 'Wikilink graph', detail: 'Expand retrieval through related Obsidian notes.', icon: Network },
+  [TOOL_IDS.WEB_SEARCH]: { label: 'Web search', detail: 'Use provider-hosted search when the selected model supports it.', icon: ExternalLink },
+  [TOOL_IDS.MCP]: { label: 'MCP tools', detail: 'Expose connected research tools under the local permission policy.', icon: GitBranch },
+  [TOOL_IDS.CODE_EXECUTE]: { label: 'Code execution', detail: 'Allow sandboxed analysis tools when a runtime is connected.', icon: Code2 },
+  [TOOL_IDS.VAULT_WRITE]: { label: 'Vault write', detail: 'Allow approved changes to the current knowledge base.', icon: FileText },
+})
+
 function createResearchSession({ messages = [], modelId = 'smart-default', knowledgeBaseId = '' } = {}) {
   const configSnapshot = createConversationConfigSnapshot({
     conversationOverrides: {
@@ -86,6 +104,7 @@ function createResearchSession({ messages = [], modelId = 'smart-default', knowl
     },
   })
   return {
+    phase: 'setup',
     input: '',
     messages,
     running: false,
@@ -448,6 +467,113 @@ function Composer({ value, setValue, onSubmit, disabled, selectedModel, models, 
   )
 }
 
+function ResearchSetup({
+  config,
+  selectedModel,
+  models,
+  vaultName,
+  vaultNoteCount,
+  mcpConnected,
+  authStatus,
+  authBusy,
+  modelCatalog,
+  modelsBusy,
+  onSelectAgent,
+  onSelectModel,
+  onSelectVault,
+  onToggleTool,
+  onConnectVault,
+  onConnectChatgpt,
+  onLogoutChatgpt,
+  onRefreshModels,
+  onStart,
+}) {
+  const selectedAgent = getAgentPreset(config.source?.agentId)
+  const enabledTools = new Set(config.enabledTools || [])
+  const hasVaultScope = Boolean(vaultName && config.knowledgeScopes?.some((scope) => scope.vaultId === vaultName))
+
+  const toolAvailability = (toolId) => {
+    if (toolId.startsWith('vault.') && !hasVaultScope) return vaultName ? 'Select the current Vault first' : 'Connect a Vault first'
+    if (toolId === TOOL_IDS.WEB_SEARCH && !selectedModel.capabilities?.webSearch) return 'Not supported by this model'
+    if (toolId === TOOL_IDS.MCP && !mcpConnected) return 'No MCP server connected'
+    if (toolId === TOOL_IDS.CODE_EXECUTE) return 'Code runtime coming later'
+    if (toolId === TOOL_IDS.VAULT_WRITE) return 'Write workflow coming later'
+    return ''
+  }
+  const enabledToolCount = [...enabledTools].filter((toolId) => !toolAvailability(toolId)).length
+
+  return <section className="research-setup" aria-labelledby="research-setup-title">
+    <header className="research-setup-header">
+      <div><span className="eyebrow">New research</span><h2 id="research-setup-title">Configure your research workspace</h2><p>Choose a scientific role, model, evidence scope, and the tools this conversation may use.</p></div>
+      <div className="research-setup-snapshot"><ShieldCheck size={16} /><span><strong>Conversation snapshot</strong><small>These settings stay with this tab and will not change when a preset is edited later.</small></span></div>
+    </header>
+    <div className="research-setup-layout">
+      <aside className="agent-preset-panel">
+        <div className="research-setup-section-title"><span>Agent preset</span><small>{AGENT_PRESETS.length} built in</small></div>
+        <div className="agent-preset-list">
+          {AGENT_PRESETS.map((preset) => <button type="button" className={preset.id === selectedAgent.id ? 'selected' : ''} aria-pressed={preset.id === selectedAgent.id} onClick={() => onSelectAgent(preset.id)} key={preset.id}>
+            <span className="agent-preset-icon"><Atom size={18} /></span>
+            <span><strong>{preset.name}</strong><small>{preset.description}</small></span>
+            {preset.id === selectedAgent.id && <Check size={15} />}
+          </button>)}
+        </div>
+      </aside>
+      <div className="research-setup-config">
+        <section className="research-config-block">
+          <div className="research-config-heading"><span><Atom size={16} />Model</span><small>Temporary for this conversation</small></div>
+          <div className="research-model-choice">
+            <div><strong>{selectedModel.name}</strong><small>{selectedModel.provider} · {selectedModel.detail || 'Research model'}</small></div>
+            <ModelPicker selectedModel={selectedModel} models={models} onSelect={onSelectModel} authStatus={authStatus} authBusy={authBusy} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnect={onConnectChatgpt} onLogout={onLogoutChatgpt} onRefreshModels={onRefreshModels} />
+          </div>
+        </section>
+        <section className="research-config-block">
+          <div className="research-config-heading"><span><Database size={16} />Knowledge base</span><small>Evidence boundary</small></div>
+          <div className="knowledge-scope-options">
+            <button type="button" className={!hasVaultScope ? 'selected' : ''} aria-pressed={!hasVaultScope} onClick={() => onSelectVault(false)}><span><strong>No Vault</strong><small>Use model knowledge and enabled external tools only.</small></span>{!hasVaultScope && <Check size={15} />}</button>
+            {vaultName ? <button type="button" className={hasVaultScope ? 'selected' : ''} aria-pressed={hasVaultScope} onClick={() => onSelectVault(true)}><Database size={18} /><span><strong>{vaultName}</strong><small>{vaultNoteCount} Markdown notes · read-only evidence</small></span>{hasVaultScope && <Check size={15} />}</button>
+              : <button type="button" className="connect-vault-option" onClick={onConnectVault}><Database size={18} /><span><strong>Connect an Obsidian Vault</strong><small>Select a local knowledge-base folder.</small></span><ArrowRight size={15} /></button>}
+          </div>
+        </section>
+        <section className="research-config-block research-tools-block">
+          <div className="research-config-heading"><span><GitBranch size={16} />Tools</span><small>{enabledToolCount} enabled</small></div>
+          <div className="research-tool-options">
+            {(config.allowedTools || []).map((toolId) => {
+              const option = RESEARCH_TOOL_OPTIONS[toolId]
+              if (!option) return null
+              const unavailable = toolAvailability(toolId)
+              const Icon = option.icon
+              const checked = enabledTools.has(toolId) && !unavailable
+              return <button type="button" className={checked ? 'selected' : ''} aria-pressed={checked} disabled={Boolean(unavailable)} title={unavailable || option.detail} onClick={() => onToggleTool(toolId, !checked)} key={toolId}>
+                <Icon size={17} /><span><strong>{option.label}</strong><small>{unavailable || option.detail}</small></span><span className="research-tool-check">{checked ? <Check size={13} /> : null}</span>
+              </button>
+            })}
+          </div>
+        </section>
+      </div>
+    </div>
+    <footer className="research-setup-footer">
+      <div><span>{selectedAgent.name}</span><span>{selectedModel.name}</span><span>{hasVaultScope ? vaultName : 'No Vault'}</span><span>{enabledToolCount} tools</span></div>
+      <button className="research-start-button" type="button" onClick={onStart}><MessageSquare size={16} />Start conversation<ArrowRight size={15} /></button>
+    </footer>
+  </section>
+}
+
+function ResearchContextBar({ config, selectedModel, vaultName, mcpConnected, canEdit, onEdit }) {
+  const agent = getAgentPreset(config.source?.agentId)
+  const hasVault = Boolean(vaultName && config.knowledgeScopes?.some((scope) => scope.vaultId === vaultName))
+  const enabledToolCount = (config.enabledTools || []).filter((toolId) => {
+    if (toolId.startsWith('vault.')) return hasVault
+    if (toolId === TOOL_IDS.WEB_SEARCH) return Boolean(selectedModel.capabilities?.webSearch)
+    if (toolId === TOOL_IDS.MCP) return mcpConnected
+    if ([TOOL_IDS.CODE_EXECUTE, TOOL_IDS.VAULT_WRITE].includes(toolId)) return false
+    return true
+  }).length
+  return <div className="research-context-bar" aria-label="Conversation configuration">
+    <span><Atom size={14} />{agent.name}</span><span>{selectedModel.name}</span><span><Database size={14} />{hasVault ? vaultName : 'No Vault'}</span><span><GitBranch size={14} />{enabledToolCount} tools</span>
+    {canEdit && <button type="button" onClick={onEdit}>Edit setup</button>}
+  </div>
+}
+
 function LinkedNotes({ notes, onOpenNote }) {
   const [expanded, setExpanded] = useState(false)
   const visibleNotes = expanded ? notes : notes.slice(0, 5)
@@ -513,14 +639,14 @@ function ToolApprovalDialog({ approval, onResolve }) {
   </div>
 }
 
-function RetrievalPath({ activeStage, vaultName, topK, rerankLabel, packet, answerMode }) {
+function RetrievalPath({ activeStage, vaultName, topK, rerankLabel, packet, answerMode, wikilinksEnabled }) {
   const evidenceCount = packet?.evidence?.length || 0
   const retrieval = packet?.retrieval
   const query = packet?.question || 'Ask a question to retrieve evidence'
   const path = [
     ['Query', query, packet ? 'done' : 'current'],
-    [`BM25 + Wikilinks (top-k=${topK})`, vaultName ? `vault: ${vaultName}` : 'no Vault connected', packet ? 'done' : 'current'],
-    ['Graph expansion', packet ? `${retrieval?.graphExpanded || 0} one-hop result${retrieval?.graphExpanded === 1 ? '' : 's'} · rerank: ${rerankLabel}` : 'waiting for a query', packet ? 'done' : 'current'],
+    [`${wikilinksEnabled ? 'BM25 + Wikilinks' : 'BM25'} (top-k=${topK})`, vaultName ? `vault: ${vaultName}` : 'no Vault connected', packet ? 'done' : 'current'],
+    ['Graph expansion', wikilinksEnabled ? packet ? `${retrieval?.graphExpanded || 0} one-hop result${retrieval?.graphExpanded === 1 ? '' : 's'} · rerank: ${rerankLabel}` : 'waiting for a query' : 'Disabled for this conversation', packet || !wikilinksEnabled ? 'done' : 'current'],
     [`Selected (${evidenceCount} chunks)`, packet ? `${retrieval?.candidateCount || 0} lexical candidates` : 'no evidence selected yet', packet ? 'done' : 'current'],
     ['Answer model', packet ? activeStage >= 4 ? answerMode === 'chatgpt' ? 'Cited answer generated' : 'Retrieval preview only' : 'Agent working...' : 'waiting for evidence', packet && activeStage >= 4 ? 'done' : 'current'],
   ]
@@ -576,12 +702,12 @@ function Sources({ sources, onOpenNote }) {
   )
 }
 
-function Inspector({ activeStage, running, hasActivity, onPause, linkedNotes, sources, vaultName, topK, rerankLabel, packet, answerMode, onOpenNote }) {
+function Inspector({ activeStage, running, hasActivity, onPause, linkedNotes, sources, vaultName, topK, rerankLabel, packet, answerMode, wikilinksEnabled, onOpenNote }) {
   return (
     <aside className="inspector">
       <div className="inspector-title"><BookOpen size={18} /> <span>Knowledge context</span><ChevronUp size={16} /></div>
       <LinkedNotes notes={linkedNotes} onOpenNote={onOpenNote} />
-      <RetrievalPath activeStage={activeStage} vaultName={vaultName} topK={topK} rerankLabel={rerankLabel} packet={packet} answerMode={answerMode} />
+      <RetrievalPath activeStage={activeStage} vaultName={vaultName} topK={topK} rerankLabel={rerankLabel} packet={packet} answerMode={answerMode} wikilinksEnabled={wikilinksEnabled} />
       <AgentStatus activeStage={activeStage} running={running} hasActivity={hasActivity} onPause={onPause} />
       <Sources sources={sources} onOpenNote={onOpenNote} />
     </aside>
@@ -698,7 +824,8 @@ function App() {
   const activeTab = workspaceTabs.find((tab) => tab.id === activeTabId) || workspaceTabs[0]
   const activeSection = activeTab?.kind || 'research'
   const activeResearchSession = researchSessions[activeTabId] || createResearchSession({ modelId: modelConfig.chatModelId, knowledgeBaseId: vaultName })
-  const { input, messages, running, activeStage, answerMode, retrievalPacket } = activeResearchSession
+  const { phase, input, messages, running, activeStage, answerMode, retrievalPacket } = activeResearchSession
+  const activeHasVaultScope = Boolean(vaultName && activeResearchSession.configSnapshot?.knowledgeScopes?.some((scope) => scope.vaultId === vaultName))
   const anyResearchRunning = Object.values(researchSessions).some((session) => session.running)
 
   const updateResearchSession = useCallback((tabId, updater) => {
@@ -768,9 +895,11 @@ function App() {
     }
   }), [mcpRuntime.sessions])
   const researchToolRegistry = useMemo(() => {
-    const builtins = retrievalIndex?.chunks?.length ? createResearchToolEntries(retrievalIndex) : []
-    return createToolRegistry([...builtins, ...externalMcpEntries], mcpConfig.permissions, { requestApproval: requestToolApproval })
-  }, [externalMcpEntries, mcpConfig.permissions, requestToolApproval, retrievalIndex])
+    const enabledTools = new Set(activeResearchSession.configSnapshot?.enabledTools || [])
+    const builtins = enabledTools.has(TOOL_IDS.VAULT_SEARCH) && activeHasVaultScope && retrievalIndex?.chunks?.length ? createResearchToolEntries(retrievalIndex) : []
+    const external = enabledTools.has(TOOL_IDS.MCP) ? externalMcpEntries : []
+    return createToolRegistry([...builtins, ...external], mcpConfig.permissions, { requestApproval: requestToolApproval })
+  }, [activeHasVaultScope, activeResearchSession.configSnapshot?.enabledTools, externalMcpEntries, mcpConfig.permissions, requestToolApproval, retrievalIndex])
   const staticChatModels = useMemo(() => getModelsByRole('chat'), [])
   const chatModels = useMemo(() => {
     const smartModel = staticChatModels.find((model) => model.id === 'smart-default')
@@ -799,8 +928,8 @@ function App() {
     ...source,
     note: notesById.get(source.id) || null,
   })), [notesById, vaultIndex.sources])
-  const inspectorNotes = retrievalPacket ? retrievedNotes : vaultIndex.notes.length ? vaultIndex.linkedNotes : []
-  const inspectorSources = retrievalPacket ? retrievedSources : vaultSources
+  const inspectorNotes = activeHasVaultScope ? retrievalPacket ? retrievedNotes : vaultIndex.notes.length ? vaultIndex.linkedNotes : [] : []
+  const inspectorSources = activeHasVaultScope ? retrievalPacket ? retrievedSources : vaultSources : []
 
   const applyVault = async (notes, nextVaultName, { handle = null, source = 'manual', revision = '' } = {}) => {
     if (!notes.length) {
@@ -1077,15 +1206,66 @@ function App() {
     }
   }
 
+  const handleSelectAgent = (agentId) => {
+    updateResearchSession(activeTabId, (session) => {
+      const nextConfig = createConversationConfigSnapshot({
+        agentId,
+        conversationOverrides: {
+          model: session.configSnapshot?.model,
+          knowledgeScopes: session.configSnapshot?.knowledgeScopes,
+        },
+      })
+      return {
+        ...session,
+        configSnapshot: updateConversationTools(nextConfig, nextConfig.enabledTools.filter((toolId) => {
+          if (toolId === TOOL_IDS.WEB_SEARCH) return Boolean(selectedModel.capabilities?.webSearch)
+          if ([TOOL_IDS.MCP, TOOL_IDS.CODE_EXECUTE].includes(toolId)) return Boolean(selectedModel.capabilities?.tools)
+          return true
+        })),
+      }
+    })
+  }
+
+  const handleSelectResearchVault = (enabled) => {
+    const scopes = enabled && vaultName ? [{ vaultId: vaultName, paths: [], tags: [] }] : []
+    updateResearchSession(activeTabId, (session) => ({
+      ...session,
+      configSnapshot: updateConversationKnowledgeScopes(session.configSnapshot, scopes),
+    }))
+  }
+
+  const handleToggleResearchTool = (toolId, enabled) => {
+    updateResearchSession(activeTabId, (session) => {
+      const current = new Set(session.configSnapshot?.enabledTools || [])
+      if (enabled) current.add(toolId)
+      else current.delete(toolId)
+      return { ...session, configSnapshot: updateConversationTools(session.configSnapshot, [...current]) }
+    })
+  }
+
+  const handleStartResearch = () => {
+    const agent = getAgentPreset(activeResearchSession.configSnapshot?.source?.agentId)
+    updateResearchSession(activeTabId, { phase: 'conversation' })
+    setWorkspaceTabs((current) => current.map((tab) => tab.id === activeTabId ? { ...tab, title: agent.name } : tab))
+  }
+
+  const handleEditResearchSetup = () => {
+    if (activeResearchSession.messages.length) return
+    updateResearchSession(activeTabId, { phase: 'setup' })
+  }
+
   const submitQuestion = async () => {
-    if (activeSection !== 'research' || anyResearchRunning) return
+    if (activeSection !== 'research' || phase !== 'conversation' || anyResearchRunning) return
     const sessionId = activeTabId
     const session = researchSessions[sessionId] || createResearchSession()
     const question = session.input.trim()
     if (!question) return
-    const packet = retrieveEvidence(retrievalIndex, question, {
+    const enabledTools = new Set(session.configSnapshot?.enabledTools || [])
+    const hasVaultScope = Boolean(vaultName && session.configSnapshot?.knowledgeScopes?.some((scope) => scope.vaultId === vaultName))
+    const packet = retrieveEvidence(enabledTools.has(TOOL_IDS.VAULT_SEARCH) && hasVaultScope ? retrievalIndex : null, question, {
       topK: modelConfig.topK,
       similarityThreshold: modelConfig.similarityThreshold,
+      expandWikilinks: enabledTools.has(TOOL_IDS.VAULT_WIKILINKS),
     })
     const evidenceContext = buildEvidenceUserContext(packet)
     updateResearchSession(sessionId, { retrievalPacket: packet })
@@ -1133,7 +1313,7 @@ function App() {
       try {
         const contextPlan = buildConversationContext({
           history: session.messages,
-          systemMessage: buildEvidenceSystemMessage(packet, { citations: modelConfig.citations }),
+          systemMessage: `${session.configSnapshot?.systemPrompt || ''}\n\n${buildEvidenceSystemMessage(packet, { citations: modelConfig.citations })}`.trim(),
           evidenceContext,
           question,
           contextWindowTokens: selectedModel.contextWindowTokens,
@@ -1155,6 +1335,14 @@ function App() {
           const providerConfig = providerConfigs[selectedModel.providerId]
           if (!providerConfig) throw new Error(`Provider configuration is missing for ${selectedModel.provider}.`)
           const tools = selectedModel.capabilities?.tools ? researchToolRegistry.definitions : []
+          const baseProviderOptions = selectedModel.providerId === 'deepseek'
+            ? getDeepSeekRuntimeOptions(providerConfig)
+            : selectedModel.providerId === 'bailian' ? getBailianRuntimeOptions(providerConfig) : null
+          const providerOptions = baseProviderOptions ? {
+            ...baseProviderOptions,
+            enableWebSearch: enabledTools.has(TOOL_IDS.WEB_SEARCH) && baseProviderOptions.enableWebSearch,
+            maxOutputTokens: 4_096,
+          } : undefined
           const agentOutput = await runProviderAgent({
             messages,
             tools,
@@ -1166,9 +1354,7 @@ function App() {
               model: selectedModel.apiModelId,
               messages: agentMessages,
               tools,
-              options: selectedModel.providerId === 'deepseek'
-                ? { ...getDeepSeekRuntimeOptions(providerConfig), maxOutputTokens: 4_096 }
-                : selectedModel.providerId === 'bailian' ? { ...getBailianRuntimeOptions(providerConfig), maxOutputTokens: 4_096 } : undefined,
+              options: providerOptions,
               signal: controller.signal,
               onDelta,
               onReasoningDelta,
@@ -1253,7 +1439,14 @@ function App() {
     }
     updateResearchSession(activeTabId, (session) => ({
       ...session,
-      configSnapshot: updateConversationModel(session.configSnapshot, modelReference(model)),
+      configSnapshot: updateConversationTools(
+        updateConversationModel(session.configSnapshot, modelReference(model)),
+        (session.configSnapshot?.enabledTools || []).filter((toolId) => {
+          if (toolId === TOOL_IDS.WEB_SEARCH) return Boolean(model.capabilities?.webSearch)
+          if ([TOOL_IDS.MCP, TOOL_IDS.CODE_EXECUTE].includes(toolId)) return Boolean(model.capabilities?.tools)
+          return true
+        }),
+      ),
     }))
   }
 
@@ -1366,9 +1559,32 @@ function App() {
           <PipelinesSection vaultName={vaultName} noteCount={vaultNotes.length} runs={pipelineRuns} runningPipelineId={pipelineRunningId} onRun={handleRunPipeline} onViewRun={handleViewPipelineRun} onConnectVault={handleConnectVault} />
         ) : activeSection === 'runs' ? (
           <RunsSection runs={pipelineRuns} selectedRunId={selectedPipelineRunId} onSelectRun={setSelectedPipelineRunId} />
+        ) : phase === 'setup' ? (
+          <ResearchSetup
+            config={activeResearchSession.configSnapshot}
+            selectedModel={selectedModel}
+            models={chatModels}
+            vaultName={vaultName}
+            vaultNoteCount={vaultNotes.length}
+            mcpConnected={mcpRuntime.sessions.length > 0}
+            authStatus={authStatus}
+            authBusy={authBusy}
+            modelCatalog={modelCatalog}
+            modelsBusy={modelsBusy}
+            onSelectAgent={handleSelectAgent}
+            onSelectModel={handleModelSelect}
+            onSelectVault={handleSelectResearchVault}
+            onToggleTool={handleToggleResearchTool}
+            onConnectVault={handleConnectVault}
+            onConnectChatgpt={handleConnectChatgpt}
+            onLogoutChatgpt={handleLogoutChatgpt}
+            onRefreshModels={refreshChatgptModels}
+            onStart={handleStartResearch}
+          />
         ) : (
           <div className="workspace-content">
             <div className="chat-column">
+              <ResearchContextBar config={activeResearchSession.configSnapshot} selectedModel={selectedModel} vaultName={vaultName} mcpConnected={mcpRuntime.sessions.length > 0} canEdit={messages.length === 0} onEdit={handleEditResearchSetup} />
               <div className="conversation">
                 {messages.length === 0 && <div className="conversation-empty"><Sparkles size={22} /><strong>Start a research conversation</strong><span>Ask a question or add Vault context below.</span></div>}
                 {messages.map((message) => message.role === 'user' ? <UserMessage text={message.text} key={message.id} /> : <AssistantMessage message={message} running={running} onOpenNote={setSelectedNote} key={message.id} />)}
@@ -1376,7 +1592,7 @@ function App() {
               <EvidenceTrail activeStage={activeStage} running={running} hasActivity={messages.length > 0 || Boolean(retrievalPacket)} />
               <Composer value={input} setValue={setInput} onSubmit={submitQuestion} disabled={anyResearchRunning} selectedModel={selectedModel} models={chatModels} onSelectModel={handleModelSelect} authStatus={authStatus} authBusy={authBusy} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} />
             </div>
-            <Inspector activeStage={activeStage} running={running} hasActivity={messages.length > 0 || Boolean(retrievalPacket)} onPause={handlePause} linkedNotes={inspectorNotes} sources={inspectorSources} vaultName={vaultName} topK={modelConfig.topK} rerankLabel={rerankModel?.name || 'Disabled by profile'} packet={retrievalPacket} answerMode={answerMode} onOpenNote={setSelectedNote} />
+            <Inspector activeStage={activeStage} running={running} hasActivity={messages.length > 0 || Boolean(retrievalPacket)} onPause={handlePause} linkedNotes={inspectorNotes} sources={inspectorSources} vaultName={activeHasVaultScope ? vaultName : ''} topK={modelConfig.topK} rerankLabel={rerankModel?.name || 'Disabled by profile'} packet={retrievalPacket} answerMode={answerMode} wikilinksEnabled={activeHasVaultScope && activeResearchSession.configSnapshot?.enabledTools?.includes(TOOL_IDS.VAULT_WIKILINKS)} onOpenNote={setSelectedNote} />
           </div>
         )}
       </main>
