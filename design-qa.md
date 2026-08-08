@@ -361,3 +361,57 @@ The Cherry Studio reference and all three final browser captures were opened tog
 No actionable P0, P1, or P2 findings remain. Provider credential entry is deliberately disabled in the web-first milestone until encrypted desktop credential storage is introduced.
 
 final result: passed
+
+---
+
+# Obsidian Wikilink Rendering and Navigation QA
+
+- Source visual truth: `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-74fded27-cada-4f12-9281-f56320e2216a.png`
+- Previous implementation capture: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\wikilink-before.png`
+- Implementation screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\wikilink-after.png`
+- Linked-note state: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\wikilink-opened-note.png`
+- Side-by-side comparison: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\wikilink-reference-comparison.png`
+- Source pixels: 1081 x 753; normalized to 1034 x 720 for comparison
+- Implementation pixels and CSS viewport: 1280 x 720 at device scale factor 1
+- State: Knowledge Graph -> GRO-seq note -> `Core et al. 2012` wikilink visible; linked source opened in a second document tab for interaction proof
+
+## Full-view comparison evidence
+
+The normalized source and final implementation were placed in one side-by-side image. The target source shows Obsidian aliases as readable blue inline links rather than raw `[[target|alias]]` syntax. The final Research Agent view now follows that convention while retaining the established dark theme and three-column workspace.
+
+## Focused region comparison evidence
+
+- Body link: `[[wiki/sources/core_defining_2012|Core et al. 2012]]` renders as the blue label `Core et al. 2012`, followed by the original sentence.
+- Property link: the serialized `sources` value is normalized and rendered as an internal link instead of JSON-like brackets and quotes.
+- Navigation state: clicking the alias opens `Defining the Status of RNA Polymerase at Promoters` in a new center document tab while keeping GRO-seq open.
+- Resolution: Vault-prefix differences such as `.verysync/Archive/` are handled through normalized suffix resolution; basename and heading-only links are also covered.
+
+## Required fidelity surfaces
+
+- Fonts and typography: links inherit surrounding document typography and line height, matching Obsidian's inline-reading behavior.
+- Spacing and layout rhythm: wikilinks remain inline and do not introduce chips, cards, or additional vertical spacing.
+- Colors and visual tokens: resolved links use the existing blue interaction token; hover adds a restrained underline/background; missing links use a muted red dashed underline.
+- Image and asset quality: no image assets are required for this text interaction; no placeholder or handcrafted graphic was introduced.
+- Copy and content: aliases replace raw syntax without changing surrounding scientific text. Targets without aliases use their filename, and code blocks remain literal.
+
+## Comparison history
+
+1. P1: Raw Obsidian wikilink syntax was exposed in document body and metadata. Fixed with inline parsing for `[[path|alias]]`, `[[path]]`, and `[[path#heading|alias]]`.
+2. P1: References were visual-only text and could not open their target notes. Fixed by resolving Vault paths, opening the target in the center tab strip, and retaining the source note tab.
+3. P2: Vault storage prefixes prevented references beginning at `wiki/` or `sources/` from resolving. Fixed with normalized exact, suffix, and basename matching.
+4. Post-fix evidence: raw link counts are zero in the rendered GRO-seq document; the alias and property links are buttons; the source title appears after click. No actionable P0/P1/P2 findings remain.
+
+## Browser verification
+
+- URL and page identity: `http://localhost:5173/` — `BioResearch OS`
+- Target flow: Knowledge Graph -> GRO-seq -> click `Core et al. 2012` -> linked source opens as a second document tab
+- Blank page/framework overlay: absent
+- Console warnings/errors: none
+- Automated tests: 35 passed, including alias parsing, heading targets, Vault suffix resolution, basename resolution, and missing-note state
+- Production build: passed
+
+## Findings
+
+No actionable P0, P1, or P2 findings remain. Obsidian block references (`#^block-id`) and embedded transclusions (`![[note]]`) are intentionally outside this scoped wikilink pass.
+
+final result: passed

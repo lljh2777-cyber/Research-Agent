@@ -27,7 +27,7 @@ import {
 } from 'lucide-react'
 
 import { createKnowledgeGraph } from './knowledgeGraph.js'
-import { buildVaultFileTree, collectVaultTags, DEFAULT_DOCK_LAYOUT, extractMarkdownOutline, filterVaultFileTree, moveDockPanel, normalizeDockLayout } from './knowledgeWorkspace.js'
+import { buildVaultFileTree, collectVaultTags, DEFAULT_DOCK_LAYOUT, extractMarkdownOutline, filterVaultFileTree, moveDockPanel, normalizeDockLayout, parseWikilinks, resolveWikilink } from './knowledgeWorkspace.js'
 
 const LAYOUT_KEY = 'bioresearch-os:knowledge-dock-layout'
 
@@ -48,7 +48,43 @@ function loadDockLayout() {
   }
 }
 
-function MarkdownDocument({ note }) {
+function InlineMarkdown({ value, note, notes, onNavigate }) {
+  return parseWikilinks(value).map((segment, index) => {
+    if (segment.type === 'text') return segment.value
+    const resolved = resolveWikilink(notes, note, segment)
+    const unavailable = resolved.missing || resolved.missingHeading
+    const title = resolved.missing
+      ? `Note not found: ${segment.target}`
+      : resolved.missingHeading
+        ? `Heading not found: ${segment.heading}`
+        : `Open ${resolved.note.title}${segment.heading ? ` · ${segment.heading}` : ''}`
+    return <button
+      type="button"
+      className={`document-wikilink ${unavailable ? 'missing' : ''}`}
+      disabled={unavailable}
+      title={title}
+      onClick={() => onNavigate(resolved.note, resolved.anchorId)}
+      key={`${segment.raw}-${index}`}
+    >{segment.label}</button>
+  })
+}
+
+function metadataText(value) {
+  if (Array.isArray(value)) return value.join(', ')
+  if (typeof value !== 'string') return String(value)
+  const trimmed = value.trim()
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (Array.isArray(parsed)) return parsed.join(', ')
+    } catch {
+      return value
+    }
+  }
+  return value
+}
+
+function MarkdownDocument({ note, notes, onNavigate }) {
   const blocks = useMemo(() => {
     if (!note?.body) return []
     const lines = note.body.split(/\r?\n/)
@@ -112,18 +148,18 @@ function MarkdownDocument({ note }) {
       <div className="document-path">{note.path}</div>
       <h1>{note.title}</h1>
       {metadata.length > 0 && <dl className="document-properties">
-        {metadata.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{Array.isArray(value) ? value.join(', ') : String(value)}</dd></div>)}
+        {metadata.map(([key, value]) => <div key={key}><dt>{key}</dt><dd><InlineMarkdown value={metadataText(value)} note={note} notes={notes} onNavigate={onNavigate} /></dd></div>)}
       </dl>}
       <div className="document-markdown">
         {blocks.map((block, index) => {
           if (block.type === 'heading') {
             const Heading = `h${Math.min(6, block.level + 1)}`
-            return <Heading id={block.id} key={`${block.id}-${index}`}>{block.value}</Heading>
+            return <Heading id={block.id} key={`${block.id}-${index}`}><InlineMarkdown value={block.value} note={note} notes={notes} onNavigate={onNavigate} /></Heading>
           }
-          if (block.type === 'list') return <div className="document-list-item" key={index}><CircleDot size={9} /> <span>{block.value}</span></div>
-          if (block.type === 'quote') return <blockquote key={index}>{block.value}</blockquote>
+          if (block.type === 'list') return <div className="document-list-item" key={index}><CircleDot size={9} /> <span><InlineMarkdown value={block.value} note={note} notes={notes} onNavigate={onNavigate} /></span></div>
+          if (block.type === 'quote') return <blockquote key={index}><InlineMarkdown value={block.value} note={note} notes={notes} onNavigate={onNavigate} /></blockquote>
           if (block.type === 'code') return <pre key={index}><code>{block.value}</code></pre>
-          return <p key={index}>{block.value}</p>
+          return <p key={index}><InlineMarkdown value={block.value} note={note} notes={notes} onNavigate={onNavigate} /></p>
         })}
       </div>
     </article>
@@ -275,6 +311,7 @@ export default function KnowledgeGraphSection({ index, onConnectVault }) {
   const [draggingId, setDraggingId] = useState(null)
   const [leftOpen, setLeftOpen] = useState(true)
   const [rightOpen, setRightOpen] = useState(true)
+  const [pendingAnchor, setPendingAnchor] = useState(null)
 
   useEffect(() => {
     const mobileWorkspace = window.matchMedia('(max-width: 900px)')
@@ -313,11 +350,21 @@ export default function KnowledgeGraphSection({ index, onConnectVault }) {
   const notesById = useMemo(() => new Map(notes.map((note) => [note.id, note])), [notes])
   const openNotes = useMemo(() => openNoteIds.map((id) => notesById.get(id)).filter(Boolean), [notesById, openNoteIds])
 
-  const handleSelectNote = (note) => {
+  const handleSelectNote = (note, anchorId = null) => {
     if (!note) return
     setSelectedNote(note)
     setOpenNoteIds((current) => current.includes(note.id) ? current : [...current, note.id])
+    setPendingAnchor(anchorId ? { noteId: note.id, anchorId } : null)
   }
+
+  useEffect(() => {
+    if (!pendingAnchor || selectedNote?.id !== pendingAnchor.noteId) return undefined
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(pendingAnchor.anchorId)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      setPendingAnchor(null)
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [pendingAnchor, selectedNote])
 
   const handleCloseNote = (noteId) => {
     setOpenNoteIds((current) => {
@@ -391,7 +438,7 @@ export default function KnowledgeGraphSection({ index, onConnectVault }) {
           <button className="document-tab-add" onClick={() => { setLeftOpen(true); setActivePanels((current) => ({ ...current, left: 'files' })) }} aria-label="Browse Vault files"><Plus size={14} /></button>
         </div>
         <div className="knowledge-editor">
-          {selectedNote ? <MarkdownDocument note={selectedNote} /> : <div className="knowledge-welcome">
+          {selectedNote ? <MarkdownDocument note={selectedNote} notes={notes} onNavigate={handleSelectNote} /> : <div className="knowledge-welcome">
             <span><BookOpen size={25} /></span>
             <h2>{notes.length ? 'Choose a document from the Files panel' : 'Your research knowledge, in one workspace'}</h2>
             <p>{notes.length ? 'Open Markdown notes as tabs and keep multiple sources ready while you research.' : 'Connect an Obsidian Vault to browse files, inspect backlinks, read Markdown, and arrange research tools around your document.'}</p>

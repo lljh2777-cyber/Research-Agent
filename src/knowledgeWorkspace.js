@@ -37,6 +37,66 @@ export function extractMarkdownOutline(markdown = '') {
   })
 }
 
+const normalizeWikilinkPath = (value = '') => String(value)
+  .trim()
+  .replace(/\\/g, '/')
+  .replace(/^\/+|\/+$/g, '')
+  .replace(/\.md$/i, '')
+  .toLocaleLowerCase()
+
+const wikilinkBasename = (value = '') => normalizeWikilinkPath(value).split('/').at(-1) || ''
+
+export function parseWikilinks(value = '') {
+  const text = String(value)
+  const segments = []
+  const pattern = /\[\[([^\]]+)\]\]/g
+  let cursor = 0
+  let match
+
+  while ((match = pattern.exec(text))) {
+    if (match.index > cursor) segments.push({ type: 'text', value: text.slice(cursor, match.index) })
+    const pipeIndex = match[1].indexOf('|')
+    const destination = (pipeIndex >= 0 ? match[1].slice(0, pipeIndex) : match[1]).trim()
+    const alias = pipeIndex >= 0 ? match[1].slice(pipeIndex + 1).trim() : ''
+    const headingIndex = destination.indexOf('#')
+    const target = (headingIndex >= 0 ? destination.slice(0, headingIndex) : destination).trim()
+    const heading = headingIndex >= 0 ? destination.slice(headingIndex + 1).trim() : ''
+    const label = alias || (target ? target.split(/[\\/]/).at(-1).replace(/\.md$/i, '') : heading) || destination
+    segments.push({ type: 'wikilink', raw: match[0], target, heading, alias, label })
+    cursor = pattern.lastIndex
+  }
+
+  if (cursor < text.length) segments.push({ type: 'text', value: text.slice(cursor) })
+  return segments.length ? segments : [{ type: 'text', value: text }]
+}
+
+export function resolveWikilink(notes = [], currentNote = null, link = {}) {
+  const targetPath = normalizeWikilinkPath(link.target)
+  let note = currentNote
+
+  if (targetPath) {
+    note = notes.find((candidate) => {
+      const candidatePath = normalizeWikilinkPath(candidate.path || candidate.id)
+      return candidatePath === targetPath || candidatePath.endsWith(`/${targetPath}`)
+    }) || notes.find((candidate) => {
+      const names = [candidate.title, candidate.name, candidate.path, candidate.id].map(wikilinkBasename)
+      return names.includes(wikilinkBasename(targetPath))
+    }) || null
+  }
+
+  const heading = String(link.heading || '').trim()
+  const outlineHeading = note && heading
+    ? extractMarkdownOutline(note.body).find((item) => item.title.toLocaleLowerCase() === heading.toLocaleLowerCase())
+    : null
+
+  return {
+    note,
+    anchorId: outlineHeading?.id || null,
+    missing: !note,
+    missingHeading: Boolean(note && heading && !outlineHeading),
+  }
+}
+
 export function collectVaultTags(notes = []) {
   const counts = new Map()
   for (const note of notes) {

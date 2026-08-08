@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildVaultFileTree, collectVaultTags, DEFAULT_DOCK_LAYOUT, extractMarkdownOutline, filterVaultFileTree, moveDockPanel, normalizeDockLayout } from './knowledgeWorkspace.js'
+import { buildVaultFileTree, collectVaultTags, DEFAULT_DOCK_LAYOUT, extractMarkdownOutline, filterVaultFileTree, moveDockPanel, normalizeDockLayout, parseWikilinks, resolveWikilink } from './knowledgeWorkspace.js'
 
 test('normalizes dock layout without duplicates or missing panels', () => {
   const layout = normalizeDockLayout({ left: ['files', 'files', 'web'], right: ['graph', 'unknown'] })
@@ -57,4 +57,31 @@ test('filters a Vault tree while preserving matching ancestor folders', () => {
   assert.equal(filtered[0].name, 'wiki')
   assert.equal(filtered[0].children[0].name, 'annotations')
   assert.deepEqual(filtered[0].children[0].children.map((node) => node.name), ['qiang_language_2026'])
+})
+
+test('parses Obsidian wikilinks with aliases and heading targets', () => {
+  assert.deepEqual(parseWikilinks('Evidence: [[wiki/sources/core_defining_2012|Core et al. 2012]] and [[#Methods]].'), [
+    { type: 'text', value: 'Evidence: ' },
+    { type: 'wikilink', raw: '[[wiki/sources/core_defining_2012|Core et al. 2012]]', target: 'wiki/sources/core_defining_2012', heading: '', alias: 'Core et al. 2012', label: 'Core et al. 2012' },
+    { type: 'text', value: ' and ' },
+    { type: 'wikilink', raw: '[[#Methods]]', target: '', heading: 'Methods', alias: '', label: 'Methods' },
+    { type: 'text', value: '.' },
+  ])
+})
+
+test('resolves wikilinks by Vault suffix, basename, and heading', () => {
+  const notes = [
+    { id: 'method', path: '.verysync/Archive/wiki/methods/gro-seq.md', title: 'GRO-seq', body: '## Methods\nDetails' },
+    { id: 'source', path: '.verysync/Archive/wiki/sources/core_defining_2012.md', name: 'core_defining_2012.md', title: 'Defining the Status of RNA Polymerase at Promoters', body: '# Paper' },
+  ]
+
+  assert.equal(resolveWikilink(notes, notes[0], { target: 'wiki/sources/core_defining_2012' }).note.id, 'source')
+  assert.equal(resolveWikilink(notes, notes[0], { target: 'core_defining_2012' }).note.id, 'source')
+  assert.deepEqual(resolveWikilink(notes, notes[0], { target: '', heading: 'Methods' }), {
+    note: notes[0],
+    anchorId: 'heading-0',
+    missing: false,
+    missingHeading: false,
+  })
+  assert.equal(resolveWikilink(notes, notes[0], { target: 'missing-note' }).missing, true)
 })

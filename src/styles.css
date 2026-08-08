@@ -922,6 +922,10 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .document-markdown p { margin: 0 0 14px; }
 .document-list-item { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 7px; padding-left: 4px; }
 .document-list-item svg { flex: 0 0 auto; margin-top: 7px; color: var(--blue); fill: rgba(110, 168, 254, .2); }
+.document-wikilink { display: inline; border: 0; border-bottom: 1px solid transparent; background: transparent; color: #72aefc; padding: 0; font: inherit; line-height: inherit; text-align: inherit; overflow-wrap: anywhere; cursor: pointer; transition: color .15s ease, border-color .15s ease, background .15s ease; }
+.document-wikilink:hover { border-bottom-color: currentColor; color: #9bc7ff; background: rgba(110, 168, 254, .08); }
+.document-wikilink:focus-visible { border-radius: 2px; outline-offset: 2px; }
+.document-wikilink.missing { color: #d87883; border-bottom: 1px dashed rgba(216, 120, 131, .72); cursor: not-allowed; opacity: .9; }
 .document-markdown blockquote { margin: 18px 0; border-left: 2px solid var(--mint); background: rgba(126, 226, 195, .045); color: #a9c7be; padding: 11px 14px; }
 .document-markdown pre { overflow: auto; margin: 18px 0; border: 1px solid var(--border); border-radius: 5px; background: #08111f; padding: 13px; color: #b8c8db; font-family: var(--mono); font-size: 10px; line-height: 1.6; }
 .knowledge-welcome { min-height: 100%; display: grid; place-content: center; justify-items: center; padding: 40px; text-align: center; }
