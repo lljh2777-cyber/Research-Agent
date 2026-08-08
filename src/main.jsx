@@ -605,11 +605,11 @@ function WorkspaceTabs({ tabs, activeTabId, onSelect, onClose, onCreate }) {
             </button>
           </div>
         })}
-      </div>
-      <div className="workspace-tab-add">
-        <button type="button" aria-label="Open launcher" title="Open launcher" onClick={() => onCreate('launcher')} disabled={tabs.length >= MAX_WORKSPACE_TABS && !tabs.some((tab) => tab.kind === 'launcher')}>
-          <Plus size={16} />
-        </button>
+        <div className="workspace-tab-add">
+          <button type="button" aria-label="Open launcher" title="Open launcher" onClick={() => onCreate('launcher')} disabled={tabs.length >= MAX_WORKSPACE_TABS && !tabs.some((tab) => tab.kind === 'launcher')}>
+            <Plus size={16} />
+          </button>
+        </div>
       </div>
     </div>
   )

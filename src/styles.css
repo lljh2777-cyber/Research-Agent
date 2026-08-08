@@ -83,7 +83,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .icon-button { border: 0; background: transparent; color: var(--muted); padding: 8px; cursor: pointer; }
 
 .workspace-tabs { height: 44px; flex: 1; display: flex; align-items: center; min-width: 0; }
-.workspace-tab-scroll { min-width: 0; flex: 1; display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.workspace-tab-scroll { min-width: 0; flex: 1; display: flex; align-items: center; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .workspace-tab-scroll::-webkit-scrollbar { display: none; }
 .workspace-tab { position: relative; flex: 0 1 auto; min-width: 138px; max-width: 244px; height: 40px; display: flex; align-items: stretch; margin-right: 3px; border: 1px solid transparent; border-radius: 9px; color: #8291a9; background: transparent; }
 .workspace-tab:hover { color: #cbd6e6; background: rgba(23, 39, 67, .5); }

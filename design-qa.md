@@ -415,3 +415,50 @@ The normalized source and final implementation were placed in one side-by-side i
 No actionable P0, P1, or P2 findings remain. Obsidian block references (`#^block-id`) and embedded transclusions (`![[note]]`) are intentionally outside this scoped wikilink pass.
 
 final result: passed
+
+---
+
+# Workspace Tab Add-Button Follow Behavior QA
+
+- Source visual truth: browser annotation on `Open launcher` at `http://localhost:5173/`
+- Previous implementation capture: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\tab-add-before.png`
+- Implementation screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\tab-add-after-one.png`
+- Multiple-tab screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\tab-add-after-multiple.png`
+- Compact overflow screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\tab-add-after-overflow.png`
+- Side-by-side comparison: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\tab-add-follow-comparison.png`
+- Source and implementation pixels: 1280 x 720; CSS viewport 1280 x 720 at device scale factor 1
+- Compact viewport: 520 x 720
+- State: one Research tab; then Research plus Launcher; then five tabs at compact width
+
+## Full-view and focused comparison evidence
+
+The before/after comparison uses the same route, viewport, and one-tab state. Previously the add control started at x=1222 while the tab ended at x=256. After the change it starts at x=259, leaving a consistent 3 px gap. With two tabs, it remains 3 px after the second tab. The surrounding header and workspace content are unchanged.
+
+## Required fidelity surfaces
+
+- Fonts and typography: unchanged; the control remains icon-only with its existing accessible label and tooltip.
+- Spacing and layout rhythm: the add control now participates in the tab strip flow instead of occupying the far edge.
+- Colors and visual tokens: existing hover, disabled, and foreground tokens are preserved.
+- Image and asset quality: the existing icon-library plus glyph is reused; no new assets are required.
+- Copy and content: `Open launcher` semantics and launcher behavior are unchanged.
+
+## Comparison history
+
+1. P1: The plus control was separated from the open tabs by the full remaining header width. Fixed by moving it into the horizontal tab-scroll container immediately after the mapped tabs.
+2. P2: The revised control needed to remain usable with many tabs. Verified at 520 px with five tabs: the strip scrolls internally, the plus remains 3 px after the last tab, and the document body has zero horizontal overflow.
+3. Post-fix evidence: one-tab and two-tab measurements both report an exact 3 px tab-to-plus gap. No actionable P0/P1/P2 findings remain.
+
+## Browser verification
+
+- URL and page identity: `http://localhost:5173/` — `BioResearch OS`
+- Target flow: open workspace -> add launcher tab -> plus follows the newest last tab -> add more tabs at compact width -> tab strip scrolls without page overflow
+- Blank page/framework overlay: absent
+- Console warnings/errors: none
+- Automated tests: 35 passed
+- Production build: passed
+
+## Findings
+
+No actionable P0, P1, or P2 findings remain.
+
+final result: passed
