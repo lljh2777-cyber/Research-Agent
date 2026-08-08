@@ -37,6 +37,11 @@ import {
   withDeepSeekModelProfile,
 } from '../shared/deepseek-provider.mjs'
 import {
+  BAILIAN_ENDPOINT_PROFILES,
+  BAILIAN_ENDPOINT_TYPES,
+  withBailianModelProfile,
+} from '../shared/bailian-provider.mjs'
+import {
   fetchProviderModels,
   loadProviderSessionKeys,
   PROVIDER_PRESETS,
@@ -92,7 +97,7 @@ const SETTINGS_GROUPS = [
   },
 ]
 
-const PROVIDER_ICONS = { openai: Sparkles, anthropic: Network, gemini: Sparkles, deepseek: Search, openrouter: Network, compatible: Code2 }
+const PROVIDER_ICONS = { openai: Sparkles, anthropic: Network, gemini: Sparkles, deepseek: Search, bailian: Cloud, openrouter: Network, compatible: Code2 }
 const API_PROVIDERS = PROVIDER_PRESETS.map((provider) => ({ ...provider, icon: PROVIDER_ICONS[provider.id] || Cloud }))
 
 const FEATURE_PREVIEWS = {
@@ -239,6 +244,41 @@ function DeepSeekThinkingSettings({ config, onUpdate }) {
   </section>
 }
 
+function BailianEndpointSettings({ config, onUpdate }) {
+  const updateEndpoint = (endpointType, patch) => onUpdate({
+    endpoints: { ...config.endpoints, [endpointType]: { ...config.endpoints[endpointType], ...patch } },
+    ...(endpointType === BAILIAN_ENDPOINT_TYPES.OPENAI && patch.baseUrl ? { endpoint: patch.baseUrl } : {}),
+    ...(patch.enabled === false && config.defaultEndpointType === endpointType ? { defaultEndpointType: 'auto' } : {}),
+  })
+  return <section className="deepseek-endpoint-section">
+    <div className="deepseek-endpoint-heading">
+      <div><span>Request routing</span><h3>Model Studio interfaces</h3><p>Use DashScope for native Qwen capabilities or the OpenAI-compatible interface for portable Agent integrations. API keys and endpoints must belong to the same region.</p></div>
+      <button className={config.defaultEndpointType === 'auto' ? 'active' : ''} aria-pressed={config.defaultEndpointType === 'auto'} onClick={() => onUpdate({ defaultEndpointType: 'auto' })}><Sparkles size={14} /><span><strong>Auto route</strong><small>Native first</small></span></button>
+    </div>
+    <div className="deepseek-endpoint-list bailian-endpoint-list">
+      {Object.values(BAILIAN_ENDPOINT_PROFILES).map((profile) => {
+        const endpoint = config.endpoints[profile.id]
+        const isDefault = config.defaultEndpointType === profile.id
+        return <article className={`${endpoint.enabled ? 'enabled' : 'disabled'} ${isDefault ? 'default' : ''}`} key={profile.id}>
+          <header><span><Network size={15} /></span><div><strong>{profile.label}</strong><small>{profile.description}</small></div><i>{profile.id === BAILIAN_ENDPOINT_TYPES.DASHSCOPE ? 'native' : 'compatible'}</i></header>
+          <div className="deepseek-endpoint-controls"><input value={endpoint.baseUrl} onChange={(event) => updateEndpoint(profile.id, { baseUrl: event.target.value })} aria-label={`${profile.label} base URL`} spellCheck="false" /><button className="settings-secondary-button" onClick={() => updateEndpoint(profile.id, { baseUrl: profile.defaultBaseUrl })} disabled={endpoint.baseUrl === profile.defaultBaseUrl}>Reset</button></div>
+          <footer><label><input type="checkbox" checked={endpoint.enabled} onChange={(event) => updateEndpoint(profile.id, { enabled: event.target.checked })} /><span>{endpoint.enabled ? 'Enabled' : 'Disabled'}</span></label><code>/{profile.route}</code><button className={isDefault ? 'active' : ''} aria-pressed={isDefault} onClick={() => onUpdate({ defaultEndpointType: profile.id })} disabled={!endpoint.enabled}>{isDefault ? 'Default' : 'Set as default'}</button></footer>
+        </article>
+      })}
+    </div>
+  </section>
+}
+
+function BailianThinkingSettings({ config, onUpdate }) {
+  return <section className="deepseek-thinking-section">
+    <div className="deepseek-thinking-copy"><span>Qwen controls</span><h3>Thinking and built-in search</h3><p>Qwen3.5 Plus and Flash are hybrid-thinking models. Reasoning streams separately from the final answer on both interfaces.</p></div>
+    <fieldset><legend>Thinking mode</legend><div className="deepseek-segmented-control">{[
+      ['auto', 'Auto', 'Use model default'], ['enabled', 'On', 'Stream reasoning'], ['disabled', 'Off', 'Direct answer'],
+    ].map(([value, label, detail]) => <button type="button" className={config.thinkingMode === value ? 'active' : ''} aria-pressed={config.thinkingMode === value} onClick={() => onUpdate({ thinkingMode: value })} key={value}><strong>{label}</strong><small>{detail}</small></button>)}</div></fieldset>
+    <fieldset><legend>Thinking budget</legend><div className="bailian-thinking-budget"><input type="number" min="1" max="65536" value={config.thinkingBudget} disabled={config.thinkingMode !== 'enabled'} onChange={(event) => onUpdate({ thinkingBudget: Math.max(1, Math.min(65536, Number(event.target.value) || 8192)) })} /><span>tokens</span></div><label className="bailian-search-toggle"><input type="checkbox" checked={config.enableWebSearch} onChange={(event) => onUpdate({ enableWebSearch: event.target.checked })} />Enable Model Studio built-in web search</label></fieldset>
+  </section>
+}
+
 function ProvidersPage({ selectedId, configs, onChange }) {
   const selected = API_PROVIDERS.find((provider) => provider.id === selectedId) || API_PROVIDERS[0]
   const SelectedIcon = selected.icon
@@ -280,7 +320,7 @@ function ProvidersPage({ selectedId, configs, onChange }) {
   const handleFetchModels = async (purpose = 'fetch') => {
     const discoveryEndpoint = selected.id === 'deepseek'
       ? config.endpoints[DEEPSEEK_ENDPOINT_TYPES.CHAT].baseUrl
-      : config.endpoint
+      : selected.id === 'bailian' ? config.endpoints[BAILIAN_ENDPOINT_TYPES.OPENAI].baseUrl : config.endpoint
     if (!discoveryEndpoint.trim()) {
       setFeedback({ type: 'error', message: 'Enter an API endpoint first.' })
       return
@@ -306,8 +346,12 @@ function ProvidersPage({ selectedId, configs, onChange }) {
       setFeedback({
         type: 'success',
         message: purpose === 'verify'
-          ? `Connection verified. ${result.models.length} models are available.`
-          : `Fetched ${result.models.length} models from ${selected.name}.`,
+          ? result.catalogSource === 'official-fallback'
+            ? `Endpoint reached but does not expose a model-list route. Loaded ${result.models.length} official Qwen3.5 profiles; the API key will be validated on the first request.`
+            : `Connection verified. ${result.models.length} models are available.`
+          : result.catalogSource === 'official-fallback'
+            ? `Loaded ${result.models.length} official Qwen3.5 profiles because this endpoint does not expose a model catalog.`
+            : `Fetched ${result.models.length} models from ${selected.name}.`,
       })
     } catch (error) {
       setFeedback({ type: 'error', message: error.message || 'Could not fetch the model list.' })
@@ -339,7 +383,7 @@ function ProvidersPage({ selectedId, configs, onChange }) {
     }
     const manualModel = { id, name: id, ownedBy: selected.id, kind: 'chat', manual: true, capabilities: { chat: true } }
     updateConfig({
-      models: [...config.models, selected.id === 'deepseek' ? withDeepSeekModelProfile(manualModel) : manualModel],
+      models: [...config.models, selected.id === 'deepseek' ? withDeepSeekModelProfile(manualModel) : selected.id === 'bailian' ? withBailianModelProfile(manualModel) : manualModel],
       selectedModelIds: [...config.selectedModelIds, id],
       enabled: true,
     })
@@ -358,13 +402,14 @@ function ProvidersPage({ selectedId, configs, onChange }) {
     <section className="provider-config-section">
       <div className="provider-field-heading"><div><KeyRound size={16} /><span><strong>API credentials</strong><small>Kept only for this browser session in the web milestone.</small></span></div>{selected.keyWebsite ? <a className="settings-text-link" href={selected.keyWebsite} target="_blank" rel="noreferrer">Get API key</a> : <span className="provider-field-status">Optional</span>}</div>
       <div className="provider-input-row provider-key-row"><div className="provider-secret-input"><input type={showApiKey ? 'text' : 'password'} value={apiKey} onChange={(event) => updateApiKey(event.target.value)} placeholder={selected.requiresKey ? 'Enter API key' : 'Optional for local servers'} autoComplete="off" aria-label="API key" /><button onClick={() => setShowApiKey((current) => !current)} aria-label={showApiKey ? 'Hide API key' : 'Show API key'}>{showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}</button></div><button className="settings-secondary-button" onClick={() => handleFetchModels('verify')} disabled={modelsBusy || (selected.requiresKey && !apiKey.trim())}>{modelsBusy ? <RefreshCw className="spin" size={14} /> : <ShieldCheck size={14} />}Verify</button></div>
-      {selected.id !== 'deepseek' ? <>
+      {!['deepseek', 'bailian'].includes(selected.id) ? <>
         <div className="provider-field-heading"><div><Cloud size={16} /><span><strong>API endpoint</strong><small>Override the default endpoint for gateways or compatible services.</small></span></div><span className="provider-field-status">{config.endpoint === selected.endpoint ? 'Default' : 'Custom'}</span></div>
         <div className="provider-input-row"><input value={config.endpoint} onChange={(event) => updateConfig({ endpoint: event.target.value })} aria-label="API endpoint" spellCheck="false" /><button className="settings-secondary-button" onClick={() => updateConfig({ endpoint: selected.endpoint })} disabled={config.endpoint === selected.endpoint}>Reset</button></div>
-      </> : <div className="provider-field-heading deepseek-shared-key-note"><div><Cloud size={16} /><span><strong>Shared credential</strong><small>The same DeepSeek API key is used across all enabled request interfaces below.</small></span></div><span className="provider-field-status">3 profiles</span></div>}
+      </> : <div className="provider-field-heading deepseek-shared-key-note"><div><Cloud size={16} /><span><strong>Shared credential</strong><small>The same {selected.id === 'deepseek' ? 'DeepSeek' : 'Model Studio'} API key is used across all enabled request interfaces below.</small></span></div><span className="provider-field-status">{selected.id === 'deepseek' ? '3 profiles' : '2 profiles'}</span></div>}
     </section>
 
     {selected.id === 'deepseek' && <><DeepSeekEndpointSettings config={config} onUpdate={updateConfig} /><DeepSeekThinkingSettings config={config} onUpdate={updateConfig} /></>}
+    {selected.id === 'bailian' && <><BailianEndpointSettings config={config} onUpdate={updateConfig} /><BailianThinkingSettings config={config} onUpdate={updateConfig} /></>}
 
     {feedback && <div className={`provider-feedback ${feedback.type}`} role={feedback.type === 'error' ? 'alert' : 'status'}>{feedback.type === 'success' ? <CheckCircle2 size={15} /> : <Info size={15} />}<span>{feedback.message}</span></div>}
 
@@ -376,7 +421,7 @@ function ProvidersPage({ selectedId, configs, onChange }) {
         <div className="provider-model-list" aria-label={`${selected.name} model list`}>
           {filteredModels.map((model) => {
             const capabilityLabels = Object.entries(model.capabilities || {}).filter(([key, enabled]) => enabled && !['chat', 'embeddings'].includes(key)).map(([key]) => key === 'webSearch' ? 'web' : key)
-            const endpointLabels = (model.endpointTypes || []).map((endpointType) => DEEPSEEK_ENDPOINT_PROFILES[endpointType]?.shortLabel).filter(Boolean)
+            const endpointLabels = (model.endpointTypes || []).map((endpointType) => DEEPSEEK_ENDPOINT_PROFILES[endpointType]?.shortLabel || BAILIAN_ENDPOINT_PROFILES[endpointType]?.shortLabel).filter(Boolean)
             return <div className={selectedIds.has(model.id) ? 'selected' : ''} key={model.id}><span className={`provider-model-kind ${model.kind}`}>{model.kind}</span><div><strong>{model.name}</strong><small>{model.id}{model.manual ? ' · manual' : ''}{capabilityLabels.length ? ` · ${capabilityLabels.join(' · ')}` : ''}</small>{endpointLabels.length > 0 && <span className="provider-model-endpoints">{endpointLabels.map((label) => <i key={label}>{label}</i>)}</span>}</div><button onClick={() => toggleModel(model.id)} disabled={model.kind !== 'chat'}>{selectedIds.has(model.id) ? 'Remove' : model.kind === 'chat' ? 'Add' : 'Not used yet'}</button></div>
           })}
           {!filteredModels.length && <div className="provider-model-no-results">No models match “{modelQuery}”.</div>}

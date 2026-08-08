@@ -618,6 +618,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .deepseek-endpoint-heading > button strong { font-size: 8px; }
 .deepseek-endpoint-heading > button small { color: #65778f; font-size: 7px; }
 .deepseek-endpoint-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.deepseek-endpoint-list.bailian-endpoint-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .deepseek-endpoint-list article { min-width: 0; display: grid; grid-template-rows: auto auto auto; gap: 12px; border-right: 1px solid var(--border); padding: 14px; opacity: .58; }
 .deepseek-endpoint-list article:last-child { border-right: 0; }
 .deepseek-endpoint-list article.enabled { opacity: 1; }
@@ -656,6 +657,13 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .deepseek-segmented-control button small { overflow: hidden; color: #586a82; font-size: 6px; text-overflow: ellipsis; white-space: nowrap; }
 .deepseek-segmented-control button.active, .deepseek-effort-control button.active { border-color: rgba(126, 226, 195, .32); background: rgba(34, 114, 91, .12); color: #9edbc8; }
 .deepseek-segmented-control button:disabled, .deepseek-effort-control button:disabled { opacity: .4; cursor: not-allowed; }
+.bailian-thinking-budget { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px; }
+.bailian-thinking-budget input { min-width: 0; height: 31px; border: 1px solid var(--border); border-radius: 6px; outline: 0; background: #081425; color: #aebdd0; padding: 0 9px; font-family: var(--mono); font-size: 8px; }
+.bailian-thinking-budget input:focus { border-color: rgba(110, 168, 254, .55); }
+.bailian-thinking-budget input:disabled { opacity: .4; }
+.bailian-thinking-budget span { color: #65778f; font-family: var(--mono); font-size: 7px; }
+.bailian-search-toggle { display: flex; align-items: center; gap: 7px; color: #8193aa; font-size: 7px; }
+.bailian-search-toggle input { accent-color: var(--blue); }
 .provider-feedback { display: flex; align-items: center; gap: 8px; margin-top: 14px; border: 1px solid var(--border); border-radius: 6px; padding: 9px 11px; font-size: 8px; line-height: 1.45; }
 .provider-feedback svg { flex: 0 0 auto; }
 .provider-feedback.success { border-color: rgba(126, 226, 195, .22); background: rgba(34, 114, 91, .1); color: #91d6c1; }

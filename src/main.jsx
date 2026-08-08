@@ -45,6 +45,7 @@ import { loadLocalVault } from './localVault.js'
 import { chatgptCatalogToModels, DEFAULT_MODEL_CONFIG, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
 import { loadProviderConfigs, loadProviderSessionKeys, providerConfigsToModels, saveProviderConfigs } from './providerConfig.js'
 import { getDeepSeekRuntimeOptions } from '../shared/deepseek-provider.mjs'
+import { getBailianRuntimeOptions } from '../shared/bailian-provider.mjs'
 import { streamProviderResponse } from './providerRuntimeClient.js'
 import { buildConversationContext, compactTokenCount, providerUsageSummary } from './conversationContext.js'
 import { runProviderAgent } from './providerAgent.js'
@@ -1134,7 +1135,9 @@ function App() {
               model: selectedModel.apiModelId,
               messages: agentMessages,
               tools,
-              options: selectedModel.providerId === 'deepseek' ? { ...getDeepSeekRuntimeOptions(providerConfig), maxOutputTokens: 4_096 } : undefined,
+              options: selectedModel.providerId === 'deepseek'
+                ? { ...getDeepSeekRuntimeOptions(providerConfig), maxOutputTokens: 4_096 }
+                : selectedModel.providerId === 'bailian' ? { ...getBailianRuntimeOptions(providerConfig), maxOutputTokens: 4_096 } : undefined,
               signal: controller.signal,
               onDelta,
               onReasoningDelta,

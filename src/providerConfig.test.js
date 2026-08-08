@@ -135,3 +135,27 @@ test('enables the newly official Responses endpoint when migrating an unversione
   assert.equal(configs.deepseek.schemaVersion, 2)
   assert.equal(configs.deepseek.endpoints['openai-responses'].enabled, true)
 })
+
+test('normalizes Bailian interfaces and exposes selected Qwen models through native routing', () => {
+  const configs = normalizeProviderConfigs({
+    bailian: {
+      enabled: true,
+      defaultEndpointType: 'auto',
+      thinkingMode: 'enabled',
+      thinkingBudget: 12000,
+      enableWebSearch: true,
+      models: [{ id: 'qwen3.5-plus', name: 'Qwen3.5 Plus', kind: 'chat' }],
+      selectedModelIds: ['qwen3.5-plus'],
+    },
+  })
+  assert.equal(configs.bailian.endpoints['dashscope-generation'].baseUrl, 'https://dashscope.aliyuncs.com/api/v1')
+  assert.equal(configs.bailian.endpoints['openai-chat-completions'].baseUrl, 'https://dashscope.aliyuncs.com/compatible-mode/v1')
+  assert.equal(configs.bailian.thinkingBudget, 12000)
+  assert.equal(configs.bailian.enableWebSearch, true)
+  const [model] = providerConfigsToModels(configs)
+  assert.equal(model.providerId, 'bailian')
+  assert.equal(model.endpointType, 'dashscope-generation')
+  assert.equal(model.endpoint, 'https://dashscope.aliyuncs.com/api/v1')
+  assert.equal(model.capabilities.vision, true)
+  assert.equal(model.capabilities.tools, true)
+})

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { DEEPSEEK_ENDPOINT_TYPES, getDeepSeekModelProfile, isDeepSeekEndpointType } from '../shared/deepseek-provider.mjs'
+import { BAILIAN_ENDPOINT_PROFILES, BAILIAN_ENDPOINT_TYPES, isBailianEndpointType } from '../shared/bailian-provider.mjs'
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 4096
 const REQUEST_TIMEOUT_MS = 120_000
@@ -10,6 +11,7 @@ export const PROVIDER_REGISTRY = Object.freeze({
   anthropic: { protocol: 'anthropic-messages', auth: 'anthropic', chatRoute: 'v1/messages' },
   gemini: { protocol: 'gemini-generate-content', auth: 'gemini', chatRoute: 'v1beta/models' },
   deepseek: { protocol: 'openai-chat-completions', auth: 'bearer', chatRoute: 'chat/completions' },
+  bailian: { protocol: 'dashscope-generation', auth: 'bearer', chatRoute: 'services/aigc/multimodal-generation/generation' },
   openrouter: { protocol: 'openai-chat-completions', auth: 'bearer', chatRoute: 'chat/completions' },
   compatible: { protocol: 'openai-chat-completions', auth: 'optional-bearer', chatRoute: 'chat/completions' },
 })
@@ -152,7 +154,7 @@ function openAiRequest(endpoint, model, messages, options) {
 }
 
 function compatibleRequest(endpoint, model, messages, options, providerId) {
-  const thinkingActive = providerId === 'deepseek' && options.thinkingEnabled !== false
+  const thinkingActive = (providerId === 'deepseek' || providerId === 'bailian') && options.thinkingEnabled !== false
   return {
     url: appendProviderRoute(endpoint, 'chat/completions'),
     body: {
@@ -165,6 +167,42 @@ function compatibleRequest(endpoint, model, messages, options, providerId) {
       ...(options.maxOutputTokens ? { max_tokens: options.maxOutputTokens } : {}),
       ...(providerId === 'deepseek' && options.thinkingEnabled === false ? { thinking: { type: 'disabled' } } : {}),
       ...(providerId === 'deepseek' && thinkingActive && options.reasoningEffort ? { reasoning_effort: options.reasoningEffort } : {}),
+      ...(providerId === 'bailian' && typeof options.thinkingEnabled === 'boolean' ? { enable_thinking: options.thinkingEnabled } : {}),
+      ...(providerId === 'bailian' && options.thinkingEnabled && options.thinkingBudget ? { thinking_budget: options.thinkingBudget } : {}),
+      ...(providerId === 'bailian' && options.enableWebSearch ? { enable_search: true } : {}),
+    },
+  }
+}
+
+function dashScopeMessage(message) {
+  if (message.role === 'tool') return { role: 'tool', tool_call_id: message.toolCallId, name: message.name, content: [{ text: message.content }] }
+  return {
+    role: message.role,
+    content: message.content ? [{ text: message.content }] : [],
+    ...(message.toolCalls?.length ? { tool_calls: message.toolCalls.map((call) => ({ id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments } })) } : {}),
+  }
+}
+
+function dashScopeRequest(endpoint, model, messages, options) {
+  return {
+    url: appendProviderRoute(endpoint, BAILIAN_ENDPOINT_PROFILES[BAILIAN_ENDPOINT_TYPES.DASHSCOPE].route),
+    body: {
+      model,
+      input: { messages: messages.map(dashScopeMessage) },
+      parameters: {
+        result_format: 'message',
+        incremental_output: true,
+        ...(options.tools?.length ? {
+          tools: options.tools.map((tool) => ({ type: 'function', function: tool })),
+          tool_choice: 'auto',
+          parallel_tool_calls: true,
+        } : {}),
+        ...(Number.isFinite(options.temperature) && options.thinkingEnabled !== true ? { temperature: options.temperature } : {}),
+        ...(options.maxOutputTokens ? { max_tokens: options.maxOutputTokens } : {}),
+        ...(typeof options.thinkingEnabled === 'boolean' ? { enable_thinking: options.thinkingEnabled } : {}),
+        ...(options.thinkingEnabled && options.thinkingBudget ? { thinking_budget: options.thinkingBudget } : {}),
+        ...(options.enableWebSearch ? { enable_search: true } : {}),
+      },
     },
   }
 }
@@ -233,6 +271,8 @@ export function buildProviderChatRequest({ providerId, endpoint, endpointType, a
   const runtimeOptions = { ...options, tools }
   const protocol = providerId === 'deepseek'
     ? (isDeepSeekEndpointType(endpointType) ? endpointType : DEEPSEEK_ENDPOINT_TYPES.CHAT)
+    : providerId === 'bailian'
+      ? (isBailianEndpointType(endpointType) ? endpointType : BAILIAN_ENDPOINT_TYPES.DASHSCOPE)
     : provider.protocol
   if (providerId === 'deepseek' && !getDeepSeekModelProfile(cleanModel).endpointTypes.includes(protocol)) {
     throw runtimeError(`${cleanModel} is not available through the selected DeepSeek request interface.`)
@@ -243,8 +283,12 @@ export function buildProviderChatRequest({ providerId, endpoint, endpointType, a
       ? anthropicRequest(cleanEndpoint, cleanModel, cleanMessages, runtimeOptions, providerId)
       : protocol === 'gemini-generate-content'
         ? geminiRequest(cleanEndpoint, cleanModel, cleanMessages, runtimeOptions)
-        : compatibleRequest(cleanEndpoint, cleanModel, cleanMessages, runtimeOptions, providerId)
-  return { ...request, headers: providerHeaders(providerId, protocol, apiKey), protocol }
+        : protocol === 'dashscope-generation'
+          ? dashScopeRequest(cleanEndpoint, cleanModel, cleanMessages, runtimeOptions)
+          : compatibleRequest(cleanEndpoint, cleanModel, cleanMessages, runtimeOptions, providerId)
+  const headers = providerHeaders(providerId, protocol, apiKey)
+  if (protocol === 'dashscope-generation') headers['X-DashScope-SSE'] = 'enable'
+  return { ...request, headers, protocol }
 }
 
 export async function* parseServerSentEvents(body) {
@@ -321,6 +365,25 @@ function extractProtocolEvents(protocol, event) {
       argumentsDelta: call.function?.arguments || '',
     })
     if (payload.usage) events.push({ type: 'usage.updated', usage: payload.usage, responseId: payload.id })
+    return events
+  }
+  if (protocol === 'dashscope-generation') {
+    if (payload.code || payload.error) throw runtimeError(payload.message || payload.error?.message || payload.code || 'DashScope response failed.', 502)
+    const message = payload.output?.choices?.[0]?.message || {}
+    const events = []
+    if (typeof message.reasoning_content === 'string' && message.reasoning_content) events.push({ type: 'reasoning.delta', delta: message.reasoning_content })
+    const content = Array.isArray(message.content)
+      ? message.content.map((part) => part?.text || '').join('')
+      : typeof message.content === 'string' ? message.content : ''
+    if (content) events.push({ type: 'message.delta', delta: content })
+    for (const call of message.tool_calls || []) events.push({
+      type: 'tool_call.delta',
+      index: call.index ?? 0,
+      id: call.id,
+      name: call.function?.name,
+      argumentsDelta: call.function?.arguments || '',
+    })
+    if (payload.usage) events.push({ type: 'usage.updated', usage: payload.usage, responseId: payload.request_id })
     return events
   }
   if (protocol === 'anthropic-messages') {

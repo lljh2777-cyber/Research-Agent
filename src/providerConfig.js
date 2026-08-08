@@ -7,12 +7,22 @@ import {
   resolveDeepSeekEndpoint,
   withDeepSeekModelProfile,
 } from '../shared/deepseek-provider.mjs'
+import {
+  BAILIAN_ENDPOINT_TYPES,
+  createBailianEndpoints,
+  isBailianEndpointType,
+  normalizeBailianEndpoints,
+  normalizeBailianThinking,
+  resolveBailianEndpoint,
+  withBailianModelProfile,
+} from '../shared/bailian-provider.mjs'
 
 export const PROVIDER_PRESETS = [
   { id: 'openai', name: 'OpenAI', protocol: 'Responses / Chat Completions', endpoint: 'https://api.openai.com/v1', tone: 'cyan', keyWebsite: 'https://platform.openai.com/api-keys', requiresKey: true },
   { id: 'anthropic', name: 'Anthropic', protocol: 'Anthropic Messages', endpoint: 'https://api.anthropic.com', tone: 'amber', keyWebsite: 'https://console.anthropic.com/settings/keys', requiresKey: true },
   { id: 'gemini', name: 'Google Gemini', protocol: 'Generative Language', endpoint: 'https://generativelanguage.googleapis.com', tone: 'violet', keyWebsite: 'https://aistudio.google.com/app/apikey', requiresKey: true },
   { id: 'deepseek', name: 'DeepSeek', protocol: 'Native / compatibility endpoints', endpoint: 'https://api.deepseek.com', tone: 'blue', keyWebsite: 'https://platform.deepseek.com/api_keys', requiresKey: true },
+  { id: 'bailian', name: 'Alibaba Cloud Model Studio', protocol: 'DashScope native / OpenAI compatible', endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1', tone: 'cyan', keyWebsite: 'https://bailian.console.aliyun.com/?tab=model#/api-key', requiresKey: true },
   { id: 'openrouter', name: 'OpenRouter', protocol: 'Multi-provider gateway', endpoint: 'https://openrouter.ai/api/v1', tone: 'mint', keyWebsite: 'https://openrouter.ai/settings/keys', requiresKey: true },
   { id: 'compatible', name: 'OpenAI Compatible', protocol: 'Custom endpoint', endpoint: 'http://127.0.0.1:1234/v1', tone: 'slate', keyWebsite: '', requiresKey: false },
 ]
@@ -20,6 +30,7 @@ export const PROVIDER_PRESETS = [
 const CONFIG_STORAGE_KEY = 'bioresearch-os:provider-configs:v1'
 const KEY_STORAGE_KEY = 'bioresearch-os:provider-session-keys:v1'
 const DEEPSEEK_CONFIG_VERSION = 2
+const BAILIAN_CONFIG_VERSION = 1
 
 export function createDefaultProviderConfigs() {
   return Object.fromEntries(PROVIDER_PRESETS.map((provider) => {
@@ -35,6 +46,12 @@ export function createDefaultProviderConfigs() {
       config.endpoints = createDeepSeekEndpoints()
       config.schemaVersion = DEEPSEEK_CONFIG_VERSION
       Object.assign(config, normalizeDeepSeekThinking())
+    }
+    if (provider.id === 'bailian') {
+      config.defaultEndpointType = 'auto'
+      config.endpoints = createBailianEndpoints()
+      config.schemaVersion = BAILIAN_CONFIG_VERSION
+      Object.assign(config, normalizeBailianThinking())
     }
     return [provider.id, config]
   }))
@@ -54,14 +71,15 @@ export function normalizeProviderConfigs(value) {
         kind: model.kind || 'chat',
         capabilities: model.capabilities && typeof model.capabilities === 'object' ? model.capabilities : { chat: (model.kind || 'chat') === 'chat' },
         ...(Array.isArray(model.methods) ? { methods: model.methods } : {}),
-        ...(Array.isArray(model.endpointTypes) ? { endpointTypes: model.endpointTypes.filter(isDeepSeekEndpointType) } : {}),
-        ...(isDeepSeekEndpointType(model.preferredEndpointType) ? { preferredEndpointType: model.preferredEndpointType } : {}),
+        ...(Array.isArray(model.endpointTypes) ? { endpointTypes: model.endpointTypes.filter((type) => isDeepSeekEndpointType(type) || isBailianEndpointType(type)) } : {}),
+        ...(isDeepSeekEndpointType(model.preferredEndpointType) || isBailianEndpointType(model.preferredEndpointType) ? { preferredEndpointType: model.preferredEndpointType } : {}),
         ...(Number.isFinite(model.contextWindowTokens) ? { contextWindowTokens: model.contextWindowTokens } : {}),
         ...(Number.isFinite(model.maxOutputTokens) ? { maxOutputTokens: model.maxOutputTokens } : {}),
         ...(model.manual ? { manual: true } : {}),
       }))
       : []
     if (provider.id === 'deepseek') models = models.map(withDeepSeekModelProfile)
+    if (provider.id === 'bailian') models = models.map(withBailianModelProfile)
     const validIds = new Set(models.map((model) => model.id))
     const selectedModelIds = Array.isArray(saved.selectedModelIds) ? saved.selectedModelIds.filter((id) => validIds.has(id)) : []
     const normalized = {
@@ -83,6 +101,15 @@ export function normalizeProviderConfigs(value) {
       normalized.schemaVersion = DEEPSEEK_CONFIG_VERSION
       Object.assign(normalized, normalizeDeepSeekThinking(saved))
       normalized.endpoint = normalized.endpoints[DEEPSEEK_ENDPOINT_TYPES.CHAT].baseUrl
+    }
+    if (provider.id === 'bailian') {
+      normalized.defaultEndpointType = saved.defaultEndpointType === 'auto' || isBailianEndpointType(saved.defaultEndpointType)
+        ? saved.defaultEndpointType
+        : 'auto'
+      normalized.endpoints = normalizeBailianEndpoints(saved.endpoints, normalized.endpoint)
+      normalized.schemaVersion = BAILIAN_CONFIG_VERSION
+      Object.assign(normalized, normalizeBailianThinking(saved))
+      normalized.endpoint = normalized.endpoints[BAILIAN_ENDPOINT_TYPES.OPENAI].baseUrl
     }
     defaults[provider.id] = normalized
   }
@@ -151,8 +178,10 @@ export function providerConfigsToModels(configs) {
     const selected = new Set(config.selectedModelIds)
     for (const model of config.models) {
       if (!selected.has(model.id) || model.kind !== 'chat') continue
-      const resolvedEndpoint = providerId === 'deepseek' ? resolveDeepSeekEndpoint(config, model) : null
-      if (providerId === 'deepseek' && !resolvedEndpoint) continue
+      const resolvedEndpoint = providerId === 'deepseek'
+        ? resolveDeepSeekEndpoint(config, model)
+        : providerId === 'bailian' ? resolveBailianEndpoint(config, model) : null
+      if ((providerId === 'deepseek' || providerId === 'bailian') && !resolvedEndpoint) continue
       models.push({
         id: `api:${providerId}:${model.id}`,
         apiModelId: model.id,
@@ -165,7 +194,7 @@ export function providerConfigsToModels(configs) {
         ready: true,
         discovered: true,
         capabilities: model.capabilities || { chat: true },
-        ...(providerId === 'deepseek' ? {
+        ...((providerId === 'deepseek' || providerId === 'bailian') ? {
           endpoint: resolvedEndpoint.endpoint,
           endpointType: resolvedEndpoint.endpointType,
           endpointAutomatic: resolvedEndpoint.automatic,

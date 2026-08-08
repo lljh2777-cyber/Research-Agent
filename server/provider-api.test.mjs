@@ -108,3 +108,21 @@ test('uses provider metadata before conservative model-name capability inference
   })
   assert.equal(inferModelCapabilities('compatible', { id: 'unknown-chat-model' }, 'chat').tools, false)
 })
+
+test('profiles discovered Bailian Qwen3.5 models with official capabilities', () => {
+  const [model] = normalizeProviderModels('bailian', { data: [{ id: 'qwen3.5-flash', owned_by: 'qwen' }] })
+  assert.equal(model.capabilities.reasoning, true)
+  assert.equal(model.capabilities.vision, true)
+  assert.equal(model.capabilities.tools, true)
+  assert.equal(model.capabilities.webSearch, true)
+  assert.equal(model.contextWindowTokens, 1_000_000)
+})
+
+test('uses official Bailian Qwen3.5 profiles when the compatible endpoint has no model route', async () => {
+  const result = await discoverProviderModels({
+    providerId: 'bailian', endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1', apiKey: 'secret',
+  }, async () => new Response('{"message":"Not Found"}', { status: 404, headers: { 'Content-Type': 'application/json' } }))
+  assert.equal(result.catalogSource, 'official-fallback')
+  assert(result.models.some((model) => model.id === 'qwen3.5-plus'))
+  assert(result.models.some((model) => model.id === 'qwen3.5-flash'))
+})

@@ -1,11 +1,13 @@
 import { appendProviderRoute, cleanProviderBaseUrl, streamProviderChat } from './provider-runtime.mjs'
 import { withDeepSeekModelProfile } from '../shared/deepseek-provider.mjs'
+import { BAILIAN_OFFICIAL_MODELS, withBailianModelProfile } from '../shared/bailian-provider.mjs'
 
 const PROVIDER_MODEL_ROUTES = {
   openai: { route: 'models', auth: 'bearer' },
   anthropic: { route: 'v1/models', auth: 'anthropic' },
   gemini: { route: 'v1beta/models', auth: 'gemini' },
   deepseek: { route: 'models', auth: 'bearer' },
+  bailian: { route: 'models', auth: 'bearer' },
   openrouter: { route: 'models', auth: 'bearer' },
   compatible: { route: 'models', auth: 'optional-bearer' },
 }
@@ -83,7 +85,9 @@ export function normalizeProviderModels(providerId, payload) {
     if (Array.isArray(record.supportedGenerationMethods)) {
       model.methods = record.supportedGenerationMethods
     }
-    unique.set(id, providerId === 'deepseek' ? withDeepSeekModelProfile(model) : model)
+    unique.set(id, providerId === 'deepseek'
+      ? withDeepSeekModelProfile(model)
+      : providerId === 'bailian' ? withBailianModelProfile(model) : model)
   }
   return [...unique.values()].sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true }))
 }
@@ -111,7 +115,23 @@ export async function discoverProviderModels({ providerId, endpoint, apiKey }, f
       : `Could not reach the provider endpoint: ${error?.message || 'network request failed'}`
     throw Object.assign(new Error(message), { statusCode: error?.name === 'TimeoutError' ? 504 : 502 })
   }
-  if (!response.ok) throw await responseError(response)
+  if (!response.ok) {
+    if (providerId === 'bailian' && [404, 405].includes(response.status)) {
+      return {
+        providerId,
+        endpoint: request.url,
+        models: BAILIAN_OFFICIAL_MODELS.map((model) => withBailianModelProfile({
+          ...model,
+          ownedBy: 'Alibaba Cloud Model Studio',
+          kind: 'chat',
+          catalogSource: 'official-fallback',
+        })),
+        catalogSource: 'official-fallback',
+        fetchedAt: new Date().toISOString(),
+      }
+    }
+    throw await responseError(response)
+  }
   const payload = await response.json().catch(() => {
     throw Object.assign(new Error('The provider returned an invalid JSON model list.'), { statusCode: 502 })
   })
@@ -119,6 +139,7 @@ export async function discoverProviderModels({ providerId, endpoint, apiKey }, f
     providerId,
     endpoint: request.url,
     models: normalizeProviderModels(providerId, payload),
+    catalogSource: 'remote',
     fetchedAt: new Date().toISOString(),
   }
 }

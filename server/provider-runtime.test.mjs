@@ -211,3 +211,41 @@ test('keeps custom OpenAI-compatible endpoints keyless and omits optional stream
   assert.equal('Authorization' in request.headers, false)
   assert.equal('stream_options' in request.body, false)
 })
+
+test('builds Bailian DashScope native and OpenAI-compatible requests', () => {
+  const native = buildProviderChatRequest({
+    providerId: 'bailian', endpoint: 'https://dashscope.aliyuncs.com/api/v1', endpointType: 'dashscope-generation', apiKey: 'sk-bailian', model: 'qwen3.5-plus', messages,
+    options: { tools: [vaultTool], thinkingEnabled: true, thinkingBudget: 12000, enableWebSearch: true, maxOutputTokens: 4096 },
+  })
+  assert.equal(native.url, 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation')
+  assert.equal(native.headers.Authorization, 'Bearer sk-bailian')
+  assert.equal(native.headers['X-DashScope-SSE'], 'enable')
+  assert.deepEqual(native.body.input.messages[1].content, [{ text: 'Summarize this result.' }])
+  assert.equal(native.body.parameters.result_format, 'message')
+  assert.equal(native.body.parameters.incremental_output, true)
+  assert.equal(native.body.parameters.enable_thinking, true)
+  assert.equal(native.body.parameters.thinking_budget, 12000)
+  assert.equal(native.body.parameters.enable_search, true)
+  assert.equal(native.body.parameters.tools[0].function.name, 'search_vault')
+
+  const compatible = buildProviderChatRequest({
+    providerId: 'bailian', endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1', endpointType: 'openai-chat-completions', apiKey: 'sk-bailian', model: 'qwen3.5-flash', messages,
+    options: { thinkingEnabled: false },
+  })
+  assert.equal(compatible.url, 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions')
+  assert.equal(compatible.body.enable_thinking, false)
+})
+
+test('normalizes Bailian DashScope reasoning, content, tools, and usage', async () => {
+  const events = []
+  for await (const event of streamProviderChat({
+    providerId: 'bailian', endpoint: 'https://dashscope.aliyuncs.com/api/v1', endpointType: 'dashscope-generation', apiKey: 'secret', model: 'qwen3.5-plus', messages,
+    options: { tools: [vaultTool] },
+  }, async () => sseResponse([
+    'data: {"request_id":"req-1","output":{"choices":[{"message":{"role":"assistant","content":[],"reasoning_content":"Need evidence."}}]}}',
+    'data: {"request_id":"req-1","output":{"choices":[{"message":{"role":"assistant","content":[],"tool_calls":[{"index":0,"id":"call-1","function":{"name":"search_vault","arguments":"{\\"query\\":\\"Qwen\\"}"}}]}}]},"usage":{"total_tokens":16}}',
+  ]))) events.push(event)
+  assert.equal(events.at(-1).reasoning, 'Need evidence.')
+  assert.deepEqual(events.at(-1).toolCalls, [{ id: 'call-1', name: 'search_vault', arguments: '{"query":"Qwen"}' }])
+  assert.deepEqual(events.at(-1).usage, { total_tokens: 16 })
+})
