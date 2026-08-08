@@ -55,6 +55,63 @@ final result: passed
 
 ---
 
+# Cherry-Style Workspace Tabs and Launcher QA
+
+- Source visual truth: `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-1c06ee88-92e5-4e0f-a185-ab8986192958.png`
+- Supporting tab-detail reference: `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-5a260d4a-e645-47b3-a308-155c15b52502.png`
+- Implementation screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\workspace-tabs-launcher-compact.png`
+- Side-by-side comparison: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\workspace-tabs-launcher-comparison.png`
+- Source pixels: 2048 x 550; focused comparison uses the left 1200 x 550 application region, scaled to 581 x 266
+- Implementation pixels and CSS viewport: 581 x 898, device screenshot normalized to CSS pixels
+- Additional desktop verification: 1280 x 720; top bar 56 px high, launcher grid 980 px wide, and `body.scrollWidth` equals `body.clientWidth`
+- State: four workspace tabs open with Launcher active; Research, Knowledge Graph, Pipelines, Runs, and Settings available from the launcher
+
+## Full-view comparison evidence
+
+The Cherry Studio reference and implementation both use one continuous top workspace-tab row, a rounded active tab with a close affordance, an adjacent plus action, a slim global navigation rail, and an application launcher occupying the main surface. The implementation preserves the existing dark BioResearch OS visual language and converts the wide five-column launcher into two columns at the compact viewport.
+
+## Focused region comparison evidence
+
+- Tabs: document/workspace icons precede compact labels; active state is a rounded filled tab rather than a second navigation row; inactive tabs remain visually quiet; close controls appear on active or hovered tabs.
+- Plus action: the plus button opens or focuses a Launcher tab instead of displaying a nested menu.
+- Launcher: each application is a real button with a large Lucide icon tile, label, supporting description, hover state, and working navigation.
+- State isolation: two Research tabs retain different conversation content across switches; multiple Knowledge Graph tabs can coexist and receive distinct numbered titles.
+- Closing: closing the active Launcher selected the adjacent Knowledge Graph tab; reopening Launcher reused the singleton instead of duplicating it.
+- Compact layout: four tabs remain horizontally scrollable, the launcher becomes two columns, and horizontal body overflow remains zero at 581 px.
+
+## Required fidelity surfaces
+
+- Fonts and typography: existing Manrope and DM Mono tokens are retained; tab labels, launcher heading, labels, and descriptions follow the reference hierarchy while remaining consistent with BioResearch OS.
+- Spacing and layout rhythm: the redundant page-title row and second tab row were removed; tabs now occupy a single 56 px header and launcher cards use a regular responsive grid.
+- Colors and visual tokens: the reference light theme is intentionally translated into the current navy surface, muted inactive tabs, blue focus token, and semantic icon-tile colors.
+- Image and asset quality: no raster assets were required; all application and tab icons use the established Lucide library, with no handcrafted SVG or placeholder graphics.
+- Copy and content: launcher entries map to real Research Agent surfaces and describe their actual behavior.
+
+## Comparison history
+
+1. P1: The first implementation placed tabs below a separate page-title header and opened a dropdown from plus. The new screenshots clarified that Cherry Studio uses one top tab row and a Launcher tab. Fixed by merging tabs into the top bar and replacing the menu with a functional launcher workspace.
+2. P2: Equal 224 px tab widths did not match the compact variable-width source pattern. Fixed by using content-responsive tab widths with min/max bounds and horizontal scrolling.
+3. P2: Opening real Vault data surfaced duplicate React graph-node keys. Fixed by including the render index in graph-node keys; a fresh browser tab now reports no warnings or errors.
+4. P2: The launcher needed to remain usable after the browser viewport narrowed. Fixed with a three-column tablet and two-column compact layout; verified at 581 x 898 with zero horizontal overflow.
+
+## Browser verification
+
+- URL and page identity: `http://localhost:5173/` — `BioResearch OS`
+- Browser availability: in-app Browser available and used
+- Primary interactions: open Launcher; create Research; create two Knowledge Graph tabs; switch between independent Research sessions; close the active tab; reopen the singleton Launcher
+- Blank page/framework overlay: absent
+- Console warnings/errors after fix: none
+- Production build: passed
+- Automated tests: 33 passed
+
+## Findings
+
+No actionable P0, P1, or P2 findings remain. Open tabs are currently retained for the running web session; disk persistence across a full browser restart is a later enhancement.
+
+final result: passed
+
+---
+
 # Research Conversation Horizontal Density QA
 
 - Source visual truth: `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-57d81391-3607-4e69-a893-5cb6d1829736.png`

@@ -19,7 +19,6 @@ import {
   GitBranch,
   LoaderCircle,
   MessageSquare,
-  MoreHorizontal,
   Network,
   PanelLeftClose,
   PanelLeftOpen,
@@ -28,12 +27,14 @@ import {
   PlayCircle,
   Plus,
   RefreshCw,
+  Rocket,
   Search,
   Send,
   Settings2,
   Sparkles,
   ThumbsDown,
   ThumbsUp,
+  X,
 } from 'lucide-react'
 import { buildVaultIndex, getVaultName, parseVaultDirectory, parseVaultFiles } from './vault.js'
 import KnowledgeGraphSection from './KnowledgeGraph.jsx'
@@ -46,6 +47,7 @@ import { executePipeline, loadPipelineRuns, savePipelineRuns } from './pipelineE
 import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources, retrieveEvidence } from './retrieval.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
 import { AUTH_SERVICE_UNAVAILABLE, getAuthStatus, getChatgptModels, logoutChatgpt, startChatgptLogin, streamChatgptResponse, waitForChatgptAuth } from './authClient.js'
+import { closeWorkspaceTab, createWorkspaceTab, findReusableTab, MAX_WORKSPACE_TABS, titleFromQuestion } from './workspaceTabs.js'
 import './styles.css'
 
 const navItems = [
@@ -56,6 +58,7 @@ const navItems = [
 ]
 
 const SIDEBAR_COLLAPSED_KEY = 'bioresearch-os:sidebar-collapsed'
+const INITIAL_RESEARCH_TAB_ID = 'research-tumor-niche'
 
 const sampleLinkedNotes = [
   { title: 'Spatial transcriptomics', type: 'concept', path: 'wiki/concepts/spatial-transcriptomics.md' },
@@ -95,6 +98,19 @@ const initialMessages = [
     closing: 'Choose methods based on the biological question, required resolution, and available resources. See linked notes for protocols and benchmarking.',
   },
 ]
+
+function createResearchSession(messages = []) {
+  return {
+    input: '',
+    messages,
+    running: false,
+    activeStage: messages.length ? 5 : 0,
+    pendingQuestion: '',
+    runMode: 'mock',
+    answerMode: messages.length ? 'sample' : 'idle',
+    retrievalPacket: null,
+  }
+}
 
 const stages = ['Query parsed', 'Retrieve', 'Rerank', 'Synthesize', 'Cite']
 const EMPTY_CHATGPT_CATALOG = {
@@ -474,14 +490,81 @@ function Inspector({ activeStage, running, onPause, linkedNotes, sources, vaultN
   )
 }
 
+const workspaceTabOptions = [
+  { kind: 'research', label: 'Research', description: 'Start an independent conversation', icon: MessageSquare, tone: 'slate' },
+  { kind: 'graph', label: 'Knowledge graph', description: 'Explore the current research Vault', icon: Network, tone: 'mint' },
+  { kind: 'pipelines', label: 'Pipelines', description: 'Run deterministic local workflows', icon: GitBranch, tone: 'blue' },
+  { kind: 'runs', label: 'Runs', description: 'Inspect pipeline history and results', icon: PlayCircle, tone: 'violet' },
+  { kind: 'settings', label: 'Settings', description: 'Configure models and research tools', icon: Settings2, tone: 'amber' },
+]
+
+function iconForTab(kind) {
+  if (kind === 'graph') return Network
+  if (kind === 'pipelines') return GitBranch
+  if (kind === 'runs') return PlayCircle
+  if (kind === 'settings') return Settings2
+  if (kind === 'launcher') return Rocket
+  return MessageSquare
+}
+
+function WorkspaceTabs({ tabs, activeTabId, onSelect, onClose, onCreate }) {
+  const scrollRef = useRef(null)
+
+  useEffect(() => {
+    const activeElement = [...(scrollRef.current?.children || [])].find((element) => element.dataset.workspaceTabId === activeTabId)
+    activeElement?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [activeTabId, tabs.length])
+
+  return (
+    <div className="workspace-tabs" aria-label="Open workspaces">
+      <div className="workspace-tab-scroll" role="tablist" aria-label="Workspace tabs" ref={scrollRef}>
+        {tabs.map((tab) => {
+          const Icon = iconForTab(tab.kind)
+          const active = tab.id === activeTabId
+          return <div className={`workspace-tab ${active ? 'active' : ''}`} data-workspace-tab-id={tab.id} key={tab.id}>
+            <button className="workspace-tab-main" type="button" role="tab" aria-selected={active} title={tab.title} onClick={() => onSelect(tab.id)}>
+              <Icon size={14} /><span>{tab.title}</span>
+            </button>
+            <button className="workspace-tab-close" type="button" aria-label={`Close ${tab.title}`} title={`Close ${tab.title}`} disabled={tabs.length === 1} onClick={() => onClose(tab.id)}>
+              <X size={13} />
+            </button>
+          </div>
+        })}
+      </div>
+      <div className="workspace-tab-add">
+        <button type="button" aria-label="Open launcher" title="Open launcher" onClick={() => onCreate('launcher')} disabled={tabs.length >= MAX_WORKSPACE_TABS && !tabs.some((tab) => tab.kind === 'launcher')}>
+          <Plus size={16} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function WorkspaceLauncher({ onOpen }) {
+  return (
+    <section className="workspace-launcher" aria-labelledby="workspace-launcher-title">
+      <div className="workspace-launcher-inner">
+        <div className="workspace-launcher-heading">
+          <span className="eyebrow">Workspace launcher</span>
+          <h2 id="workspace-launcher-title">Applications</h2>
+          <p>Open another research surface without closing your current work.</p>
+        </div>
+        <div className="workspace-launcher-grid">
+          {workspaceTabOptions.map(({ kind, label, description, icon: Icon, tone }) => <button type="button" key={kind} onClick={() => onOpen(kind, { forceNew: kind === 'research' || kind === 'graph' })}>
+            <span className={`workspace-launcher-icon ${tone}`}><Icon size={25} /></span>
+            <span><strong>{label}</strong><small>{description}</small></span>
+          </button>)}
+        </div>
+      </div>
+    </section>
+  )
+}
+
 function App() {
-  const [activeSection, setActiveSection] = useState('research')
+  const [workspaceTabs, setWorkspaceTabs] = useState(() => [createWorkspaceTab('research', { id: INITIAL_RESEARCH_TAB_ID, title: 'Tumor niche methods' })])
+  const [activeTabId, setActiveTabId] = useState(INITIAL_RESEARCH_TAB_ID)
+  const [researchSessions, setResearchSessions] = useState(() => ({ [INITIAL_RESEARCH_TAB_ID]: createResearchSession(initialMessages) }))
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true')
-  const [input, setInput] = useState('')
-  const [messages, setMessages] = useState(initialMessages)
-  const [running, setRunning] = useState(false)
-  const [activeStage, setActiveStage] = useState(5)
-  const [pendingQuestion, setPendingQuestion] = useState('')
   const [vaultNotes, setVaultNotes] = useState([])
   const [vaultName, setVaultName] = useState('')
   const [vaultHandle, setVaultHandle] = useState(null)
@@ -497,15 +580,36 @@ function App() {
   const [authError, setAuthError] = useState('')
   const [modelCatalog, setModelCatalog] = useState(EMPTY_CHATGPT_CATALOG)
   const [modelsBusy, setModelsBusy] = useState(false)
-  const [runMode, setRunMode] = useState('mock')
-  const [answerMode, setAnswerMode] = useState('sample')
-  const [retrievalPacket, setRetrievalPacket] = useState(null)
   const [pipelineRuns, setPipelineRuns] = useState(loadPipelineRuns)
   const [pipelineRunningId, setPipelineRunningId] = useState(null)
   const [selectedPipelineRunId, setSelectedPipelineRunId] = useState(null)
   const vaultInputRef = useRef(null)
   const requestAbortRef = useRef(null)
   const pipelineRunTimerRef = useRef(null)
+  const mockRunTimersRef = useRef(new Map())
+
+  const activeTab = workspaceTabs.find((tab) => tab.id === activeTabId) || workspaceTabs[0]
+  const activeSection = activeTab?.kind || 'research'
+  const activeResearchSession = researchSessions[activeTabId] || createResearchSession()
+  const { input, messages, running, activeStage, answerMode, retrievalPacket } = activeResearchSession
+  const anyResearchRunning = Object.values(researchSessions).some((session) => session.running)
+
+  const updateResearchSession = useCallback((tabId, updater) => {
+    setResearchSessions((current) => {
+      const session = current[tabId] || createResearchSession()
+      const nextSession = typeof updater === 'function' ? updater(session) : { ...session, ...updater }
+      return { ...current, [tabId]: nextSession }
+    })
+  }, [])
+
+  const setActiveResearchField = useCallback((field, valueOrUpdater) => {
+    updateResearchSession(activeTabId, (session) => ({
+      ...session,
+      [field]: typeof valueOrUpdater === 'function' ? valueOrUpdater(session[field]) : valueOrUpdater,
+    }))
+  }, [activeTabId, updateResearchSession])
+
+  const setInput = useCallback((value) => setActiveResearchField('input', value), [setActiveResearchField])
 
   useEffect(() => {
     window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed))
@@ -556,8 +660,7 @@ function App() {
     setVaultHandle(handle)
     setVaultSource(source)
     setLocalRevision(revision)
-    setRetrievalPacket(null)
-    setAnswerMode('sample')
+    setResearchSessions((current) => Object.fromEntries(Object.entries(current).map(([id, session]) => [id, { ...session, retrievalPacket: null, answerMode: 'sample' }])))
     await saveVaultSnapshot({ vaultName: nextVaultName, notes, source, revision })
     if (handle) await saveVaultHandle(handle)
     setSyncState(source === 'local-adapter' || handle ? 'ready' : 'manual')
@@ -601,8 +704,7 @@ function App() {
         setVaultHandle(null)
         setVaultSource('local-adapter')
         setLocalRevision(payload.revision || '')
-        setRetrievalPacket(null)
-        setAnswerMode('sample')
+        setResearchSessions((current) => Object.fromEntries(Object.entries(current).map(([id, session]) => [id, { ...session, retrievalPacket: null, answerMode: 'sample' }])))
         await saveVaultSnapshot({ vaultName: payload.vaultName || 'local-vault', notes: [], source: 'local-adapter', revision: payload.revision || '' })
         setSyncState('empty')
         return true
@@ -720,26 +822,78 @@ function App() {
   }, [vaultSource, localRevision])
 
   useEffect(() => {
-    if (!running || runMode !== 'mock') return undefined
-    setActiveStage(0)
-    const timers = stages.map((_, index) => setTimeout(() => setActiveStage(index), (index + 1) * 620))
-    const finish = setTimeout(() => {
-      setActiveStage(5)
-      setMessages((current) => [...current, responseForQuestion(pendingQuestion, retrievalPacket)])
-      setPendingQuestion('')
-      setRunning(false)
-    }, 3900)
-    return () => {
-      timers.forEach(clearTimeout)
-      clearTimeout(finish)
-    }
-  }, [running, pendingQuestion, retrievalPacket, runMode])
+    Object.entries(researchSessions).forEach(([tabId, session]) => {
+      if (!session.running || session.runMode !== 'mock' || mockRunTimersRef.current.has(tabId)) return
+      updateResearchSession(tabId, { activeStage: 0 })
+      const timers = stages.map((_, index) => window.setTimeout(() => {
+        updateResearchSession(tabId, { activeStage: index })
+      }, (index + 1) * 620))
+      const finish = window.setTimeout(() => {
+        updateResearchSession(tabId, (current) => ({
+          ...current,
+          activeStage: 5,
+          messages: [...current.messages, responseForQuestion(current.pendingQuestion, current.retrievalPacket)],
+          pendingQuestion: '',
+          running: false,
+        }))
+        mockRunTimersRef.current.delete(tabId)
+      }, 3900)
+      mockRunTimersRef.current.set(tabId, [...timers, finish])
+    })
+  }, [researchSessions, updateResearchSession])
 
   useEffect(() => () => {
     if (pipelineRunTimerRef.current) window.clearTimeout(pipelineRunTimerRef.current)
+    mockRunTimersRef.current.forEach((timers) => timers.forEach((timer) => window.clearTimeout(timer)))
   }, [])
 
-  const activeTitle = useMemo(() => navItems.find((item) => item.id === activeSection)?.label || 'Research', [activeSection])
+  const openWorkspaceTab = useCallback((kind, { forceNew = false } = {}) => {
+    const reusable = forceNew
+      ? null
+      : (kind === 'research' || kind === 'graph'
+        ? [...workspaceTabs].reverse().find((tab) => tab.kind === kind)
+        : findReusableTab(workspaceTabs, kind))
+    if (reusable) {
+      setActiveTabId(reusable.id)
+      return reusable.id
+    }
+    if (workspaceTabs.length >= MAX_WORKSPACE_TABS) return activeTabId
+    const graphBaseTitle = vaultName || 'Knowledge graph'
+    const matchingGraphs = kind === 'graph' ? workspaceTabs.filter((tab) => tab.kind === 'graph' && tab.vaultName === graphBaseTitle).length : 0
+    const tab = createWorkspaceTab(kind, {
+      vaultName: kind === 'graph' ? graphBaseTitle : '',
+      title: kind === 'graph' && matchingGraphs ? `${graphBaseTitle} ${matchingGraphs + 1}` : undefined,
+    })
+    setWorkspaceTabs((current) => [...current, tab])
+    if (kind === 'research') setResearchSessions((current) => ({ ...current, [tab.id]: createResearchSession() }))
+    setActiveTabId(tab.id)
+    return tab.id
+  }, [activeTabId, vaultName, workspaceTabs])
+
+  const handleSelectTab = useCallback((tabId) => {
+    setActiveTabId(tabId)
+  }, [])
+
+  const handleCloseTab = useCallback((tabId) => {
+    const closingSession = researchSessions[tabId]
+    if (closingSession?.running) requestAbortRef.current?.abort()
+    const timers = mockRunTimersRef.current.get(tabId) || []
+    timers.forEach((timer) => window.clearTimeout(timer))
+    mockRunTimersRef.current.delete(tabId)
+    const result = closeWorkspaceTab(workspaceTabs, activeTabId, tabId)
+    if (result.tabs === workspaceTabs) return
+    setWorkspaceTabs(result.tabs)
+    setActiveTabId(result.activeTabId)
+    setResearchSessions((current) => {
+      const next = { ...current }
+      delete next[tabId]
+      return next
+    })
+  }, [activeTabId, researchSessions, workspaceTabs])
+
+  const handleOpenSection = useCallback((kind) => {
+    openWorkspaceTab(kind)
+  }, [openWorkspaceTab])
 
   const handleConnectChatgpt = async () => {
     if (authBusy || authStatus.connected) return authStatus
@@ -771,13 +925,16 @@ function App() {
   }
 
   const submitQuestion = async () => {
-    const question = input.trim()
-    if (!question || running) return
+    if (activeSection !== 'research' || anyResearchRunning) return
+    const sessionId = activeTabId
+    const session = researchSessions[sessionId] || createResearchSession()
+    const question = session.input.trim()
+    if (!question) return
     const packet = retrieveEvidence(retrievalIndex, question, {
       topK: modelConfig.topK,
       similarityThreshold: modelConfig.similarityThreshold,
     })
-    setRetrievalPacket(packet)
+    updateResearchSession(sessionId, { retrievalPacket: packet })
     let chatgptConnected = authStatus.connected
     if (selectedModel.authProvider === 'chatgpt' && !chatgptConnected) {
       const connected = await handleConnectChatgpt()
@@ -785,32 +942,32 @@ function App() {
       if (!chatgptConnected) return
     }
     const live = (selectedModel.authProvider === 'chatgpt' || selectedModel.id === 'smart-default') && chatgptConnected
-    setAnswerMode(live ? 'chatgpt' : 'retrieval-only')
-    setMessages((current) => [...current, { id: `user-${Date.now()}`, role: 'user', text: question }])
-    setInput('')
+    setWorkspaceTabs((current) => current.map((tab) => tab.id === sessionId ? { ...tab, title: titleFromQuestion(question) } : tab))
+    updateResearchSession(sessionId, (current) => ({
+      ...current,
+      answerMode: live ? 'chatgpt' : 'retrieval-only',
+      messages: [...current.messages, { id: `user-${Date.now()}`, role: 'user', text: question }],
+      input: '',
+    }))
     if (live) {
       const assistantId = `assistant-${Date.now()}`
       const controller = new AbortController()
       requestAbortRef.current = controller
-      setRunMode('live')
-      setActiveStage(3)
-      setRunning(true)
-      setMessages((current) => [...current, {
-        id: assistantId,
-        role: 'assistant',
-        text: '',
-        bullets: [],
-        closing: '',
-        evidence: packet.evidence,
-      }])
+      updateResearchSession(sessionId, (current) => ({
+        ...current,
+        runMode: 'live',
+        activeStage: 3,
+        running: true,
+        messages: [...current.messages, { id: assistantId, role: 'assistant', text: '', bullets: [], closing: '', evidence: packet.evidence }],
+      }))
       let streamedText = ''
       let renderFrame = 0
       const flushStreamedText = () => {
         renderFrame = 0
-        setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, text: streamedText } : message))
+        updateResearchSession(sessionId, (current) => ({ ...current, messages: current.messages.map((message) => message.id === assistantId ? { ...message, text: streamedText } : message) }))
       }
       try {
-        const history = messages
+        const history = session.messages
           .filter((message) => message.role === 'user' || message.role === 'assistant')
           .slice(-20)
           .map((message) => ({
@@ -832,35 +989,38 @@ function App() {
           signal: controller.signal,
           onDelta: (delta) => {
             streamedText += delta
-            setActiveStage(4)
+            updateResearchSession(sessionId, { activeStage: 4 })
             if (!renderFrame) renderFrame = window.requestAnimationFrame(flushStreamedText)
           },
         })
         if (renderFrame) window.cancelAnimationFrame(renderFrame)
-        setActiveStage(5)
-        setMessages((current) => current.map((message) => message.id === assistantId ? {
-          ...message,
-          text: result.text || streamedText || 'The provider returned an empty response.',
-          closing: `Generated with ${result.model} through the connected ChatGPT subscription · ${packet.evidence.length} Vault evidence chunk${packet.evidence.length === 1 ? '' : 's'}.`,
-        } : message))
+        updateResearchSession(sessionId, (current) => ({
+          ...current,
+          activeStage: 5,
+          messages: current.messages.map((message) => message.id === assistantId ? {
+            ...message,
+            text: result.text || streamedText || 'The provider returned an empty response.',
+            closing: `Generated with ${result.model} through the connected ChatGPT subscription · ${packet.evidence.length} Vault evidence chunk${packet.evidence.length === 1 ? '' : 's'}.`,
+          } : message),
+        }))
       } catch (error) {
         if (renderFrame) window.cancelAnimationFrame(renderFrame)
-        setActiveStage(5)
-        setMessages((current) => current.map((message) => message.id === assistantId ? {
-          ...message,
-          text: streamedText || message.text || (error.name === 'AbortError' ? 'Generation stopped.' : `The connected model could not complete this request: ${error.message}`),
-          closing: error.name === 'AbortError' ? 'The partial response was kept.' : 'Check the ChatGPT connection and try again.',
-        } : message))
+        updateResearchSession(sessionId, (current) => ({
+          ...current,
+          activeStage: 5,
+          messages: current.messages.map((message) => message.id === assistantId ? {
+            ...message,
+            text: streamedText || message.text || (error.name === 'AbortError' ? 'Generation stopped.' : `The connected model could not complete this request: ${error.message}`),
+            closing: error.name === 'AbortError' ? 'The partial response was kept.' : 'Check the ChatGPT connection and try again.',
+          } : message),
+        }))
       } finally {
         if (requestAbortRef.current === controller) requestAbortRef.current = null
-        setRunning(false)
-        setRunMode('mock')
+        updateResearchSession(sessionId, { running: false, runMode: 'mock' })
       }
       return
     }
-    setRunMode('mock')
-    setPendingQuestion(question)
-    setRunning(true)
+    updateResearchSession(sessionId, { runMode: 'mock', pendingQuestion: question, running: true })
   }
 
   const handleModelSelect = async (chatModelId) => {
@@ -878,8 +1038,7 @@ function App() {
 
   const handlePause = () => {
     requestAbortRef.current?.abort()
-    setActiveStage(5)
-    setRunning(false)
+    updateResearchSession(activeTabId, { activeStage: 5, running: false })
   }
 
   const handleSettingsSave = (nextConfig) => {
@@ -920,32 +1079,19 @@ function App() {
 
   const handleViewPipelineRun = (runId) => {
     setSelectedPipelineRunId(runId)
-    setActiveSection('runs')
+    openWorkspaceTab('runs')
   }
-
-  const handleNewChat = () => {
-    requestAbortRef.current?.abort()
-    setMessages([])
-    setInput('')
-    setPendingQuestion('')
-    setRetrievalPacket(null)
-    setRunning(false)
-    setAnswerMode('sample')
-    setActiveSection('research')
-  }
-
-  const ActiveSectionIcon = activeSection === 'settings' ? Settings2 : navItems.find((item) => item.id === activeSection)?.icon || MessageSquare
 
   return (
     <div className="app-shell">
       <Sidebar
         activeSection={activeSection}
-        setActiveSection={setActiveSection}
+        setActiveSection={handleOpenSection}
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
         onConnectVault={handleConnectVault}
         onSyncVault={handleSyncVault}
-        onOpenSettings={() => setActiveSection('settings')}
+        onOpenSettings={() => handleOpenSection('settings')}
         vaultName={vaultName}
         vaultNoteCount={vaultIndex.notes.length}
         syncState={syncState}
@@ -959,12 +1105,12 @@ function App() {
       />
       <input ref={vaultInputRef} className="visually-hidden" type="file" webkitdirectory="true" directory="true" multiple onChange={handleVaultSelection} />
       <main className="main-shell">
-        <header className="topbar">
-          <div className="topbar-title"><ActiveSectionIcon size={21} /><span>{activeSection === 'research' ? 'Ask your research vault' : activeSection === 'settings' ? 'Settings' : activeTitle}</span></div>
-          <div className="topbar-actions"><button className="new-chat" onClick={handleNewChat}>New chat <Plus size={17} /></button><button className="icon-button mobile-settings-button" onClick={() => setActiveSection('settings')} aria-label="Open settings"><Settings2 size={18} /></button><button className="icon-button" aria-label="More options"><MoreHorizontal size={19} /></button></div>
+        <header className="topbar workspace-topbar">
+          <WorkspaceTabs tabs={workspaceTabs} activeTabId={activeTabId} onSelect={handleSelectTab} onClose={handleCloseTab} onCreate={(kind) => openWorkspaceTab(kind, { forceNew: kind === 'research' || kind === 'graph' })} />
+          <div className="topbar-actions"><button className="icon-button mobile-settings-button" onClick={() => handleOpenSection('settings')} aria-label="Open settings"><Settings2 size={18} /></button></div>
         </header>
 
-        {activeSection === 'settings' ? <SettingsWorkspace authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} /> : activeSection === 'graph' ? <KnowledgeGraphSection index={vaultIndex} onConnectVault={handleConnectVault} /> : activeSection === 'pipelines' ? (
+        {activeSection === 'launcher' ? <WorkspaceLauncher onOpen={openWorkspaceTab} /> : activeSection === 'settings' ? <SettingsWorkspace authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} /> : activeSection === 'graph' ? <KnowledgeGraphSection key={activeTabId} index={vaultIndex} onConnectVault={handleConnectVault} /> : activeSection === 'pipelines' ? (
           <PipelinesSection vaultName={vaultName} noteCount={vaultNotes.length} runs={pipelineRuns} runningPipelineId={pipelineRunningId} onRun={handleRunPipeline} onViewRun={handleViewPipelineRun} onConnectVault={handleConnectVault} />
         ) : activeSection === 'runs' ? (
           <RunsSection runs={pipelineRuns} selectedRunId={selectedPipelineRunId} onSelectRun={setSelectedPipelineRunId} />
@@ -975,7 +1121,7 @@ function App() {
                 {messages.map((message) => message.role === 'user' ? <UserMessage text={message.text} key={message.id} /> : <AssistantMessage message={message} running={running} onOpenNote={setSelectedNote} key={message.id} />)}
               </div>
               <EvidenceTrail activeStage={activeStage} />
-              <Composer value={input} setValue={setInput} onSubmit={submitQuestion} disabled={running} selectedModel={selectedModel} models={chatModels} onSelectModel={handleModelSelect} authStatus={authStatus} authBusy={authBusy} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} />
+              <Composer value={input} setValue={setInput} onSubmit={submitQuestion} disabled={anyResearchRunning} selectedModel={selectedModel} models={chatModels} onSelectModel={handleModelSelect} authStatus={authStatus} authBusy={authBusy} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} />
             </div>
             <Inspector activeStage={activeStage} running={running} onPause={handlePause} linkedNotes={inspectorNotes} sources={inspectorSources} vaultName={vaultName} topK={modelConfig.topK} rerankLabel={rerankModel?.name || 'Disabled by profile'} packet={retrievalPacket} answerMode={answerMode} onOpenNote={setSelectedNote} />
           </div>

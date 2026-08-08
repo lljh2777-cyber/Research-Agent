@@ -219,7 +219,7 @@ function MiniGraph({ graph, selectedId, onSelect }) {
         const target = nodesById.get(link.targetId)
         return source && target ? <line className={selectedId === link.sourceId || selectedId === link.targetId ? 'active' : ''} key={link.id} x1={source.x} y1={source.y} x2={target.x} y2={target.y} /> : null
       })}</g>
-      <g>{graph.nodes.map((node) => <circle className={`type-${node.type} ${node.id === selectedId ? 'selected' : ''}`} role="button" tabIndex="0" aria-label={node.title} key={node.id} cx={node.x} cy={node.y} r={Math.max(8, node.radius)} onClick={() => onSelect(node)} onKeyDown={(event) => { if (event.key === 'Enter') onSelect(node) }} />)}</g>
+      <g>{graph.nodes.map((node, index) => <circle className={`type-${node.type} ${node.id === selectedId ? 'selected' : ''}`} role="button" tabIndex="0" aria-label={node.title} key={`${node.id}-${index}`} cx={node.x} cy={node.y} r={Math.max(8, node.radius)} onClick={() => onSelect(node)} onKeyDown={(event) => { if (event.key === 'Enter') onSelect(node) }} />)}</g>
     </svg> : <div className="dock-empty">Wikilinks will form a local graph here.</div>}
     <div className="dock-graph-stats"><span><strong>{graph.stats.notes}</strong> notes</span><span><strong>{graph.stats.resolvedLinks}</strong> links</span><span><strong>{graph.stats.orphans}</strong> orphans</span></div>
   </div>
