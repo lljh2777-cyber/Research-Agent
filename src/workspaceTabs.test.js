@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { closeWorkspaceTab, createWorkspaceTab, findReusableTab, titleFromQuestion } from './workspaceTabs.js'
+import { closeWorkspaceTab, createWorkspaceTab, findReusableTab, researchTabTitle, titleFromQuestion } from './workspaceTabs.js'
 
 test('creates typed workspace tabs with stable user-facing titles', () => {
   assert.deepEqual(createWorkspaceTab('graph', { id: 'graph-1', vaultName: 'tumor-niche' }), {
@@ -33,4 +33,9 @@ test('conversation titles are compact and reusable tools stay singleton', () => 
   assert.equal(findReusableTab(tabs, 'pipelines')?.id, 'pipelines-1')
   assert.equal(findReusableTab(tabs, 'research'), null)
   assert.equal(findReusableTab([createWorkspaceTab('launcher', { id: 'launcher-1' })], 'launcher')?.id, 'launcher-1')
+})
+
+test('research tabs combine the agent short name and conversation title', () => {
+  assert.equal(researchTabTitle('Bio', 'Tumor niche methods'), 'Bio - Tumor niche methods')
+  assert.equal(researchTabTitle('', ''), 'Agent - New research')
 })

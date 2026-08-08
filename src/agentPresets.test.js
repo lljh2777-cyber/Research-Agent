@@ -4,10 +4,13 @@ import {
   AGENT_PRESETS,
   createConversationConfigSnapshot,
   createRunSnapshot,
+  getAgentPreset,
   resolveConversationConfig,
   TOOL_IDS,
   updateConversationKnowledgeScopes,
+  updateConversationIdentity,
   updateConversationModel,
+  updateConversationSystemPrompt,
   updateConversationTools,
 } from './agentPresets.js'
 
@@ -18,7 +21,7 @@ test('ships focused, versioned research agent presets', () => {
     'bioinformatics-coder',
     'research-planner',
   ])
-  assert(AGENT_PRESETS.every((preset) => preset.version === 1 && preset.systemPrompt))
+  assert(AGENT_PRESETS.every((preset) => preset.version === 1 && preset.shortName && preset.systemPrompt))
 })
 
 test('conversation overrides win for ordinary settings without expanding agent permissions', () => {
@@ -91,4 +94,15 @@ test('conversation editors preserve the permission-filtered configuration bounda
   assert.deepEqual(withTools.enabledTools, [TOOL_IDS.WEB_SEARCH])
   assert.deepEqual(withVault.knowledgeScopes, [{ vaultId: 'knowledge-base', paths: [], tags: [] }])
   assert.deepEqual(initial.knowledgeScopes, [])
+})
+
+test('conversation identity and system prompt are editable without mutating the preset', () => {
+  const initial = createConversationConfigSnapshot({ agentId: 'biologist' })
+  const identified = updateConversationIdentity(initial, { name: 'Tumor Biologist', shortName: 'T-Bio' })
+  const prompted = updateConversationSystemPrompt(identified, 'Focus on tumor microenvironment evidence.')
+
+  assert.deepEqual(prompted.identity, { name: 'Tumor Biologist', shortName: 'T-Bio' })
+  assert.equal(prompted.systemPrompt, 'Focus on tumor microenvironment evidence.')
+  assert.deepEqual(initial.identity, { name: 'Biologist', shortName: 'Bio' })
+  assert.equal(getAgentPreset('biologist').name, 'Biologist')
 })

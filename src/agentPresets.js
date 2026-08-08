@@ -27,6 +27,7 @@ export const AGENT_PRESETS = Object.freeze([
     id: 'biologist',
     version: 1,
     name: 'Biologist',
+    shortName: 'Bio',
     description: 'Biological questions grounded in Vault evidence and literature citations.',
     systemPrompt: 'Act as a careful research biologist. Separate evidence from inference, cite sources, and state uncertainty.',
     model: { mode: 'auto', providerId: null, modelId: 'smart-default', endpointType: null },
@@ -44,6 +45,7 @@ export const AGENT_PRESETS = Object.freeze([
     id: 'literature-analyst',
     version: 1,
     name: 'Literature Analyst',
+    shortName: 'Lit',
     description: 'Paper analysis, figure interpretation, and evidence extraction.',
     systemPrompt: 'Analyze scientific literature with explicit evidence chains. Distinguish reported results from interpretation.',
     model: { mode: 'auto', providerId: null, modelId: 'smart-default', endpointType: null },
@@ -61,6 +63,7 @@ export const AGENT_PRESETS = Object.freeze([
     id: 'bioinformatics-coder',
     version: 1,
     name: 'Bioinformatics Coder',
+    shortName: 'BioCode',
     description: 'Bioinformatics code, reproducible pipelines, and local analysis tools.',
     systemPrompt: 'Act as a reproducible bioinformatics engineer. Explain assumptions, validate inputs, and keep destructive actions gated.',
     model: { mode: 'auto', providerId: null, modelId: 'smart-default', endpointType: null },
@@ -78,6 +81,7 @@ export const AGENT_PRESETS = Object.freeze([
     id: 'research-planner',
     version: 1,
     name: 'Research Planner',
+    shortName: 'Plan',
     description: 'Research questions, experimental plans, milestones, and risk analysis.',
     systemPrompt: 'Design feasible research plans with explicit hypotheses, controls, decision points, limitations, and validation criteria.',
     model: { mode: 'auto', providerId: null, modelId: 'smart-default', endpointType: null },
@@ -157,6 +161,12 @@ export function resolveConversationConfig({
       agentVersion: preset.version,
       projectId: projectConfig.id || null,
     },
+    identity: clone({
+      name: preset.name,
+      shortName: preset.shortName || preset.name,
+      ...(projectConfig.identity || {}),
+      ...(conversationOverrides.identity || {}),
+    }),
     systemPrompt: conversationOverrides.systemPrompt ?? projectConfig.systemPrompt ?? preset.systemPrompt,
     model: clone(conversationOverrides.model ?? projectConfig.model ?? preset.model ?? systemDefaults.model),
     fallbackModels: clone(conversationOverrides.fallbackModels ?? projectConfig.fallbackModels ?? preset.fallbackModels ?? systemDefaults.fallbackModels),
@@ -182,6 +192,24 @@ export function updateConversationModel(snapshot, model) {
   return {
     ...clone(snapshot),
     model: { ...clone(snapshot?.model || SYSTEM_RESEARCH_DEFAULTS.model), ...clone(model) },
+  }
+}
+
+export function updateConversationIdentity(snapshot, identity) {
+  const config = clone(snapshot || createConversationConfigSnapshot())
+  return {
+    ...config,
+    identity: {
+      ...clone(config.identity || {}),
+      ...clone(identity || {}),
+    },
+  }
+}
+
+export function updateConversationSystemPrompt(snapshot, systemPrompt) {
+  return {
+    ...clone(snapshot || createConversationConfigSnapshot()),
+    systemPrompt: String(systemPrompt ?? ''),
   }
 }
 
@@ -212,6 +240,7 @@ export function createRunSnapshot(conversationConfig, {
     id,
     createdAt,
     source: clone(config.source),
+    identity: clone(config.identity),
     systemPrompt: config.systemPrompt,
     model: { ...clone(config.model), ...(resolvedModel ? clone(resolvedModel) : {}) },
     enabledTools: intersectTools(config.allowedTools || [], unique(requestedTools)),

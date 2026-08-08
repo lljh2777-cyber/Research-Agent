@@ -64,15 +64,17 @@ import { executePipeline, loadPipelineRuns, savePipelineRuns } from './pipelineE
 import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources, retrieveEvidence } from './retrieval.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
 import { AUTH_SERVICE_UNAVAILABLE, getAuthStatus, getChatgptModels, logoutChatgpt, startChatgptLogin, streamChatgptResponse, waitForChatgptAuth } from './authClient.js'
-import { closeWorkspaceTab, createWorkspaceTab, findReusableTab, MAX_WORKSPACE_TABS, titleFromQuestion } from './workspaceTabs.js'
+import { closeWorkspaceTab, createWorkspaceTab, findReusableTab, MAX_WORKSPACE_TABS, researchTabTitle, titleFromQuestion } from './workspaceTabs.js'
 import {
   AGENT_PRESETS,
   createConversationConfigSnapshot,
   createRunSnapshot,
   getAgentPreset,
   TOOL_IDS,
+  updateConversationIdentity,
   updateConversationKnowledgeScopes,
   updateConversationModel,
+  updateConversationSystemPrompt,
   updateConversationTools,
 } from './agentPresets.js'
 import './styles.css'
@@ -86,6 +88,8 @@ const navItems = [
 
 const SIDEBAR_COLLAPSED_KEY = 'bioresearch-os:sidebar-collapsed'
 const INITIAL_RESEARCH_TAB_ID = 'research-initial'
+const DEFAULT_AGENT_PRESET = getAgentPreset('biologist')
+const DEFAULT_RESEARCH_TAB_TITLE = researchTabTitle(DEFAULT_AGENT_PRESET.shortName, 'New research')
 
 const RESEARCH_TOOL_OPTIONS = Object.freeze({
   [TOOL_IDS.VAULT_SEARCH]: { label: 'Vault retrieval', detail: 'Retrieve relevant Markdown evidence before answering.', icon: Search },
@@ -105,6 +109,7 @@ function createResearchSession({ messages = [], modelId = 'smart-default', knowl
   })
   return {
     phase: 'setup',
+    conversationTitle: 'New research',
     input: '',
     messages,
     running: false,
@@ -479,6 +484,9 @@ function ResearchSetup({
   modelCatalog,
   modelsBusy,
   onSelectAgent,
+  onUpdateIdentity,
+  onUpdateSystemPrompt,
+  onResetSystemPrompt,
   onSelectModel,
   onSelectVault,
   onToggleTool,
@@ -489,6 +497,7 @@ function ResearchSetup({
   onStart,
 }) {
   const selectedAgent = getAgentPreset(config.source?.agentId)
+  const identity = config.identity || { name: selectedAgent.name, shortName: selectedAgent.shortName || selectedAgent.name }
   const enabledTools = new Set(config.enabledTools || [])
   const hasVaultScope = Boolean(vaultName && config.knowledgeScopes?.some((scope) => scope.vaultId === vaultName))
 
@@ -501,6 +510,7 @@ function ResearchSetup({
     return ''
   }
   const enabledToolCount = [...enabledTools].filter((toolId) => !toolAvailability(toolId)).length
+  const canStart = Boolean(identity.name?.trim() && identity.shortName?.trim() && config.systemPrompt?.trim())
 
   return <section className="research-setup" aria-labelledby="research-setup-title">
     <header className="research-setup-header">
@@ -519,6 +529,18 @@ function ResearchSetup({
         </div>
       </aside>
       <div className="research-setup-config">
+        <section className="research-config-block agent-identity-block">
+          <div className="research-config-heading"><span><Sparkles size={16} />Agent identity</span><small>Editable for this conversation</small></div>
+          <div className="agent-identity-grid">
+            <label><span>Agent name</span><input value={identity.name || ''} maxLength={48} onChange={(event) => onUpdateIdentity({ name: event.target.value })} placeholder="Biologist" /></label>
+            <label><span>Short name</span><input value={identity.shortName || ''} maxLength={16} onChange={(event) => onUpdateIdentity({ shortName: event.target.value })} placeholder="Bio" /></label>
+          </div>
+          <div className="system-prompt-field">
+            <div><label htmlFor="research-agent-system-prompt">System prompt</label><button type="button" onClick={onResetSystemPrompt}><RefreshCw size={11} />Restore preset</button></div>
+            <textarea id="research-agent-system-prompt" value={config.systemPrompt || ''} maxLength={6000} rows={4} onChange={(event) => onUpdateSystemPrompt(event.target.value)} placeholder="Describe how this agent should reason, use evidence, and format its answer." />
+            <small>{(config.systemPrompt || '').length} / 6000 · saved in this conversation snapshot</small>
+          </div>
+        </section>
         <section className="research-config-block">
           <div className="research-config-heading"><span><Atom size={16} />Model</span><small>Temporary for this conversation</small></div>
           <div className="research-model-choice">
@@ -552,14 +574,15 @@ function ResearchSetup({
       </div>
     </div>
     <footer className="research-setup-footer">
-      <div><span>{selectedAgent.name}</span><span>{selectedModel.name}</span><span>{hasVaultScope ? vaultName : 'No Vault'}</span><span>{enabledToolCount} tools</span></div>
-      <button className="research-start-button" type="button" onClick={onStart}><MessageSquare size={16} />Start conversation<ArrowRight size={15} /></button>
+      <div><span>{identity.name || selectedAgent.name}</span><span>{identity.shortName || selectedAgent.shortName}</span><span>{selectedModel.name}</span><span>{hasVaultScope ? vaultName : 'No Vault'}</span><span>{enabledToolCount} tools</span></div>
+      <button className="research-start-button" type="button" onClick={onStart} disabled={!canStart} title={canStart ? 'Start conversation' : 'Agent name, short name, and system prompt are required'}><MessageSquare size={16} />Start conversation<ArrowRight size={15} /></button>
     </footer>
   </section>
 }
 
 function ResearchContextBar({ config, selectedModel, vaultName, mcpConnected, canEdit, onEdit }) {
   const agent = getAgentPreset(config.source?.agentId)
+  const identity = config.identity || { name: agent.name }
   const hasVault = Boolean(vaultName && config.knowledgeScopes?.some((scope) => scope.vaultId === vaultName))
   const enabledToolCount = (config.enabledTools || []).filter((toolId) => {
     if (toolId.startsWith('vault.')) return hasVault
@@ -569,7 +592,7 @@ function ResearchContextBar({ config, selectedModel, vaultName, mcpConnected, ca
     return true
   }).length
   return <div className="research-context-bar" aria-label="Conversation configuration">
-    <span><Atom size={14} />{agent.name}</span><span>{selectedModel.name}</span><span><Database size={14} />{hasVault ? vaultName : 'No Vault'}</span><span><GitBranch size={14} />{enabledToolCount} tools</span>
+    <span><Atom size={14} />{identity.name || agent.name}</span><span>{selectedModel.name}</span><span><Database size={14} />{hasVault ? vaultName : 'No Vault'}</span><span><GitBranch size={14} />{enabledToolCount} tools</span>
     {canEdit && <button type="button" onClick={onEdit}>Edit setup</button>}
   </div>
 }
@@ -785,7 +808,7 @@ function WorkspaceLauncher({ onOpen }) {
 }
 
 function App() {
-  const [workspaceTabs, setWorkspaceTabs] = useState(() => [createWorkspaceTab('research', { id: INITIAL_RESEARCH_TAB_ID })])
+  const [workspaceTabs, setWorkspaceTabs] = useState(() => [createWorkspaceTab('research', { id: INITIAL_RESEARCH_TAB_ID, title: DEFAULT_RESEARCH_TAB_TITLE })])
   const [activeTabId, setActiveTabId] = useState(INITIAL_RESEARCH_TAB_ID)
   const [researchSessions, setResearchSessions] = useState(() => {
     const defaults = loadModelConfig()
@@ -1139,7 +1162,9 @@ function App() {
     const matchingGraphs = kind === 'graph' ? workspaceTabs.filter((tab) => tab.kind === 'graph' && tab.vaultName === graphBaseTitle).length : 0
     const tab = createWorkspaceTab(kind, {
       vaultName: kind === 'graph' ? graphBaseTitle : '',
-      title: kind === 'graph' && matchingGraphs ? `${graphBaseTitle} ${matchingGraphs + 1}` : undefined,
+      title: kind === 'research'
+        ? DEFAULT_RESEARCH_TAB_TITLE
+        : kind === 'graph' && matchingGraphs ? `${graphBaseTitle} ${matchingGraphs + 1}` : undefined,
     })
     setWorkspaceTabs((current) => [...current, tab])
     if (kind === 'research') {
@@ -1207,6 +1232,7 @@ function App() {
   }
 
   const handleSelectAgent = (agentId) => {
+    const preset = getAgentPreset(agentId)
     updateResearchSession(activeTabId, (session) => {
       const nextConfig = createConversationConfigSnapshot({
         agentId,
@@ -1224,6 +1250,32 @@ function App() {
         })),
       }
     })
+    setWorkspaceTabs((current) => current.map((tab) => tab.id === activeTabId
+      ? { ...tab, title: researchTabTitle(preset.shortName || preset.name, activeResearchSession.conversationTitle) }
+      : tab))
+  }
+
+  const handleUpdateAgentIdentity = (identityPatch) => {
+    const identity = { ...(activeResearchSession.configSnapshot?.identity || {}), ...identityPatch }
+    updateResearchSession(activeTabId, (session) => ({
+      ...session,
+      configSnapshot: updateConversationIdentity(session.configSnapshot, identityPatch),
+    }))
+    setWorkspaceTabs((current) => current.map((tab) => tab.id === activeTabId
+      ? { ...tab, title: researchTabTitle(identity.shortName || identity.name, activeResearchSession.conversationTitle) }
+      : tab))
+  }
+
+  const handleUpdateAgentSystemPrompt = (systemPrompt) => {
+    updateResearchSession(activeTabId, (session) => ({
+      ...session,
+      configSnapshot: updateConversationSystemPrompt(session.configSnapshot, systemPrompt),
+    }))
+  }
+
+  const handleResetAgentSystemPrompt = () => {
+    const preset = getAgentPreset(activeResearchSession.configSnapshot?.source?.agentId)
+    handleUpdateAgentSystemPrompt(preset.systemPrompt)
   }
 
   const handleSelectResearchVault = (enabled) => {
@@ -1244,9 +1296,11 @@ function App() {
   }
 
   const handleStartResearch = () => {
-    const agent = getAgentPreset(activeResearchSession.configSnapshot?.source?.agentId)
+    const identity = activeResearchSession.configSnapshot?.identity
     updateResearchSession(activeTabId, { phase: 'conversation' })
-    setWorkspaceTabs((current) => current.map((tab) => tab.id === activeTabId ? { ...tab, title: agent.name } : tab))
+    setWorkspaceTabs((current) => current.map((tab) => tab.id === activeTabId
+      ? { ...tab, title: researchTabTitle(identity?.shortName || identity?.name, activeResearchSession.conversationTitle) }
+      : tab))
   }
 
   const handleEditResearchSetup = () => {
@@ -1283,9 +1337,13 @@ function App() {
         requestedModelId: session.configSnapshot?.model?.modelId || selectedModel.id,
       },
     })
-    setWorkspaceTabs((current) => current.map((tab) => tab.id === sessionId ? { ...tab, title: titleFromQuestion(question) } : tab))
+    const conversationTitle = titleFromQuestion(question)
+    setWorkspaceTabs((current) => current.map((tab) => tab.id === sessionId
+      ? { ...tab, title: researchTabTitle(session.configSnapshot?.identity?.shortName || session.configSnapshot?.identity?.name, conversationTitle) }
+      : tab))
     updateResearchSession(sessionId, (current) => ({
       ...current,
+      conversationTitle,
       answerMode: live ? 'chatgpt' : 'retrieval-only',
       messages: [...current.messages, { id: `user-${Date.now()}`, role: 'user', text: question, evidenceContext }],
       input: '',
@@ -1572,6 +1630,9 @@ function App() {
             modelCatalog={modelCatalog}
             modelsBusy={modelsBusy}
             onSelectAgent={handleSelectAgent}
+            onUpdateIdentity={handleUpdateAgentIdentity}
+            onUpdateSystemPrompt={handleUpdateAgentSystemPrompt}
+            onResetSystemPrompt={handleResetAgentSystemPrompt}
             onSelectModel={handleModelSelect}
             onSelectVault={handleSelectResearchVault}
             onToggleTool={handleToggleResearchTool}

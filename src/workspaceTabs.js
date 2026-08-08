@@ -31,6 +31,12 @@ export function titleFromQuestion(question, fallback = 'New research') {
   return `${(wordBoundary > 18 ? candidate.slice(0, wordBoundary) : candidate).trimEnd()}…`
 }
 
+export function researchTabTitle(agentShortName, conversationTitle = 'New research') {
+  const agent = String(agentShortName || '').replace(/\s+/g, ' ').trim() || 'Agent'
+  const conversation = String(conversationTitle || '').replace(/\s+/g, ' ').trim() || 'New research'
+  return `${agent} - ${conversation}`
+}
+
 export function closeWorkspaceTab(tabs, activeTabId, closingTabId) {
   const closingIndex = tabs.findIndex((tab) => tab.id === closingTabId)
   if (closingIndex < 0) return { tabs, activeTabId }

@@ -143,6 +143,15 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .agent-preset-list > button > svg { color: var(--mint); margin-top: 8px; }
 .research-setup-config { min-width: 0; display: grid; align-content: start; padding: 19px 0 18px 24px; }
 .research-config-block { min-width: 0; padding: 0 0 19px; margin-bottom: 19px; border-bottom: 1px solid var(--border); }
+.agent-identity-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, .38fr); gap: 10px; margin-top: 12px; }
+.agent-identity-grid label, .system-prompt-field { min-width: 0; display: grid; gap: 6px; color: #8798b0; font-size: 9px; }
+.agent-identity-grid input, .system-prompt-field textarea { width: 100%; border: 1px solid var(--border); border-radius: 7px; background: rgba(13, 25, 44, .74); color: var(--text); padding: 9px 10px; font: inherit; }
+.agent-identity-grid input:focus, .system-prompt-field textarea:focus { border-color: var(--border-strong); outline: 2px solid rgba(110, 168, 254, .18); outline-offset: 0; }
+.system-prompt-field { margin-top: 11px; }
+.system-prompt-field > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.system-prompt-field > div > button { display: inline-flex; align-items: center; gap: 5px; border: 0; background: transparent; color: var(--blue); padding: 2px 0; font-size: 8px; cursor: pointer; }
+.system-prompt-field textarea { min-height: 84px; resize: vertical; line-height: 1.5; }
+.system-prompt-field > small { justify-self: end; color: var(--faint); font-family: var(--mono); font-size: 7px; }
 .research-model-choice { min-height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 12px; border: 1px solid var(--border); border-radius: 8px; background: rgba(13, 25, 44, .74); padding: 12px 13px 12px 15px; }
 .research-model-choice > div:first-child { min-width: 0; display: grid; gap: 4px; }
 .research-model-choice strong { font-size: 12px; }
@@ -173,6 +182,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .research-setup-footer > div > span { border: 1px solid var(--border); border-radius: 999px; color: #8091aa; background: rgba(15, 27, 46, .72); padding: 5px 8px; font-family: var(--mono); font-size: 8px; }
 .research-start-button { min-height: 38px; display: inline-flex; align-items: center; gap: 8px; border: 1px solid #3f83e8; border-radius: 7px; background: linear-gradient(135deg, #286bd5, #1d55b6); color: #fff; padding: 0 15px; font-size: 10px; font-weight: 600; cursor: pointer; box-shadow: 0 10px 24px rgba(21, 76, 166, .25); }
 .research-start-button:hover { background: linear-gradient(135deg, #3479e5, #2462c7); }
+.research-start-button:disabled { cursor: not-allowed; opacity: .45; box-shadow: none; }
 .research-context-bar { min-height: 38px; flex: 0 0 38px; display: flex; align-items: center; gap: 7px; overflow-x: auto; border-bottom: 1px solid var(--border); color: #71839d; padding: 0 4px; scrollbar-width: none; }
 .research-context-bar::-webkit-scrollbar { display: none; }
 .research-context-bar > span { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; border-right: 1px solid var(--border); padding: 0 10px 0 3px; font-family: var(--mono); font-size: 8px; }
@@ -935,6 +945,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
   .agent-preset-list::-webkit-scrollbar { display: none; }
   .agent-preset-list > button { flex: 0 0 min(250px, 82vw); }
   .research-setup-config { padding-left: 0; }
+  .agent-identity-grid { grid-template-columns: 1fr; }
   .research-model-choice { align-items: stretch; flex-direction: column; }
   .research-model-choice .model-select { width: 100%; }
   .research-setup-footer { align-items: stretch; flex-direction: column; }
