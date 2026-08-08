@@ -5,6 +5,11 @@ node_modules/
 # Build output
 dist/
 
+# Local environment files and secrets
+.env
+.env.*
+!.env.example
+
 # Local QA screenshots and browser-only artifacts
 qa/
 

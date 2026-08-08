@@ -17,6 +17,17 @@ Open the local Vite URL shown in the terminal. A production build can be checked
 npm run build
 ```
 
+## Security and deployment scope
+
+This repository is currently a local-first Web prototype, not a hardened multi-user hosted service. Making the source repository public does not make the running development services safe to expose to the Internet.
+
+- Keep the Vite development server, ChatGPT/Codex auth bridge, Vault adapter, MCP runtime, and provider adapter bound to the local machine.
+- Do not place these services behind a public reverse proxy or relay user credentials through a shared server.
+- Do not commit `.env` files, API keys, OAuth tokens, local Vault data, or operating-system credential-store exports.
+- A future hosted edition needs a separately designed backend with authentication and authorization, tenant isolation, CSRF/origin controls, secure secret storage, rate limiting, TLS, audit logging, and deployment-specific review.
+
+Provider API credentials entered in the current Web prototype are intended for a local browser session. ChatGPT subscription credentials remain under the official Codex client and operating-system keyring boundary described below.
+
 ## Current slice
 
 - Research chat workspace with evidence-trail stages
@@ -62,7 +73,7 @@ The future multi-provider protocol boundary is documented in [`docs/provider-api
 For a Web browser that cannot use the File System Access API, start the read-only local adapter with the Vault root you want to expose:
 
 ```bash
-npm run vault-server -- "D:\Obsidian Vault\paper-knowledge-base\knowledge-base"
+npm run vault-server -- "D:\path\to\knowledge-base"
 ```
 
 The adapter listens only on `127.0.0.1:4317`, serves Markdown files under the selected root, ignores `.obsidian`, `.trash`, and `node_modules`, and exposes `GET /api/health` plus `GET /api/vault`. The Web app attempts this adapter first, falls back to browser folder selection when it is unavailable, and polls for revisions every 15 seconds after a local connection succeeds.

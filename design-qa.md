@@ -1,12 +1,12 @@
 # Collapsible Application Sidebar QA
 
 - Source visual truths:
-  - `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-55f25458-95b1-4105-bbf6-b84c8b166d1f.png` (current expanded BioResearch OS sidebar)
-  - `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-74d9b213-1366-4686-8e32-6f2c14ab0c72.png` (target Obsidian-style collapsed icon rail)
+  - `C:\Users\<username>\AppData\Local\Temp\codex-clipboard-55f25458-95b1-4105-bbf6-b84c8b166d1f.png` (current expanded BioResearch OS sidebar)
+  - `C:\Users\<username>\AppData\Local\Temp\codex-clipboard-74d9b213-1366-4686-8e32-6f2c14ab0c72.png` (target Obsidian-style collapsed icon rail)
 - Implementation screenshots:
-  - `C:\Users\Thomas Wade\AppData\Local\Temp\research-agent-sidebar-expanded-final.png`
-  - `C:\Users\Thomas Wade\AppData\Local\Temp\research-agent-sidebar-collapsed.png`
-  - `C:\Users\Thomas Wade\AppData\Local\Temp\research-agent-sidebar-collapsed-compact.png`
+  - `C:\Users\<username>\AppData\Local\Temp\research-agent-sidebar-expanded-final.png`
+  - `C:\Users\<username>\AppData\Local\Temp\research-agent-sidebar-collapsed.png`
+  - `C:\Users\<username>\AppData\Local\Temp\research-agent-sidebar-collapsed-compact.png`
 - Source pixels: 373 x 1316 expanded crop; 468 x 744 collapsed reference
 - Implementation viewport and pixels: 1600 x 1000 desktop; 1100 x 780 compact; device scale factor 1
 - State: real cached Vault with 181 Markdown notes; Research page; collapsed state persisted across reload
@@ -57,10 +57,10 @@ final result: passed
 
 # Unified Research Composer QA
 
-- Source visual truth: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\composer-before-merge.png`
-- Implementation screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\composer-after-merge.png`
-- Attachment-state screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\composer-attached-file.png`
-- Side-by-side comparison: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\composer-merge-comparison.png`
+- Source visual truth: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\composer-before-merge.png`
+- Implementation screenshot: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\composer-after-merge.png`
+- Attachment-state screenshot: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\composer-attached-file.png`
+- Side-by-side comparison: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\composer-merge-comparison.png`
 - Source and implementation pixels: 1280 x 720
 - CSS viewport: 1280 x 720 at device scale factor 1; no density normalization required
 - State: Research conversation open; default composer empty; attachment state additionally tested with `README.md`
@@ -108,10 +108,10 @@ final result: passed
 
 # Cherry-Style Workspace Tabs and Launcher QA
 
-- Source visual truth: `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-1c06ee88-92e5-4e0f-a185-ab8986192958.png`
-- Supporting tab-detail reference: `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-5a260d4a-e645-47b3-a308-155c15b52502.png`
-- Implementation screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\workspace-tabs-launcher-compact.png`
-- Side-by-side comparison: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\workspace-tabs-launcher-comparison.png`
+- Source visual truth: `C:\Users\<username>\AppData\Local\Temp\codex-clipboard-1c06ee88-92e5-4e0f-a185-ab8986192958.png`
+- Supporting tab-detail reference: `C:\Users\<username>\AppData\Local\Temp\codex-clipboard-5a260d4a-e645-47b3-a308-155c15b52502.png`
+- Implementation screenshot: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\workspace-tabs-launcher-compact.png`
+- Side-by-side comparison: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\workspace-tabs-launcher-comparison.png`
 - Source pixels: 2048 x 550; focused comparison uses the left 1200 x 550 application region, scaled to 581 x 266
 - Implementation pixels and CSS viewport: 581 x 898, device screenshot normalized to CSS pixels
 - Additional desktop verification: 1280 x 720; top bar 56 px high, launcher grid 980 px wide, and `body.scrollWidth` equals `body.clientWidth`
@@ -165,9 +165,9 @@ final result: passed
 
 # Research Conversation Horizontal Density QA
 
-- Source visual truth: `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-57d81391-3607-4e69-a893-5cb6d1829736.png`
-- Implementation screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-chat-layout.png`
-- Side-by-side comparison: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-chat-layout-comparison.png`
+- Source visual truth: `C:\Users\<username>\AppData\Local\Temp\codex-clipboard-57d81391-3607-4e69-a893-5cb6d1829736.png`
+- Implementation screenshot: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-chat-layout.png`
+- Side-by-side comparison: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-chat-layout-comparison.png`
 - Source pixels: 2048 x 968; normalized to a centered 1721 x 968 crop and scaled to 1280 x 720 for comparison
 - Implementation pixels and CSS viewport: 1280 x 720 at a browser-reported device pixel ratio of 1.5; Browser screenshots are normalized to CSS pixels
 - State: Research conversation with the navigation rail collapsed, sample question and answer visible
@@ -210,9 +210,9 @@ final result: passed
 
 # Functional Provider Configuration and Model Discovery QA
 
-- Source visual truth: `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-a58d7257-efe0-4fea-816b-6bb721a7c5b3.png`
-- Implementation screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-agent-provider-settings.png`
-- Side-by-side comparison: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\provider-settings-comparison.png`
+- Source visual truth: `C:\Users\<username>\AppData\Local\Temp\codex-clipboard-a58d7257-efe0-4fea-816b-6bb721a7c5b3.png`
+- Implementation screenshot: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-agent-provider-settings.png`
+- Side-by-side comparison: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\provider-settings-comparison.png`
 - Source pixels: 2470 x 1464; implementation pixels and CSS viewport: 1280 x 720 at device scale factor 1
 - Density normalization: both artifacts were scaled into adjacent 1280 x 720 comparison regions; the implementation's persistent app sidebar and dark theme are intentional product-shell constraints
 - State: Settings → API Providers → OpenAI Compatible; one manually-added chat model; provider enabled; unreachable-local-endpoint error visible
@@ -263,10 +263,10 @@ final result: passed
 
 # Three-Column Settings Navigation and Full-Width Detail QA
 
-- Source visual truth: `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-a58d7257-efe0-4fea-816b-6bb721a7c5b3.png`
-- Implementation screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-agent-settings-three-column.png`
-- Compact implementation screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-agent-settings-three-column-compact.png`
-- Side-by-side comparison: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\settings-reference-comparison.png`
+- Source visual truth: `C:\Users\<username>\AppData\Local\Temp\codex-clipboard-a58d7257-efe0-4fea-816b-6bb721a7c5b3.png`
+- Implementation screenshot: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-agent-settings-three-column.png`
+- Compact implementation screenshot: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-agent-settings-three-column-compact.png`
+- Side-by-side comparison: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\settings-reference-comparison.png`
 - Source pixels: 2048 x 1218
 - Implementation pixels and CSS viewport: 1440 x 900 at device scale factor 1; settings workspace occupies 1376 x 828 CSS px after the persistent 64 px app rail and 72 px top bar
 - Compact viewport: 1100 x 780 at device scale factor 1
@@ -318,11 +318,11 @@ final result: passed
 # Dedicated Settings Workspace QA
 
 - Source visual truth:
-  - `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-c4d92048-9a1a-4aaf-b3c5-9f70c962c828.png` (Cherry Studio grouped settings navigation and provider catalog)
+  - `C:\Users\<username>\AppData\Local\Temp\codex-clipboard-c4d92048-9a1a-4aaf-b3c5-9f70c962c828.png` (Cherry Studio grouped settings navigation and provider catalog)
 - Implementation screenshots:
-  - `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-agent-settings-subscription.png`
-  - `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-agent-settings-providers.png`
-  - `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-agent-settings-compact.png`
+  - `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-agent-settings-subscription.png`
+  - `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-agent-settings-providers.png`
+  - `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-agent-settings-compact.png`
 - Source pixels: 732 x 1469
 - Implementation viewport and pixels: 1600 x 1000 desktop; 1100 x 780 compact; device scale factor 1
 - State: Settings route; subscription logged out; Anthropic provider selected after provider search
@@ -366,11 +366,11 @@ final result: passed
 
 # Obsidian Wikilink Rendering and Navigation QA
 
-- Source visual truth: `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-74fded27-cada-4f12-9281-f56320e2216a.png`
-- Previous implementation capture: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\wikilink-before.png`
-- Implementation screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\wikilink-after.png`
-- Linked-note state: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\wikilink-opened-note.png`
-- Side-by-side comparison: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\wikilink-reference-comparison.png`
+- Source visual truth: `C:\Users\<username>\AppData\Local\Temp\codex-clipboard-74fded27-cada-4f12-9281-f56320e2216a.png`
+- Previous implementation capture: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\wikilink-before.png`
+- Implementation screenshot: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\wikilink-after.png`
+- Linked-note state: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\wikilink-opened-note.png`
+- Side-by-side comparison: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\wikilink-reference-comparison.png`
 - Source pixels: 1081 x 753; normalized to 1034 x 720 for comparison
 - Implementation pixels and CSS viewport: 1280 x 720 at device scale factor 1
 - State: Knowledge Graph -> GRO-seq note -> `Core et al. 2012` wikilink visible; linked source opened in a second document tab for interaction proof
@@ -421,11 +421,11 @@ final result: passed
 # Workspace Tab Add-Button Follow Behavior QA
 
 - Source visual truth: browser annotation on `Open launcher` at `http://localhost:5173/`
-- Previous implementation capture: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\tab-add-before.png`
-- Implementation screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\tab-add-after-one.png`
-- Multiple-tab screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\tab-add-after-multiple.png`
-- Compact overflow screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\tab-add-after-overflow.png`
-- Side-by-side comparison: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\tab-add-follow-comparison.png`
+- Previous implementation capture: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\tab-add-before.png`
+- Implementation screenshot: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\tab-add-after-one.png`
+- Multiple-tab screenshot: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\tab-add-after-multiple.png`
+- Compact overflow screenshot: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\tab-add-after-overflow.png`
+- Side-by-side comparison: `C:\Users\<username>\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\tab-add-follow-comparison.png`
 - Source and implementation pixels: 1280 x 720; CSS viewport 1280 x 720 at device scale factor 1
 - Compact viewport: 520 x 720
 - State: one Research tab; then Research plus Launcher; then five tabs at compact width
