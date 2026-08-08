@@ -39,4 +39,3 @@ No third-party source code was copied into this implementation. If that changes 
 - Credentials are never embedded in provider URLs or written to application logs.
 - Desktop packaging must move provider keys to Windows Credential Manager, macOS Keychain, or the corresponding OS secure store.
 - ChatGPT refresh tokens remain managed by Codex and are not exposed to the browser application.
-

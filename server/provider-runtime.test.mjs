@@ -82,4 +82,3 @@ test('keeps custom OpenAI-compatible endpoints keyless and omits optional stream
   assert.equal('Authorization' in request.headers, false)
   assert.equal('stream_options' in request.body, false)
 })
-

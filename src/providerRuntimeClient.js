@@ -45,4 +45,3 @@ export async function streamProviderResponse({ providerId, endpoint, apiKey, mod
   if (!completed) throw new Error('Provider stream ended before completion.')
   return completed
 }
-
