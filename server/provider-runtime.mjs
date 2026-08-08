@@ -57,10 +57,82 @@ function providerHeaders(providerId, protocol, apiKey = '') {
 function normalizedMessages(messages) {
   if (!Array.isArray(messages) || !messages.length) throw runtimeError('At least one message is required.')
   return messages.map((message) => {
-    const role = ['system', 'user', 'assistant'].includes(message?.role) ? message.role : 'user'
+    const role = ['system', 'user', 'assistant', 'tool'].includes(message?.role) ? message.role : 'user'
     const content = typeof message?.content === 'string' ? message.content : ''
-    if (!content.trim()) throw runtimeError('Messages must contain text content.')
-    return { role, content }
+    const toolCalls = role === 'assistant' && Array.isArray(message?.toolCalls)
+      ? message.toolCalls.map((call) => {
+        const argumentText = typeof call?.arguments === 'string' ? call.arguments : JSON.stringify(call?.arguments || {})
+        let parsedArguments
+        try {
+          parsedArguments = JSON.parse(argumentText || '{}')
+        } catch {
+          parsedArguments = null
+        }
+        if (!parsedArguments || typeof parsedArguments !== 'object' || Array.isArray(parsedArguments)) parsedArguments = null
+        return {
+          id: String(call?.id || '').trim(),
+          name: String(call?.name || '').trim(),
+          arguments: argumentText || '{}',
+          parsedArguments,
+        }
+      }).filter((call) => call.id && call.name)
+      : []
+    if (role === 'tool') {
+      const toolCallId = String(message?.toolCallId || '').trim()
+      if (!toolCallId || !content.trim()) throw runtimeError('Tool results require a tool call ID and text content.')
+      return { role, content, toolCallId, name: String(message?.name || '').trim() }
+    }
+    if (!content.trim() && !toolCalls.length) throw runtimeError('Messages must contain text content or tool calls.')
+    return {
+      role,
+      content,
+      ...(toolCalls.length ? { toolCalls } : {}),
+      ...(role === 'assistant' && typeof message?.reasoning === 'string' && message.reasoning ? { reasoning: message.reasoning } : {}),
+    }
+  })
+}
+
+function normalizedTools(tools) {
+  if (tools === undefined) return []
+  if (!Array.isArray(tools) || tools.length > 16) throw runtimeError('Tools must be an array containing at most 16 definitions.')
+  const names = new Set()
+  return tools.map((tool) => {
+    const name = String(tool?.name || '').trim()
+    const description = String(tool?.description || '').trim()
+    const parameters = tool?.parameters
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) throw runtimeError('Tool names may contain only letters, numbers, underscores, and hyphens.')
+    if (names.has(name)) throw runtimeError(`Duplicate tool definition: ${name}`)
+    if (!description || !parameters || parameters.type !== 'object') throw runtimeError(`Tool ${name} requires a description and object JSON schema.`)
+    names.add(name)
+    return { name, description, parameters }
+  })
+}
+
+function openAiCompatibleMessages(messages) {
+  return messages.map((message) => {
+    if (message.role === 'tool') return { role: 'tool', tool_call_id: message.toolCallId, content: message.content }
+    if (message.role !== 'assistant' || !message.toolCalls?.length) return { role: message.role, content: message.content }
+    return {
+      role: 'assistant',
+      content: message.content || null,
+      ...(message.reasoning ? { reasoning_content: message.reasoning } : {}),
+      tool_calls: message.toolCalls.map((call) => ({
+        id: call.id,
+        type: 'function',
+        function: { name: call.name, arguments: call.arguments },
+      })),
+    }
+  })
+}
+
+function responsesInput(messages) {
+  return messages.flatMap((message) => {
+    if (message.role === 'tool') return [{ type: 'function_call_output', call_id: message.toolCallId, output: message.content }]
+    if (message.role === 'assistant' && message.toolCalls?.length) {
+      const items = message.content ? [{ role: 'assistant', content: message.content }] : []
+      return [...items, ...message.toolCalls.map((call) => ({ type: 'function_call', call_id: call.id, name: call.name, arguments: call.arguments }))]
+    }
+    return [{ role: message.role, content: message.content }]
   })
 }
 
@@ -70,8 +142,9 @@ function openAiRequest(endpoint, model, messages, options) {
     url: appendProviderRoute(endpoint, 'responses'),
     body: {
       model,
-      input: messages,
+      input: responsesInput(messages),
       stream: true,
+      ...(options.tools?.length ? { tools: options.tools.map((tool) => ({ type: 'function', ...tool })), tool_choice: 'auto' } : {}),
       ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
       ...(options.maxOutputTokens ? { max_output_tokens: options.maxOutputTokens } : {}),
     },
@@ -84,8 +157,9 @@ function compatibleRequest(endpoint, model, messages, options, providerId) {
     url: appendProviderRoute(endpoint, 'chat/completions'),
     body: {
       model,
-      messages,
+      messages: openAiCompatibleMessages(messages),
       stream: true,
+      ...(options.tools?.length ? { tools: options.tools.map((tool) => ({ type: 'function', function: tool })), tool_choice: 'auto' } : {}),
       ...(providerId === 'compatible' ? {} : { stream_options: { include_usage: true } }),
       ...(Number.isFinite(options.temperature) && !thinkingActive ? { temperature: options.temperature } : {}),
       ...(options.maxOutputTokens ? { max_tokens: options.maxOutputTokens } : {}),
@@ -97,7 +171,21 @@ function compatibleRequest(endpoint, model, messages, options, providerId) {
 
 function anthropicRequest(endpoint, model, messages, options, providerId) {
   const system = messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n\n')
-  const conversational = messages.filter((message) => message.role !== 'system')
+  const conversational = messages.filter((message) => message.role !== 'system').map((message) => {
+    if (message.role === 'tool') return {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: message.toolCallId, content: message.content }],
+    }
+    if (message.role === 'assistant' && message.toolCalls?.length) return {
+      role: 'assistant',
+      content: [
+        ...(message.reasoning ? [{ type: 'thinking', thinking: message.reasoning }] : []),
+        ...(message.content ? [{ type: 'text', text: message.content }] : []),
+        ...message.toolCalls.map((call) => ({ type: 'tool_use', id: call.id, name: call.name, input: call.parsedArguments || {} })),
+      ],
+    }
+    return { role: message.role, content: message.content }
+  })
   const thinkingActive = providerId === 'deepseek' && options.thinkingEnabled !== false
   return {
     url: appendProviderRoute(endpoint, 'v1/messages'),
@@ -107,6 +195,7 @@ function anthropicRequest(endpoint, model, messages, options, providerId) {
       max_tokens: options.maxOutputTokens || DEFAULT_MAX_OUTPUT_TOKENS,
       stream: true,
       ...(system ? { system } : {}),
+      ...(options.tools?.length ? { tools: options.tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })), tool_choice: { type: 'auto' } } : {}),
       ...(Number.isFinite(options.temperature) && !thinkingActive ? { temperature: options.temperature } : {}),
       ...(providerId === 'deepseek' && typeof options.thinkingEnabled === 'boolean' ? { thinking: options.thinkingEnabled ? { type: 'enabled', budget_tokens: 1024 } : { type: 'disabled' } } : {}),
       ...(thinkingActive && options.reasoningEffort ? { output_config: { effort: options.reasoningEffort } } : {}),
@@ -140,6 +229,8 @@ export function buildProviderChatRequest({ providerId, endpoint, endpointType, a
   const cleanModel = String(model || '').trim()
   if (!cleanModel) throw runtimeError('Choose a model before starting the request.')
   const cleanMessages = normalizedMessages(messages)
+  const tools = normalizedTools(options.tools)
+  const runtimeOptions = { ...options, tools }
   const protocol = providerId === 'deepseek'
     ? (isDeepSeekEndpointType(endpointType) ? endpointType : DEEPSEEK_ENDPOINT_TYPES.CHAT)
     : provider.protocol
@@ -147,12 +238,12 @@ export function buildProviderChatRequest({ providerId, endpoint, endpointType, a
     throw runtimeError(`${cleanModel} is not available through the selected DeepSeek request interface.`)
   }
   const request = protocol === 'openai-responses'
-    ? openAiRequest(cleanEndpoint, cleanModel, cleanMessages, options)
+    ? openAiRequest(cleanEndpoint, cleanModel, cleanMessages, runtimeOptions)
     : protocol === 'anthropic-messages'
-      ? anthropicRequest(cleanEndpoint, cleanModel, cleanMessages, options, providerId)
+      ? anthropicRequest(cleanEndpoint, cleanModel, cleanMessages, runtimeOptions, providerId)
       : protocol === 'gemini-generate-content'
-        ? geminiRequest(cleanEndpoint, cleanModel, cleanMessages, options)
-        : compatibleRequest(cleanEndpoint, cleanModel, cleanMessages, options, providerId)
+        ? geminiRequest(cleanEndpoint, cleanModel, cleanMessages, runtimeOptions)
+        : compatibleRequest(cleanEndpoint, cleanModel, cleanMessages, runtimeOptions, providerId)
   return { ...request, headers: providerHeaders(providerId, protocol, apiKey), protocol }
 }
 
@@ -196,6 +287,21 @@ function extractProtocolEvents(protocol, event) {
     const type = payload.type || event.event
     if (type === 'response.output_text.delta') return [{ type: 'message.delta', delta: payload.delta || '' }]
     if (type === 'response.reasoning_text.delta' || type === 'response.reasoning_summary_text.delta') return [{ type: 'reasoning.delta', delta: payload.delta || '' }]
+    if (type === 'response.output_item.added' && payload.item?.type === 'function_call') return [{
+      type: 'tool_call.delta',
+      index: payload.output_index ?? 0,
+      id: payload.item.call_id || payload.item.id,
+      name: payload.item.name,
+      arguments: payload.item.arguments || '',
+    }]
+    if (type === 'response.function_call_arguments.delta') return [{ type: 'tool_call.delta', index: payload.output_index ?? 0, argumentsDelta: payload.delta || '' }]
+    if (type === 'response.output_item.done' && payload.item?.type === 'function_call') return [{
+      type: 'tool_call.delta',
+      index: payload.output_index ?? 0,
+      id: payload.item.call_id || payload.item.id,
+      name: payload.item.name,
+      arguments: payload.item.arguments || '',
+    }]
     if (type === 'response.completed') return [{ type: 'usage.updated', usage: payload.response?.usage || null, responseId: payload.response?.id }]
     if (type === 'error' || type === 'response.failed') throw runtimeError(payload.error?.message || payload.response?.error?.message || 'OpenAI response failed.', 502)
     return []
@@ -207,6 +313,13 @@ function extractProtocolEvents(protocol, event) {
     const events = []
     if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) events.push({ type: 'reasoning.delta', delta: delta.reasoning_content })
     if (typeof delta.content === 'string' && delta.content) events.push({ type: 'message.delta', delta: delta.content })
+    for (const call of delta.tool_calls || []) events.push({
+      type: 'tool_call.delta',
+      index: call.index ?? 0,
+      id: call.id,
+      name: call.function?.name,
+      argumentsDelta: call.function?.arguments || '',
+    })
     if (payload.usage) events.push({ type: 'usage.updated', usage: payload.usage, responseId: payload.id })
     return events
   }
@@ -214,6 +327,14 @@ function extractProtocolEvents(protocol, event) {
     const type = payload.type || event.event
     if (type === 'content_block_delta' && payload.delta?.type === 'text_delta') return [{ type: 'message.delta', delta: payload.delta.text || '' }]
     if (type === 'content_block_delta' && payload.delta?.type === 'thinking_delta') return [{ type: 'reasoning.delta', delta: payload.delta.thinking || '' }]
+    if (type === 'content_block_start' && payload.content_block?.type === 'tool_use') return [{
+      type: 'tool_call.delta',
+      index: payload.index ?? 0,
+      id: payload.content_block.id,
+      name: payload.content_block.name,
+      arguments: Object.keys(payload.content_block.input || {}).length ? JSON.stringify(payload.content_block.input) : '',
+    }]
+    if (type === 'content_block_delta' && payload.delta?.type === 'input_json_delta') return [{ type: 'tool_call.delta', index: payload.index ?? 0, argumentsDelta: payload.delta.partial_json || '' }]
     if (type === 'message_start') return [{ type: 'usage.updated', usage: payload.message?.usage || null, responseId: payload.message?.id }]
     if (type === 'message_delta') return [{ type: 'usage.updated', usage: payload.usage || null }]
     if (type === 'error') throw runtimeError(payload.error?.message || 'Anthropic response failed.', 502)
@@ -258,6 +379,7 @@ export async function* streamProviderChat(input, fetchImpl = fetch) {
   let reasoning = ''
   let usage = null
   let responseId = null
+  const toolCallsByIndex = new Map()
   for await (const upstreamEvent of parseServerSentEvents(response.body)) {
     for (const event of extractProtocolEvents(request.protocol, upstreamEvent)) {
       if (event.type === 'message.delta') text += event.delta
@@ -266,8 +388,20 @@ export async function* streamProviderChat(input, fetchImpl = fetch) {
         usage = event.usage || usage
         responseId = event.responseId || responseId
       }
+      if (event.type === 'tool_call.delta') {
+        const current = toolCallsByIndex.get(event.index) || { id: '', name: '', arguments: '' }
+        toolCallsByIndex.set(event.index, {
+          id: event.id || current.id,
+          name: event.name || current.name,
+          arguments: event.arguments !== undefined ? event.arguments : `${current.arguments}${event.argumentsDelta || ''}`,
+        })
+      }
       yield { ...event, runId }
     }
   }
-  yield { type: 'run.completed', runId, providerId: input.providerId, model: input.model, endpointType: request.protocol, responseId, text, reasoning, usage }
+  const toolCalls = [...toolCallsByIndex.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([, call]) => call)
+    .filter((call) => call.id && call.name)
+  yield { type: 'run.completed', runId, providerId: input.providerId, model: input.model, endpointType: request.protocol, responseId, text, reasoning, toolCalls, usage }
 }

@@ -16,7 +16,13 @@ export function estimateTextTokens(value = '') {
 }
 
 export function estimateMessageTokens(message) {
-  return MESSAGE_OVERHEAD_TOKENS + estimateTextTokens(message?.content || '')
+  const structured = [
+    message?.content || '',
+    message?.reasoning || '',
+    ...(message?.toolCalls || []).flatMap((call) => [call.id, call.name, call.arguments]),
+    message?.toolCallId || '',
+  ].join('\n')
+  return MESSAGE_OVERHEAD_TOKENS + estimateTextTokens(structured)
 }
 
 export function composeResearchUserMessage(evidenceContext, question) {
@@ -38,8 +44,23 @@ function completedTurns(history = []) {
     const assistantText = String(message.text || '').trim()
     const question = String(userMessage.text || '').trim()
     if (assistantText && question) {
+      const toolMessages = (message.toolTrace || []).flatMap((round) => [
+        {
+          role: 'assistant',
+          content: round.content || '',
+          reasoning: round.reasoning || '',
+          toolCalls: round.toolCalls || [],
+        },
+        ...(round.results || []).map((result) => ({
+          role: 'tool',
+          toolCallId: result.id,
+          name: result.name,
+          content: result.content,
+        })),
+      ])
       turns.push([
         { role: 'user', content: composeResearchUserMessage(userMessage.evidenceContext, question) },
+        ...toolMessages,
         { role: 'assistant', content: assistantText },
       ])
     }

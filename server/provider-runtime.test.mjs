@@ -8,6 +8,12 @@ const messages = [
   { role: 'user', content: 'Summarize this result.' },
 ]
 
+const vaultTool = {
+  name: 'search_vault',
+  description: 'Search the connected research Vault.',
+  parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false },
+}
+
 function sseResponse(blocks) {
   return new Response(blocks.join('\n\n') + '\n\n', {
     status: 200,
@@ -92,6 +98,78 @@ test('builds all three DeepSeek request profiles with protocol-specific authenti
   assert.equal(anthropic.body.system, 'Use vault evidence.')
   assert.deepEqual(anthropic.body.thinking, { type: 'enabled', budget_tokens: 1024 })
   assert.deepEqual(anthropic.body.output_config, { effort: 'max' })
+})
+
+test('maps protocol-neutral tool definitions, calls, reasoning, and results to all DeepSeek interfaces', () => {
+  const toolMessages = [
+    ...messages,
+    { role: 'assistant', content: '', reasoning: 'Need focused evidence.', toolCalls: [{ id: 'call-1', name: 'search_vault', arguments: '{"query":"CellChat"}' }] },
+    { role: 'tool', toolCallId: 'call-1', name: 'search_vault', content: '{"evidence":[]}' },
+  ]
+  const native = buildProviderChatRequest({
+    providerId: 'deepseek', endpoint: 'https://api.deepseek.com', endpointType: 'openai-chat-completions', apiKey: 'secret', model: 'deepseek-v4-pro', messages: toolMessages,
+    options: { tools: [vaultTool], thinkingEnabled: true },
+  })
+  assert.equal(native.body.tools[0].function.name, 'search_vault')
+  assert.equal(native.body.messages[2].reasoning_content, 'Need focused evidence.')
+  assert.equal(native.body.messages[2].tool_calls[0].function.arguments, '{"query":"CellChat"}')
+  assert.equal(native.body.messages[3].tool_call_id, 'call-1')
+
+  const responses = buildProviderChatRequest({
+    providerId: 'deepseek', endpoint: 'https://api.deepseek.com', endpointType: 'openai-responses', apiKey: 'secret', model: 'deepseek-v4-flash', messages: toolMessages,
+    options: { tools: [vaultTool] },
+  })
+  assert.equal(responses.body.tools[0].name, 'search_vault')
+  assert(responses.body.input.some((item) => item.type === 'function_call' && item.call_id === 'call-1'))
+  assert(responses.body.input.some((item) => item.type === 'function_call_output' && item.call_id === 'call-1'))
+
+  const anthropic = buildProviderChatRequest({
+    providerId: 'deepseek', endpoint: 'https://api.deepseek.com/anthropic', endpointType: 'anthropic-messages', apiKey: 'secret', model: 'deepseek-v4-pro', messages: toolMessages,
+    options: { tools: [vaultTool], thinkingEnabled: true },
+  })
+  assert.equal(anthropic.body.tools[0].input_schema.type, 'object')
+  assert(anthropic.body.messages[1].content.some((block) => block.type === 'thinking' && block.thinking === 'Need focused evidence.'))
+  assert(anthropic.body.messages[1].content.some((block) => block.type === 'tool_use' && block.id === 'call-1'))
+  assert.equal(anthropic.body.messages[2].content[0].tool_use_id, 'call-1')
+})
+
+test('assembles streamed DeepSeek tool call argument fragments', async () => {
+  const events = []
+  for await (const event of streamProviderChat({
+    providerId: 'deepseek', endpoint: 'https://api.deepseek.com', apiKey: 'secret', model: 'deepseek-v4-pro', messages,
+    options: { tools: [vaultTool] },
+  }, async () => sseResponse([
+    'data: {"choices":[{"delta":{"reasoning_content":"Need Vault evidence."}}]}',
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"search_vault","arguments":"{\\"query\\":\\"Cell"}}]}}]}',
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"Chat\\"}"}}]}}]}',
+    'data: [DONE]',
+  ]))) events.push(event)
+  assert.equal(events.filter((event) => event.type === 'tool_call.delta').length, 2)
+  assert.deepEqual(events.at(-1).toolCalls, [{ id: 'call-1', name: 'search_vault', arguments: '{"query":"CellChat"}' }])
+  assert.equal(events.at(-1).reasoning, 'Need Vault evidence.')
+})
+
+test('normalizes Responses and Anthropic streamed function calls', async () => {
+  const responsesEvents = []
+  for await (const event of streamProviderChat({
+    providerId: 'deepseek', endpoint: 'https://api.deepseek.com', endpointType: 'openai-responses', apiKey: 'secret', model: 'deepseek-v4-flash', messages,
+    options: { tools: [vaultTool] },
+  }, async () => sseResponse([
+    'event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call-r","name":"search_vault","arguments":""}}',
+    'event: response.function_call_arguments.delta\ndata: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\\"query\\":\\"GRO-seq\\"}"}',
+    'event: response.output_item.done\ndata: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","call_id":"call-r","name":"search_vault","arguments":"{\\"query\\":\\"GRO-seq\\"}"}}',
+  ]))) responsesEvents.push(event)
+  assert.deepEqual(responsesEvents.at(-1).toolCalls, [{ id: 'call-r', name: 'search_vault', arguments: '{"query":"GRO-seq"}' }])
+
+  const anthropicEvents = []
+  for await (const event of streamProviderChat({
+    providerId: 'deepseek', endpoint: 'https://api.deepseek.com/anthropic', endpointType: 'anthropic-messages', apiKey: 'secret', model: 'deepseek-v4-pro', messages,
+    options: { tools: [vaultTool] },
+  }, async () => sseResponse([
+    'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call-a","name":"search_vault","input":{}}}',
+    'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"query\\":\\"CellChat\\"}"}}',
+  ]))) anthropicEvents.push(event)
+  assert.deepEqual(anthropicEvents.at(-1).toolCalls, [{ id: 'call-a', name: 'search_vault', arguments: '{"query":"CellChat"}' }])
 })
 
 test('rejects unsupported automatic DeepSeek model and interface combinations', () => {

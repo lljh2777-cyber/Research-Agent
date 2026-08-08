@@ -62,3 +62,30 @@ test('normalizes DeepSeek cache usage and compact token labels', () => {
   assert.equal(compactTokenCount(128_000), '128K')
   assert.equal(compactTokenCount(1_000_000), '1.0M')
 })
+
+test('preserves tool-call reasoning and results in later multi-turn context', () => {
+  const context = buildConversationContext({
+    history: [
+      { role: 'user', text: 'Find more evidence', evidenceContext: 'initial evidence' },
+      {
+        role: 'assistant',
+        text: 'Final grounded answer',
+        toolTrace: [{
+          content: '',
+          reasoning: 'Need a focused Vault search.',
+          toolCalls: [{ id: 'call-1', name: 'search_vault', arguments: '{"query":"CellChat"}' }],
+          results: [{ id: 'call-1', name: 'search_vault', content: '{"evidence":["CellChat"]}' }],
+        }],
+      },
+    ],
+    systemMessage: 'rules',
+    evidenceContext: 'next evidence',
+    question: 'Follow up',
+    contextWindowTokens: 10_000,
+    maxOutputTokens: 100,
+  })
+  assert.equal(context.messages[2].reasoning, 'Need a focused Vault search.')
+  assert.equal(context.messages[2].toolCalls[0].id, 'call-1')
+  assert.equal(context.messages[3].role, 'tool')
+  assert.equal(context.messages[4].content, 'Final grounded answer')
+})

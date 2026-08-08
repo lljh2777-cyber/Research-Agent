@@ -46,6 +46,8 @@ import { loadProviderConfigs, loadProviderSessionKeys, providerConfigsToModels, 
 import { getDeepSeekRuntimeOptions } from '../shared/deepseek-provider.mjs'
 import { streamProviderResponse } from './providerRuntimeClient.js'
 import { buildConversationContext, compactTokenCount, providerUsageSummary } from './conversationContext.js'
+import { executeResearchTool, RESEARCH_TOOL_DEFINITIONS } from './researchTools.js'
+import { runProviderAgent } from './providerAgent.js'
 import { executePipeline, loadPipelineRuns, savePipelineRuns } from './pipelineEngine.js'
 import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources, retrieveEvidence } from './retrieval.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
@@ -226,6 +228,8 @@ function AssistantMessage({ message, running, onOpenNote }) {
   const evidence = message.evidence || []
   const sourceCount = new Set(evidence.map((item) => item.noteId)).size
   const reasoning = message.reasoning || ''
+  const toolTrace = message.toolTrace || []
+  const toolCallCount = toolTrace.reduce((total, round) => total + round.results.length, 0)
   return (
     <article className="assistant-message">
       <div className="assistant-avatar"><Sparkles size={17} /></div>
@@ -240,6 +244,10 @@ function AssistantMessage({ message, running, onOpenNote }) {
             {reasoningOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>
           {reasoningOpen && <pre>{reasoning}</pre>}
+        </section>}
+        {toolTrace.length > 0 && <section className="tool-activity" aria-label="Research tool activity">
+          <div><Search size={13} /><strong>Vault tools</strong><small>{toolCallCount} call{toolCallCount === 1 ? '' : 's'}</small></div>
+          {toolTrace.flatMap((round) => round.results).map((result) => <div className={result.isError ? 'error' : ''} key={result.id}><span>{result.isError ? 'Failed' : 'Complete'}</span><strong>{result.name}</strong><p>{result.summary}</p></div>)}
         </section>}
         <p>{message.text}</p>
         <ul>
@@ -1007,10 +1015,11 @@ function App() {
         runMode: 'live',
         activeStage: 3,
         running: true,
-        messages: [...current.messages, { id: assistantId, role: 'assistant', text: '', reasoning: '', bullets: [], closing: '', evidence: packet.evidence }],
+        messages: [...current.messages, { id: assistantId, role: 'assistant', text: '', reasoning: '', toolTrace: [], bullets: [], closing: '', evidence: packet.evidence }],
       }))
       let streamedText = ''
       let streamedReasoning = ''
+      const toolTrace = []
       let renderFrame = 0
       const flushStreamedText = () => {
         renderFrame = 0
@@ -1040,18 +1049,35 @@ function App() {
         if (apiProvider) {
           const providerConfig = providerConfigs[selectedModel.providerId]
           if (!providerConfig) throw new Error(`Provider configuration is missing for ${selectedModel.provider}.`)
-          result = await streamProviderResponse({
-            providerId: selectedModel.providerId,
-            endpoint: selectedModel.endpoint || providerConfig.endpoint,
-            endpointType: selectedModel.endpointType,
-            apiKey: loadProviderSessionKeys()[selectedModel.providerId] || '',
-            model: selectedModel.apiModelId,
+          const tools = selectedModel.capabilities?.tools && retrievalIndex?.chunks?.length ? RESEARCH_TOOL_DEFINITIONS : []
+          const agentOutput = await runProviderAgent({
             messages,
-            options: selectedModel.providerId === 'deepseek' ? { ...getDeepSeekRuntimeOptions(providerConfig), maxOutputTokens: 4_096 } : undefined,
-            signal: controller.signal,
-            onDelta,
-            onReasoningDelta,
+            tools,
+            request: (agentMessages) => streamProviderResponse({
+              providerId: selectedModel.providerId,
+              endpoint: selectedModel.endpoint || providerConfig.endpoint,
+              endpointType: selectedModel.endpointType,
+              apiKey: loadProviderSessionKeys()[selectedModel.providerId] || '',
+              model: selectedModel.apiModelId,
+              messages: agentMessages,
+              tools,
+              options: selectedModel.providerId === 'deepseek' ? { ...getDeepSeekRuntimeOptions(providerConfig), maxOutputTokens: 4_096 } : undefined,
+              signal: controller.signal,
+              onDelta,
+              onReasoningDelta,
+            }),
+            executeTool: (call) => executeResearchTool(call, { retrievalIndex }),
+            onToolRound: (_round, trace) => {
+              toolTrace.splice(0, toolTrace.length, ...trace)
+              streamedText = ''
+              updateResearchSession(sessionId, (current) => ({
+                ...current,
+                activeStage: 3,
+                messages: current.messages.map((message) => message.id === assistantId ? { ...message, text: '', reasoning: streamedReasoning, toolTrace: [...toolTrace] } : message),
+              }))
+            },
           })
+          result = agentOutput.result
         } else {
           let activeCatalog = modelCatalog
           if (selectedModel.id === 'smart-default' && !activeCatalog.defaultModelId) {
@@ -1077,7 +1103,8 @@ function App() {
           messages: current.messages.map((message) => message.id === assistantId ? {
             ...message,
             text: result.text || streamedText || 'The provider returned an empty response.',
-            reasoning: result.reasoning || streamedReasoning,
+            reasoning: streamedReasoning || result.reasoning,
+            toolTrace: [...toolTrace],
             usage: result.usage || null,
             contextPlan: { estimatedInputTokens: contextPlan.estimatedInputTokens, inputBudgetTokens: contextPlan.inputBudgetTokens, retainedTurns: contextPlan.retainedTurns, omittedTurns: contextPlan.omittedTurns },
             closing: `Generated with ${result.model} through ${apiProvider ? selectedModel.provider : 'the connected ChatGPT subscription'} · ${packet.evidence.length} Vault evidence chunk${packet.evidence.length === 1 ? '' : 's'}. ${contextLabel}${omittedLabel}${cacheLabel}.`,
@@ -1092,6 +1119,7 @@ function App() {
             ...message,
             text: streamedText || message.text || (error.name === 'AbortError' ? 'Generation stopped.' : `The connected model could not complete this request: ${error.message}`),
             reasoning: streamedReasoning || message.reasoning,
+            toolTrace: [...toolTrace],
             closing: error.name === 'AbortError' ? 'The partial response was kept.' : `Check the ${apiProvider ? `${selectedModel.provider} API configuration` : 'ChatGPT connection'} and try again.`,
           } : message),
         }))

@@ -150,6 +150,14 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .reasoning-panel > button strong { font-size: 10px; font-weight: 600; }
 .reasoning-panel > button small { color: #607a76; font-family: var(--mono); font-size: 8px; }
 .reasoning-panel pre { max-height: 260px; margin: 0; border-top: 1px solid rgba(126, 226, 195, .12); color: #96aaa7; padding: 10px 12px; font-family: var(--mono); font-size: 9px; line-height: 1.55; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool-activity { margin: -2px 0 12px; border: 1px solid rgba(110, 168, 254, .18); border-radius: 7px; background: rgba(34, 68, 115, .09); overflow: hidden; }
+.tool-activity > div { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 7px; padding: 8px 10px; color: #8ab7f8; }
+.tool-activity > div:first-child { display: flex; border-bottom: 1px solid rgba(110, 168, 254, .12); }
+.tool-activity > div:first-child small { color: #60789a; font-family: var(--mono); font-size: 8px; }
+.tool-activity > div > span { border: 1px solid rgba(126, 226, 195, .2); border-radius: 999px; color: var(--mint); padding: 2px 5px; font-family: var(--mono); font-size: 7px; text-transform: uppercase; }
+.tool-activity > div.error > span { border-color: rgba(245, 130, 157, .25); color: #f5829d; }
+.tool-activity > div > strong { color: #bed4f4; font-family: var(--mono); font-size: 9px; }
+.tool-activity > div > p { margin: 0; color: #7f93ae; font-size: 10px; line-height: 1.4; }
 .answer-evidence { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 14px; }
 .answer-evidence button { display: inline-flex; align-items: center; gap: 5px; max-width: 230px; border: 1px solid rgba(110, 168, 254, .25); border-radius: 999px; background: rgba(41, 79, 137, .12); color: #adc8ef; padding: 5px 9px; font-size: 10px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .answer-evidence button:hover { border-color: rgba(110, 168, 254, .55); background: rgba(41, 79, 137, .24); color: #dceaff; }
