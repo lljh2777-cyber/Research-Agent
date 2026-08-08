@@ -1054,7 +1054,7 @@ function App() {
           activeCatalog = await refreshChatgptModels(false) || activeCatalog
         }
         const result = await streamChatgptResponse({
-          model: selectedModel.id === 'smart-default' ? activeCatalog.defaultModelId || 'gpt-5.4' : selectedModel.id,
+          model: selectedModel.id === 'smart-default' ? activeCatalog.defaultModelId : selectedModel.id,
           messages: [
             { role: 'system', content: buildEvidenceSystemMessage(packet, { citations: modelConfig.citations }) },
             ...history,

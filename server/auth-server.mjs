@@ -1,173 +1,63 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
-import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { CodexAppServer, CodexRpcError } from './codex-app-server.mjs'
+
 const DEFAULT_HOST = '127.0.0.1'
 const DEFAULT_PORT = 4318
-const OAUTH_PORT = 1455
-const OAUTH_HOST = 'localhost'
-const ISSUER = 'https://auth.openai.com'
-const CODEX_API_BASE = 'https://chatgpt.com/backend-api/codex'
-const CODEX_API_ENDPOINT = `${CODEX_API_BASE}/responses`
-const CODEX_MODELS_ENDPOINT = `${CODEX_API_BASE}/models`
-const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
-const CLIENT_VERSION = process.env.BIORESEARCH_CLIENT_VERSION || '0.1.0'
 const OAUTH_TIMEOUT_MS = 5 * 60 * 1000
-const REFRESH_SAFETY_WINDOW_MS = 60 * 1000
 const MODEL_CACHE_TTL_MS = 6 * 60 * 60 * 1000
 const MAX_BODY_BYTES = 1024 * 1024
-const TRANSIENT_AUTH_STATUSES = new Set([408, 425, 429])
 const MODEL_ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{1,127}$/
-const FALLBACK_CHATGPT_MODELS = [
-  { id: 'gpt-5.4', name: 'GPT-5.4', description: 'Compatibility fallback for the ChatGPT Codex route.', reasoningLevels: [] },
-  { id: 'gpt-5.4-mini', name: 'GPT-5.4 mini', description: 'Faster compatibility fallback for the ChatGPT Codex route.', reasoningLevels: [] },
-]
 const SYSTEM_INSTRUCTIONS = 'You are BioResearch OS, a careful scientific research assistant. Distinguish evidence from inference, preserve source context, and say when evidence is missing.'
 
-const authFile = process.env.BIORESEARCH_AUTH_FILE || join(
+const dataDirectory = process.env.BIORESEARCH_DATA_DIR || join(
   process.env.LOCALAPPDATA || process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'),
   'bioresearch-os',
-  'auth.json',
 )
-const modelsFile = process.env.BIORESEARCH_MODELS_FILE || join(dirname(authFile), 'models.json')
+const legacyAuthFile = process.env.BIORESEARCH_AUTH_FILE || join(dataDirectory, 'auth.json')
+const modelsFile = process.env.BIORESEARCH_MODELS_FILE || join(dataDirectory, 'models.json')
+const codex = new CodexAppServer()
 
-let oauthServer
-let pendingOAuth
-let refreshPromise
+let pendingLogin
+let lastLoginError
 let modelDiscoveryPromise
 
-function stopOAuthServer() {
-  const current = oauthServer
-  oauthServer = undefined
-  current?.close(() => {})
-}
-
-function randomUrlSafe(bytes = 32) {
-  return randomBytes(bytes).toString('base64url')
-}
-
-async function generatePkce() {
-  const verifier = randomUrlSafe(32)
-  const digest = createHash('sha256').update(verifier).digest('base64url')
-  return { verifier, challenge: digest }
-}
-
-function parseJwtClaims(token) {
-  const parts = token.split('.')
-  if (parts.length !== 3) return undefined
-  try {
-    return JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'))
-  } catch {
-    return undefined
+codex.on('notification', ({ method, params }) => {
+  if (method === 'account/login/completed' && pendingLogin?.loginId === params?.loginId) {
+    lastLoginError = params.success ? null : (params.error || 'ChatGPT login failed')
+    pendingLogin = undefined
+    if (params.success) void removeModelCache()
   }
-}
+  if (method === 'account/updated') void removeModelCache()
+})
 
-function extractAccountId(tokens) {
-  const claims = parseJwtClaims(tokens.id_token || '') || parseJwtClaims(tokens.access_token || '')
-  return claims?.chatgpt_account_id
-    || claims?.['https://api.openai.com/auth']?.chatgpt_account_id
-    || claims?.organizations?.[0]?.id
-}
-
-function buildAuthorizeUrl(redirectUri, pkce, state) {
-  const params = new URLSearchParams({
-    response_type: 'code',
-    client_id: CLIENT_ID,
-    redirect_uri: redirectUri,
-    scope: 'openid profile email offline_access',
-    code_challenge: pkce.challenge,
-    code_challenge_method: 'S256',
-    id_token_add_organizations: 'true',
-    codex_cli_simplified_flow: 'true',
-    state,
-    originator: 'bioresearch-os',
-  })
-  return `${ISSUER}/oauth/authorize?${params.toString()}`
-}
-
-async function exchangeCode(code, redirectUri, verifier) {
-  const response = await fetch(`${ISSUER}/oauth/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: redirectUri,
-      client_id: CLIENT_ID,
-      code_verifier: verifier,
-    }).toString(),
-  })
-  if (!response.ok) throw new ProviderHttpError(`Token exchange failed (${response.status})`, response.status)
-  return response.json()
-}
-
-async function refreshAccessToken(refreshToken) {
-  const response = await fetch(`${ISSUER}/oauth/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-      client_id: CLIENT_ID,
-    }).toString(),
-  })
-  if (!response.ok) throw new ProviderHttpError(`Token refresh failed (${response.status})`, response.status)
-  return response.json()
-}
-
-async function readAuth() {
-  try {
-    const data = JSON.parse(await readFile(authFile, 'utf8'))
-    // Read the original `openai` key as a one-time compatibility path.
-    const auth = data?.chatgpt || data?.openai
-    if (auth?.type !== 'oauth' || typeof auth.refresh !== 'string') return {}
-    return auth
-  } catch {
-    // Treat a missing or damaged credential file as logged out so the app can recover.
-    return {}
-  }
-}
-
-async function writeAuth(auth) {
-  await mkdir(dirname(authFile), { recursive: true })
-  const temporaryFile = `${authFile}.${process.pid}.${randomUrlSafe(8)}.tmp`
-  await writeFile(temporaryFile, JSON.stringify({ version: 1, chatgpt: auth }, null, 2), { encoding: 'utf8', mode: 0o600 })
-  try {
-    await rename(temporaryFile, authFile)
-  } catch (error) {
-    if (!['EEXIST', 'EPERM'].includes(error.code)) throw error
-    await unlink(authFile).catch(() => {})
-    await rename(temporaryFile, authFile)
-  }
-  await chmod(authFile, 0o600).catch(() => {})
-}
-
-async function removeAuth() {
-  await unlink(authFile).catch(() => {})
+async function removeLegacyAuth() {
+  await unlink(legacyAuthFile).catch(() => {})
 }
 
 async function removeModelCache() {
   await unlink(modelsFile).catch(() => {})
 }
 
-async function readModelCache(accountId) {
+async function readModelCache() {
   try {
     const payload = JSON.parse(await readFile(modelsFile, 'utf8'))
-    if (payload?.version !== 1 || !Array.isArray(payload.models) || !payload.models.length) return null
-    if (accountId && payload.accountId && accountId !== payload.accountId) return null
+    if (payload?.version !== 2 || !Array.isArray(payload.models) || !payload.models.length) return null
     return payload
   } catch {
     return null
   }
 }
 
-async function writeModelCache(catalog, accountId) {
+async function writeModelCache(catalog) {
   await mkdir(dirname(modelsFile), { recursive: true })
-  const temporaryFile = `${modelsFile}.${process.pid}.${randomUrlSafe(8)}.tmp`
-  const payload = { version: 1, provider: 'chatgpt', accountId: accountId || null, ...catalog }
+  const temporaryFile = `${modelsFile}.${process.pid}.${randomUUID()}.tmp`
+  const payload = { version: 2, provider: 'chatgpt', ...catalog }
   await writeFile(temporaryFile, JSON.stringify(payload, null, 2), { encoding: 'utf8', mode: 0o600 })
   try {
     await rename(temporaryFile, modelsFile)
@@ -179,42 +69,28 @@ async function writeModelCache(catalog, accountId) {
   await chmod(modelsFile, 0o600).catch(() => {})
 }
 
-async function getFreshAuth(forceRefresh = false) {
-  const auth = await readAuth()
-  if (!auth.refresh) throw new Error('ChatGPT account is not connected')
-  if (!forceRefresh && auth.access && Number(auth.expires) > Date.now() + REFRESH_SAFETY_WINDOW_MS) return auth
-
-  if (!refreshPromise) {
-    refreshPromise = refreshAccessToken(auth.refresh)
-      .then(async (tokens) => {
-        const nextAuth = {
-          type: 'oauth',
-          refresh: tokens.refresh_token || auth.refresh,
-          access: tokens.access_token,
-          expires: Date.now() + (tokens.expires_in || 3600) * 1000,
-          accountId: extractAccountId(tokens) || auth.accountId,
-        }
-        await writeAuth(nextAuth)
-        return nextAuth
-      })
-      .catch(async (error) => {
-        if (error instanceof ProviderHttpError && error.status >= 400 && error.status < 500 && !TRANSIENT_AUTH_STATUSES.has(error.status)) {
-          await removeAuth()
-        }
-        throw error
-      })
-      .finally(() => { refreshPromise = undefined })
-  }
-  return refreshPromise
-}
-
-function authStatus(auth = {}) {
+export function normalizeCodexAccount(result = {}) {
+  const account = result.account
+  const connected = account?.type === 'chatgpt'
   return {
     provider: 'chatgpt',
-    connected: Boolean(auth.refresh),
-    type: auth.refresh ? 'oauth' : null,
-    expiresAt: auth.expires || null,
-    pending: Boolean(pendingOAuth),
+    connected,
+    type: connected ? 'oauth' : null,
+    email: connected ? account.email || null : null,
+    planType: connected ? account.planType || null : null,
+    requiresOpenaiAuth: result.requiresOpenaiAuth !== false,
+  }
+}
+
+async function readAuthStatus({ refreshToken = false } = {}) {
+  const result = await codex.request('account/read', { refreshToken })
+  return {
+    ...normalizeCodexAccount(result),
+    pending: Boolean(pendingLogin),
+    loginAttemptId: pendingLogin?.loginId || null,
+    loginState: pendingLogin ? 'pending' : lastLoginError ? 'failed' : 'idle',
+    loginError: lastLoginError || null,
+    credentialOwner: 'codex',
   }
 }
 
@@ -225,39 +101,58 @@ function fallbackModelCatalog({ connected = false, warning = '' } = {}) {
     source: 'fallback',
     stale: true,
     fetchedAt: null,
-    defaultModelId: FALLBACK_CHATGPT_MODELS[0].id,
-    models: FALLBACK_CHATGPT_MODELS,
+    defaultModelId: null,
+    models: [],
     ...(warning ? { warning } : {}),
   }
 }
 
 function reasoningLevelId(level) {
   if (typeof level === 'string') return level
+  if (level && typeof level.reasoningEffort === 'string') return level.reasoningEffort
   if (level && typeof level.effort === 'string') return level.effort
   if (level && typeof level.id === 'string') return level.id
   return null
 }
 
+async function fetchCodexModelCatalog() {
+  const data = []
+  let cursor = null
+  for (let page = 0; page < 20; page += 1) {
+    const result = await codex.request('model/list', { includeHidden: false, limit: 100, ...(cursor ? { cursor } : {}) }, 15_000)
+    data.push(...(result?.data || []))
+    cursor = result?.nextCursor || null
+    if (!cursor) break
+  }
+  return { data }
+}
+
 export function normalizeCodexModels(payload) {
   const models = []
   const seen = new Set()
-  for (const entry of payload?.models || []) {
-    const id = typeof entry?.slug === 'string' ? entry.slug.trim().toLowerCase() : ''
-    if (!MODEL_ID_PATTERN.test(id) || seen.has(id) || (entry.visibility && entry.visibility !== 'list')) continue
+  for (const entry of payload?.data || payload?.models || []) {
+    const rawId = entry?.id || entry?.model || entry?.slug
+    const id = typeof rawId === 'string' ? rawId.trim().toLowerCase() : ''
+    if (!MODEL_ID_PATTERN.test(id) || seen.has(id) || entry.hidden === true || (entry.visibility && entry.visibility !== 'list')) continue
     seen.add(id)
     models.push({
       id,
-      name: typeof entry.display_name === 'string' && entry.display_name.trim() ? entry.display_name.trim() : id,
+      name: (typeof entry.displayName === 'string' && entry.displayName.trim())
+        || (typeof entry.display_name === 'string' && entry.display_name.trim())
+        || id,
       description: typeof entry.description === 'string' ? entry.description : '',
-      reasoningLevels: (entry.supported_reasoning_levels || []).map(reasoningLevelId).filter(Boolean),
-      defaultReasoningLevel: reasoningLevelId(entry.default_reasoning_level),
+      reasoningLevels: (entry.supportedReasoningEfforts || entry.supported_reasoning_levels || []).map(reasoningLevelId).filter(Boolean),
+      defaultReasoningLevel: reasoningLevelId(entry.defaultReasoningEffort || entry.default_reasoning_level),
       priority: Number.isFinite(entry.priority) ? entry.priority : models.length,
     })
   }
   if (!models.length) throw new Error('ChatGPT returned an empty model catalog')
   return {
     fetchedAt: new Date().toISOString(),
-    defaultModelId: models[0].id,
+    defaultModelId: models.find((model) => {
+      const source = (payload?.data || payload?.models || []).find((entry) => (entry.id || entry.model || entry.slug)?.toLowerCase() === model.id)
+      return source?.isDefault === true
+    })?.id || models[0].id,
     models,
   }
 }
@@ -272,14 +167,6 @@ function publicCachedCatalog(cache, { source = 'cache', stale = false, warning =
     defaultModelId: cache.defaultModelId || cache.models[0]?.id || null,
     models: cache.models,
     ...(warning ? { warning } : {}),
-  }
-}
-
-class ProviderHttpError extends Error {
-  constructor(message, status) {
-    super(message)
-    this.name = 'ProviderHttpError'
-    this.status = status
   }
 }
 
@@ -298,6 +185,15 @@ function setCorsHeaders(request, response) {
   response.setHeader('Vary', 'Origin')
   response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
   response.setHeader('Access-Control-Allow-Headers', 'Accept, Content-Type')
+  response.setHeader('X-Content-Type-Options', 'nosniff')
+  response.setHeader('Referrer-Policy', 'no-referrer')
+}
+
+export function isTrustedLoopbackRequest(request) {
+  const host = request.headers.host || ''
+  const hostname = host.startsWith('[') ? host.slice(1, host.indexOf(']')) : host.split(':')[0]
+  if (!['127.0.0.1', 'localhost', '::1'].includes(hostname)) return false
+  return !request.headers.origin || Boolean(allowedOrigin(request.headers.origin))
 }
 
 function sendJson(request, response, status, payload) {
@@ -309,11 +205,6 @@ function sendJson(request, response, status, payload) {
     'Cache-Control': 'no-store',
   })
   response.end(body)
-}
-
-function sendHtml(response, status, html) {
-  response.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' })
-  response.end(html)
 }
 
 function readJson(request) {
@@ -342,97 +233,27 @@ function readJson(request) {
 }
 
 async function startOAuth() {
-  if (pendingOAuth) return pendingOAuth.authorizationUrl
-  const pkce = await generatePkce()
-  const state = randomUrlSafe()
-  const redirectUri = `http://localhost:${OAUTH_PORT}/auth/callback`
-  const authorizationUrl = buildAuthorizeUrl(redirectUri, pkce, state)
-  const resultPromise = new Promise((resolveResult, rejectResult) => {
-    const timeout = setTimeout(() => {
-      if (pendingOAuth?.state === state) {
-        pendingOAuth = undefined
-        stopOAuthServer()
-      }
-      rejectResult(new Error('OAuth callback timed out'))
-    }, OAUTH_TIMEOUT_MS)
-    pendingOAuth = {
-      authorizationUrl,
-      state,
-      verifier: pkce.verifier,
-      resolve: (value) => { clearTimeout(timeout); resolveResult(value) },
-      reject: (error) => { clearTimeout(timeout); rejectResult(error) },
-    }
-  })
+  if (pendingLogin) return pendingLogin
+  lastLoginError = null
+  const result = await codex.request('account/login/start', {
+    type: 'chatgpt',
+    useHostedLoginSuccessPage: true,
+    appBrand: 'chatgpt',
+  }, OAUTH_TIMEOUT_MS)
+  if (result?.type !== 'chatgpt' || !result.loginId || !result.authUrl) {
+    throw new Error('Codex did not return a ChatGPT authorization URL')
+  }
+  pendingLogin = { loginId: result.loginId, authorizationUrl: result.authUrl }
+  return pendingLogin
+}
 
-  oauthServer = createServer(async (request, response) => {
-    const url = new URL(request.url || '/', `http://localhost:${OAUTH_PORT}`)
-    if (url.pathname === '/cancel') {
-      pendingOAuth?.reject(new Error('Login cancelled'))
-      pendingOAuth = undefined
-      sendHtml(response, 200, '<h1>Login cancelled</h1><p>You can close this window.</p>')
-      stopOAuthServer()
-      return
-    }
-    if (url.pathname !== '/auth/callback') {
-      sendHtml(response, 404, '<h1>Not found</h1>')
-      return
-    }
-    const current = pendingOAuth
-    if (!current || url.searchParams.get('state') !== current.state) {
-      sendHtml(response, 400, '<h1>Invalid OAuth state</h1><p>Please restart the connection flow.</p>')
-      return
-    }
-    const error = url.searchParams.get('error')
-    if (error) {
-      current.reject(new Error('OAuth authorization was declined'))
-      pendingOAuth = undefined
-      sendHtml(response, 400, '<h1>Authorization declined</h1><p>You can close this window.</p>')
-      stopOAuthServer()
-      return
-    }
-    const code = url.searchParams.get('code')
-    if (!code) {
-      current.reject(new Error('OAuth authorization code missing'))
-      pendingOAuth = undefined
-      sendHtml(response, 400, '<h1>Authorization failed</h1><p>The authorization code was missing.</p>')
-      stopOAuthServer()
-      return
-    }
-    try {
-      const tokens = await exchangeCode(code, redirectUri, current.verifier)
-      const auth = {
-        type: 'oauth',
-        refresh: tokens.refresh_token,
-        access: tokens.access_token,
-        expires: Date.now() + (tokens.expires_in || 3600) * 1000,
-        accountId: extractAccountId(tokens),
-      }
-      await writeAuth(auth)
-      await removeModelCache()
-      current.resolve(authStatus(auth))
-      pendingOAuth = undefined
-      sendHtml(response, 200, '<h1>Connected to ChatGPT</h1><p>You can close this window and return to BioResearch OS.</p>')
-    } catch (callbackError) {
-      current.reject(callbackError)
-      pendingOAuth = undefined
-      sendHtml(response, 502, '<h1>Connection failed</h1><p>Please close this window and try again.</p>')
-    } finally {
-      stopOAuthServer()
-    }
-  })
-
-  await new Promise((resolveListen, rejectListen) => {
-    oauthServer.once('error', rejectListen)
-    oauthServer.listen(OAUTH_PORT, OAUTH_HOST, resolveListen)
-  }).catch((error) => {
-    pendingOAuth?.reject(error)
-    pendingOAuth = undefined
-    stopOAuthServer()
-    throw new Error(`OAuth callback server could not start on port ${OAUTH_PORT}`)
-  })
-
-  void resultPromise.catch(() => {})
-  return authorizationUrl
+async function cancelOAuth() {
+  if (!pendingLogin) return readAuthStatus()
+  const { loginId } = pendingLogin
+  await codex.request('account/login/cancel', { loginId })
+  pendingLogin = undefined
+  lastLoginError = 'Login cancelled'
+  return readAuthStatus()
 }
 
 function normalizeMessages(messages) {
@@ -445,53 +266,11 @@ function normalizeMessages(messages) {
   }).filter((message) => message.content)
 }
 
-export function coerceCodexRequestBody({ model, messages }) {
-  const systemMessages = messages.filter((message) => message.role === 'system').map((message) => message.content)
-  const input = messages.filter((message) => message.role !== 'system')
-  return {
-    model,
-    instructions: [SYSTEM_INSTRUCTIONS, ...systemMessages].join('\n\n'),
-    store: false,
-    stream: true,
-    include: ['reasoning.encrypted_content'],
-    input,
-  }
-}
-
-function buildCodexAuthHeaders(auth) {
-  return {
-    Authorization: `Bearer ${auth.access}`,
-    ...(auth.accountId ? { 'ChatGPT-Account-Id': auth.accountId } : {}),
-    originator: 'bioresearch-os',
-    'User-Agent': 'BioResearch-OS/0.1',
-  }
-}
-
-function buildCodexHeaders(auth) {
-  return {
-    ...buildCodexAuthHeaders(auth),
-    'Content-Type': 'application/json',
-    Accept: 'text/event-stream',
-    'OpenAI-Beta': 'responses=experimental',
-    'session-id': randomUUID(),
-  }
-}
-
-async function fetchRemoteModelCatalog(auth, signal) {
-  const url = new URL(CODEX_MODELS_ENDPOINT)
-  url.searchParams.set('client_version', CLIENT_VERSION)
-  return fetch(url, {
-    method: 'GET',
-    headers: { ...buildCodexAuthHeaders(auth), Accept: 'application/json' },
-    signal,
-  })
-}
-
 async function discoverChatgptModels({ force = false } = {}) {
-  const storedAuth = await readAuth()
-  if (!storedAuth.refresh) return fallbackModelCatalog({ warning: 'Connect ChatGPT to discover models available to this account.' })
+  const status = await readAuthStatus()
+  if (!status.connected) return fallbackModelCatalog({ warning: 'Connect ChatGPT to discover models available to this account.' })
 
-  const cached = await readModelCache(storedAuth.accountId)
+  const cached = await readModelCache()
   const fetchedAt = cached?.fetchedAt ? Date.parse(cached.fetchedAt) : 0
   if (!force && cached && Number.isFinite(fetchedAt) && Date.now() - fetchedAt < MODEL_CACHE_TTL_MS) {
     return publicCachedCatalog(cached)
@@ -499,32 +278,18 @@ async function discoverChatgptModels({ force = false } = {}) {
 
   if (!modelDiscoveryPromise) {
     modelDiscoveryPromise = (async () => {
-      const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 5000)
       try {
-        let auth = await getFreshAuth()
-        let response = await fetchRemoteModelCatalog(auth, controller.signal)
-        if (response.status === 401) {
-          await response.body?.cancel().catch(() => {})
-          auth = await getFreshAuth(true)
-          response = await fetchRemoteModelCatalog(auth, controller.signal)
-        }
-        if (!response.ok) throw await providerError(response)
-        const catalog = normalizeCodexModels(await response.json())
-        await writeModelCache(catalog, auth.accountId)
-        return publicCachedCatalog(catalog, { source: 'remote' })
+        const catalog = normalizeCodexModels(await fetchCodexModelCatalog())
+        await writeModelCache(catalog)
+        return publicCachedCatalog(catalog, { source: 'codex-app-server' })
       } catch (error) {
-        const latestAuth = await readAuth()
-        if (!latestAuth.refresh) {
+        const latestStatus = await readAuthStatus().catch(() => ({ connected: false }))
+        if (!latestStatus.connected) {
           return fallbackModelCatalog({ warning: 'The ChatGPT session expired. Reconnect to discover available models.' })
         }
-        const warning = error?.name === 'AbortError'
-          ? 'ChatGPT model discovery timed out; using the last known catalog.'
-          : `ChatGPT model discovery failed; using the last known catalog. ${error.message || ''}`.trim()
+        const warning = `ChatGPT model discovery failed; using the last known catalog. ${error.message || ''}`.trim()
         if (cached) return publicCachedCatalog(cached, { stale: true, warning })
         return fallbackModelCatalog({ connected: true, warning })
-      } finally {
-        clearTimeout(timeout)
       }
     })().finally(() => { modelDiscoveryPromise = undefined })
   }
@@ -539,76 +304,9 @@ async function normalizeModel(model) {
   return requested
 }
 
-async function codexFetch(auth, body, signal) {
-  return fetch(CODEX_API_ENDPOINT, {
-    method: 'POST',
-    headers: buildCodexHeaders(auth),
-    body: JSON.stringify(body),
-    signal,
-  })
-}
-
-export function extractResponseText(payload) {
-  if (typeof payload.output_text === 'string') return payload.output_text
-  const parts = []
-  for (const item of payload.output || []) {
-    for (const content of item.content || []) {
-      if (typeof content.text === 'string') parts.push(content.text)
-    }
-  }
-  return parts.join('\n').trim()
-}
-
-export function parseSseBlock(block) {
-  const data = block
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith('data:'))
-    .map((line) => line.slice(5).trimStart())
-    .join('\n')
-  if (!data || data === '[DONE]') return null
-  try {
-    return JSON.parse(data)
-  } catch {
-    return null
-  }
-}
-
-async function* readSseEvents(body) {
-  const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  while (true) {
-    const { value, done } = await reader.read()
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
-    const blocks = buffer.split(/\r?\n\r?\n/)
-    buffer = blocks.pop() || ''
-    for (const block of blocks) {
-      const event = parseSseBlock(block)
-      if (event) yield event
-    }
-    if (done) break
-  }
-  const finalEvent = parseSseBlock(buffer)
-  if (finalEvent) yield finalEvent
-}
-
-async function providerError(response) {
-  const payload = await response.json().catch(() => ({}))
-  return new ProviderHttpError(payload?.error?.message || payload?.detail || `ChatGPT request failed (${response.status})`, response.status)
-}
-
-async function openCodexStream(model, messages, signal) {
-  const body = coerceCodexRequestBody({ model, messages })
-  let auth = await getFreshAuth()
-  let response = await codexFetch(auth, body, signal)
-  if (response.status === 401) {
-    await response.body?.cancel().catch(() => {})
-    auth = await getFreshAuth(true)
-    response = await codexFetch(auth, body, signal)
-  }
-  if (!response.ok) throw await providerError(response)
-  if (!response.body) throw new Error('ChatGPT returned an empty stream')
-  return response.body
+export function buildResearchPrompt(messages) {
+  const transcript = messages.map((message) => `${message.role.toUpperCase()}:\n${message.content}`).join('\n\n')
+  return `${SYSTEM_INSTRUCTIONS}\nDo not use tools, browse, or read local files. Answer only from the conversation and evidence below.\n\n${transcript}`
 }
 
 function openEventStream(request, response) {
@@ -628,47 +326,79 @@ function writeEvent(response, event, payload) {
 }
 
 async function streamChat(request, response, model, messages) {
-  const abortController = new AbortController()
-  response.on('close', () => {
-    if (!response.writableEnded) abortController.abort()
+  const account = await readAuthStatus()
+  if (!account.connected) throw new Error('ChatGPT account is not connected')
+  const threadResult = await codex.request('thread/start', {
+    model,
+    ephemeral: true,
+    approvalPolicy: 'never',
+    sandbox: 'readOnly',
+    personality: 'none',
+    serviceName: 'research_agent',
   })
-  // Keep authentication and upstream HTTP errors as normal JSON status codes.
-  // Switch to SSE only after the provider has accepted the request.
-  const body = await openCodexStream(model, messages, abortController.signal)
+  const threadId = threadResult?.thread?.id
+  if (!threadId) throw new Error('Codex did not create a response thread')
+
   openEventStream(request, response)
   writeEvent(response, 'start', { model })
   let text = ''
-  let completed = false
-  try {
-    for await (const event of readSseEvents(body)) {
-      if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
-        text += event.delta
-        writeEvent(response, 'delta', { delta: event.delta })
-      } else if (event.type === 'response.completed') {
-        const finalText = text || extractResponseText(event.response || {})
-        writeEvent(response, 'completed', {
-          text: finalText,
-          model: event.response?.model || model,
-          responseId: event.response?.id || null,
-          usage: event.response?.usage || null,
-        })
-        completed = true
-      } else if (event.type === 'response.failed' || event.type === 'error') {
-        throw new Error(event.response?.error?.message || event.error?.message || event.message || 'ChatGPT stream failed')
+  let turnId
+  let settled = false
+  let cleanupNotifications = () => {}
+
+  const terminal = new Promise((resolveTurn, rejectTurn) => {
+    const onNotification = ({ method, params }) => {
+      if (params?.threadId !== threadId && params?.thread?.threadId !== threadId) return
+      if (turnId && params?.turnId && params.turnId !== turnId && params?.turn?.id !== turnId) return
+      if (method === 'item/agentMessage/delta' && typeof params?.delta === 'string') {
+        text += params.delta
+        writeEvent(response, 'delta', { delta: params.delta })
+      } else if (method === 'turn/completed') {
+        cleanupNotifications()
+        const turn = params?.turn || {}
+        if (turn.status === 'failed') rejectTurn(new Error(turn.error?.message || 'ChatGPT response failed'))
+        else resolveTurn(turn)
+      } else if (method === 'error') {
+        cleanupNotifications()
+        rejectTurn(new Error(params?.error?.message || 'ChatGPT response failed'))
       }
     }
-    if (!completed) {
-      if (!text) throw new Error('ChatGPT stream ended without a response')
-      writeEvent(response, 'completed', { text, model, responseId: null, usage: null })
-    }
+    cleanupNotifications = () => codex.off('notification', onNotification)
+    codex.on('notification', onNotification)
+  })
+
+  const interrupt = () => {
+    if (turnId && !settled) void codex.request('turn/interrupt', { threadId, turnId }).catch(() => {})
+  }
+  response.once('close', interrupt)
+
+  try {
+    const started = await codex.request('turn/start', {
+      threadId,
+      clientUserMessageId: randomUUID(),
+      input: [{ type: 'text', text: buildResearchPrompt(messages) }],
+    })
+    turnId = started?.turn?.id
+    const turn = await terminal
+    const finalMessage = turn.items?.findLast?.((item) => item.type === 'agentMessage')?.text || text
+    if (!finalMessage) throw new Error('ChatGPT stream ended without a response')
+    if (!text && finalMessage) writeEvent(response, 'delta', { delta: finalMessage })
+    writeEvent(response, 'completed', { text: finalMessage, model, responseId: turn.id || turnId || null, usage: null })
   } catch (error) {
-    if (!abortController.signal.aborted) writeEvent(response, 'error', { error: error.message || 'ChatGPT request failed' })
+    if (!response.destroyed) writeEvent(response, 'error', { error: error.message || 'ChatGPT request failed' })
   } finally {
+    settled = true
+    cleanupNotifications()
+    response.off('close', interrupt)
     response.end()
   }
 }
 
 const server = createServer(async (request, response) => {
+  if (!isTrustedLoopbackRequest(request)) {
+    sendJson(request, response, 403, { error: 'Untrusted request origin' })
+    return
+  }
   if (request.method === 'OPTIONS') {
     setCorsHeaders(request, response)
     response.writeHead(204)
@@ -678,11 +408,11 @@ const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url || '/', `http://${DEFAULT_HOST}`)
     if (request.method === 'GET' && url.pathname === '/api/health') {
-      sendJson(request, response, 200, { ok: true, service: 'bioresearch-auth', storage: 'local' })
+      sendJson(request, response, 200, { ok: true, service: 'bioresearch-auth', credentialOwner: 'codex-app-server' })
       return
     }
     if (request.method === 'GET' && url.pathname === '/api/auth/status') {
-      sendJson(request, response, 200, authStatus(await readAuth()))
+      sendJson(request, response, 200, await readAuthStatus())
       return
     }
     if (request.method === 'GET' && url.pathname === '/api/chatgpt/models') {
@@ -691,14 +421,26 @@ const server = createServer(async (request, response) => {
       return
     }
     if (request.method === 'POST' && url.pathname === '/api/auth/chatgpt/start') {
-      const authorizationUrl = await startOAuth()
-      sendJson(request, response, 200, { ok: true, provider: 'chatgpt', url: authorizationUrl, pending: true })
+      const login = await startOAuth()
+      sendJson(request, response, 200, {
+        ok: true,
+        provider: 'chatgpt',
+        url: login.authorizationUrl,
+        loginAttemptId: login.loginId,
+        pending: true,
+      })
+      return
+    }
+    if (request.method === 'POST' && url.pathname === '/api/auth/chatgpt/cancel') {
+      sendJson(request, response, 200, await cancelOAuth())
       return
     }
     if (request.method === 'POST' && url.pathname === '/api/auth/chatgpt/logout') {
-      await removeAuth()
+      if (pendingLogin) await cancelOAuth().catch(() => {})
+      await codex.request('account/logout')
       await removeModelCache()
-      sendJson(request, response, 200, authStatus())
+      lastLoginError = null
+      sendJson(request, response, 200, await readAuthStatus())
       return
     }
     if (request.method === 'POST' && url.pathname === '/api/chatgpt/responses/stream') {
@@ -710,8 +452,8 @@ const server = createServer(async (request, response) => {
     }
     sendJson(request, response, 404, { error: 'Not found' })
   } catch (error) {
-    const status = error instanceof ProviderHttpError
-      ? error.status === 401 || error.status === 429 ? error.status : 502
+    const status = error instanceof CodexRpcError && /unauthorized|login|required/i.test(error.message)
+      ? 401
       : error.message.includes('not connected')
         ? 401
         : error.message.includes('too large')
@@ -726,12 +468,14 @@ const server = createServer(async (request, response) => {
 export function startAuthServer() {
   const port = Number(process.env.BIORESEARCH_AUTH_PORT || DEFAULT_PORT)
   server.listen(port, DEFAULT_HOST, async () => {
-    const fileExists = await stat(authFile).then(() => true).catch(() => false)
+    await removeLegacyAuth()
     console.log(`[auth-server] listening at http://${DEFAULT_HOST}:${port}`)
-    console.log(`[auth-server] credential store: ${authFile}${fileExists ? '' : ' (created on first login)'}`)
+    console.log('[auth-server] credentials are owned by the official Codex app-server')
   })
   return server
 }
+
+server.on('close', () => codex.close())
 
 const isEntrypoint = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 if (isEntrypoint) startAuthServer()

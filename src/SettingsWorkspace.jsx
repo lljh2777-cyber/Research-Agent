@@ -120,7 +120,7 @@ function SubscriptionPage({ authStatus, authBusy, authError, modelCatalog, model
     <SettingsPageHeader eyebrow="Model access" title="订阅登录" description="Use an existing AI subscription without mixing account authentication with API Provider credentials." />
     <section className={`subscription-card ${authStatus?.connected ? 'connected' : ''}`}>
       <div className="subscription-brand"><span><Sparkles size={20} /></span><div><strong>ChatGPT</strong><small>当前唯一支持的订阅登录方式</small></div></div>
-      <div className="subscription-status"><i /><span>{authStatus?.connected ? 'Connected' : authStatus?.unavailable ? 'Local service offline' : 'Not connected'}</span></div>
+      <div className="subscription-status"><i /><span>{authStatus?.connected ? `Connected${authStatus.planType ? ` · ${authStatus.planType}` : ''}` : authStatus?.unavailable ? 'Local service offline' : authStatus?.pending ? 'Waiting for browser login' : 'Not connected'}</span></div>
       <p>登录凭据由本地认证服务处理。Research Agent 只在执行所选任务时发送必要的提示和 Vault 证据。</p>
       <div className="subscription-actions">
         {authStatus?.connected
@@ -128,6 +128,7 @@ function SubscriptionPage({ authStatus, authBusy, authError, modelCatalog, model
           : <button className="settings-primary-button" onClick={onConnect} disabled={authBusy}>{authBusy ? 'Waiting for login…' : authStatus?.unavailable ? 'Retry local service' : 'Connect ChatGPT'}</button>}
       </div>
       {authError && <div className="settings-inline-error" role="alert">{authError}</div>}
+      <div className="settings-security-note">Official Codex OAuth · PKCE localhost callback · credentials stored in the OS keyring</div>
     </section>
 
     <section className="settings-section-block">

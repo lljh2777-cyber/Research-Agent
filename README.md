@@ -30,7 +30,7 @@ npm run build
 - IndexedDB-backed Vault snapshot persistence and in-app Markdown note preview
 - Persistent browser directory handle with manual Vault rescan when File System Access API is available
 - Optional loopback-only local Vault adapter with 15-second revision polling and read-only Markdown access
-- Account-aware ChatGPT model discovery with a six-hour local cache, manual refresh, and compatibility fallback
+- Account-aware ChatGPT model discovery through the official Codex app-server, with a six-hour metadata-only cache and manual refresh
 - Markdown-aware chunking, multilingual BM25 ranking, one-hop `[[wikilink]]` expansion, and per-note evidence diversification
 - Provider-neutral evidence packets injected into the user-selected ChatGPT answer model with numbered source citations
 - Loopback-only ChatGPT/Codex OAuth bridge with PKCE, refresh-token rotation, account status, logout, and streaming Responses proxy
@@ -46,13 +46,13 @@ npm run dev
 
 Use `npm run dev:web` only when the auth bridge is already running separately with `npm run auth-server`. If the bridge is unavailable, the app reports the local service address and the restart command instead of a generic browser network error.
 
-It listens on `127.0.0.1:4318` for the app and temporarily uses `localhost:1455` for the OAuth callback. Credentials are stored outside the repository at `%LOCALAPPDATA%\\bioresearch-os\\auth.json` on Windows (or `$XDG_DATA_HOME/bioresearch-os/auth.json` on Linux/macOS). Override the location with `BIORESEARCH_AUTH_FILE` when needed.
+It listens on `127.0.0.1:4318` for the app and launches the locally installed official `codex app-server`. Codex owns the OAuth + PKCE flow and its localhost callback. Research Agent forces Codex's `keyring` credential mode, so refresh tokens go to the OS credential store (Windows Credential Manager, macOS Keychain, or the platform keyring) and are never written by this project. Any legacy Research Agent `auth.json` is removed when the local service starts.
 
-The browser receives only connection status, model metadata, and streamed answer events. The local service keeps the OAuth access/refresh tokens, refreshes them before expiry, retries once after an upstream `401`, adds the Codex-specific headers, and routes ChatGPT subscription requests through the Codex backend. Requests use a Responses-style SSE stream with `store: false` and encrypted-reasoning round trips.
+The browser receives only connection status, account display metadata, model metadata, and normalized answer events. It never receives an access token, refresh token, authorization code, PKCE verifier, or API key. The local service communicates with Codex over line-delimited JSON-RPC and does not log Codex protocol payloads.
 
-After login, the service queries the authenticated Codex `/models` endpoint and shows the picker-visible models returned for that account. The catalog is cached for six hours in `%LOCALAPPDATA%\\bioresearch-os\\models.json`, can be refreshed from the model picker, and is removed on logout or account replacement. A stale account cache is used during temporary network failures; the legacy GPT-5.4 routes are only a last-resort compatibility fallback when no account catalog has ever been fetched.
+After login, the service calls app-server `model/list` and shows the non-hidden models returned for that account. The catalog is cached for six hours in `%LOCALAPPDATA%\\bioresearch-os\\models.json`, can be refreshed from the model picker, and is removed on logout or account replacement. A stale metadata cache may be used during temporary failures; no model version is hard-coded as a fallback.
 
-This is a ChatGPT/Codex compatibility route, not the public OpenAI Platform API. Public API usage and ChatGPT subscriptions are separate products. The endpoint and accepted models are provider-specific and may change. Do not enable the bridge on a public host without replacing the loopback trust boundary with a server-side OAuth session and encrypted secret storage. No other subscription login is included at this stage.
+This is a local integration with the official Codex client, not the public OpenAI Platform API and not a subscription-to-API-key converter. Public API usage and ChatGPT subscriptions remain separate products. Do not expose the bridge on a public host or relay user credentials through a shared server. No other subscription login is included at this stage.
 
 The implementation notes and source comparison are in [`docs/chatgpt-api-integration.md`](docs/chatgpt-api-integration.md).
 The future multi-provider protocol boundary is documented in [`docs/provider-api-architecture.md`](docs/provider-api-architecture.md); those providers are researched but not enabled.

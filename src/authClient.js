@@ -74,9 +74,14 @@ export async function waitForChatgptAuth({ timeout = 5 * 60 * 1000, interval = 1
   while (Date.now() < deadline) {
     const status = await getAuthStatus()
     if (status.provider === 'chatgpt' && status.connected) return status
+    if (status.loginState === 'failed') throw new Error(status.loginError || 'ChatGPT login failed. Try connecting again.')
     await new Promise((resolve) => window.setTimeout(resolve, interval))
   }
   throw new Error('Authentication timed out. You can try connecting again.')
+}
+
+export function cancelChatgptLogin() {
+  return requestJson('/api/auth/chatgpt/cancel', { method: 'POST' })
 }
 
 export function logoutChatgpt() {

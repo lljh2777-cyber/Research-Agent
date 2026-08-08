@@ -4,7 +4,7 @@
 
 Research-Agent currently supports one account login: ChatGPT Plus/Pro through the Codex-compatible OAuth route. Other subscription providers are intentionally out of scope.
 
-This route must not be presented as the public OpenAI Platform API. The public API uses API credentials and separate billing. The local bridge instead follows the login-based Codex transport used by current open-source desktop and coding clients.
+This route must not be presented as the public OpenAI Platform API. The public API uses API credentials and separate billing. Research Agent delegates the login-based transport to the locally installed official Codex app-server instead of copying OAuth client identifiers or private service endpoints.
 
 ## Source comparison
 
@@ -31,13 +31,13 @@ Relevant implementation:
 
 The useful patterns are PKCE with loopback callback, refresh-token rotation, account-id extraction from JWT claims, provider-specific request headers, and conservative filtering of a model registry.
 
-### Official Codex model discovery
+### Official Codex app-server
 
-The official OpenAI Codex client queries the authenticated Codex `/models` endpoint with a `client_version` query parameter, preserves the backend model order, shows entries whose visibility is `list`, and caches the returned catalog. Research-Agent now follows this account-aware discovery path instead of maintaining a version allowlist.
+The official app-server exposes the browser login flow with `account/login/start`, reports completion with `account/login/completed`, owns refresh-token persistence and automatic refresh, and exposes account state through `account/read`. It also exposes `model/list` and streams generation through thread/turn notifications. Research Agent uses those protocol methods and does not access OAuth tokens.
 
-- [`models_endpoint.rs`](https://github.com/openai/codex/blob/main/codex-rs/model-provider/src/models_endpoint.rs)
-- [`openai_models.rs`](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs)
-- [OpenAI model catalog](https://developers.openai.com/api/docs/models)
+- [`login/src/server.rs`](https://github.com/openai/codex/blob/main/codex-rs/login/src/server.rs)
+- [`app-server/README.md`](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md)
+- [`core/config.schema.json`](https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json)
 
 ### OpenAI public API
 
@@ -53,6 +53,7 @@ The browser talks only to the loopback service at `127.0.0.1:4318`:
 - `GET /api/auth/status`
 - `GET /api/chatgpt/models` (`?refresh=1` bypasses a fresh cache)
 - `POST /api/auth/chatgpt/start`
+- `POST /api/auth/chatgpt/cancel`
 - `POST /api/auth/chatgpt/logout`
 - `POST /api/chatgpt/responses/stream`
 
@@ -63,9 +64,11 @@ The stream endpoint returns local SSE events:
 - `completed`: final text, model, response id, and usage when available
 - `error`: a safe error message
 
-OAuth tokens never enter browser storage. The loopback service stores them outside the repository, refreshes shortly before expiry, and retries one request after a `401`. The upstream request is forced to `store: false` and includes `reasoning.encrypted_content`.
+OAuth tokens never enter browser storage or Research Agent files. The official Codex process creates the PKCE verifier, hosts the localhost callback, exchanges the authorization code, refreshes the session, and stores credentials through the OS keyring. Research Agent sees only the authorization URL, opaque login id, completion notification, and safe account metadata.
 
-The account model catalog is cached separately from credentials for six hours. Only safe picker-visible model identifiers returned by the authenticated backend are accepted for generation. Logout and account replacement remove this cache; temporary discovery failures use a stale same-account cache, then a minimal compatibility fallback if no cache exists.
+The account model catalog is cached separately from credentials for six hours. Only safe, non-hidden model identifiers returned by `model/list` are accepted for generation. Logout and account replacement remove this cache; temporary discovery failures may use stale metadata, but the app never guesses a current model version.
+
+The bridge binds only to `127.0.0.1`, accepts browser origins only from `localhost` or `127.0.0.1`, applies no-store responses, and never prints JSON-RPC messages. This loopback trust model is for the Web prototype running on the user's machine; a hosted Web product needs server-side sessions and an explicitly supported OAuth integration.
 
 ## Next architecture step
 
