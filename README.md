@@ -17,6 +17,29 @@ Open the local Vite URL shown in the terminal. A production build can be checked
 npm run build
 ```
 
+## Runtime targets
+
+The application uses one codebase with separate build and runtime dimensions. The current Vite host exposes a read-only `GET /api/runtime` manifest so the UI can fail closed when local-only capabilities are unavailable.
+
+| Runtime target | Current status | Credential and local-data boundary |
+| --- | --- | --- |
+| `local-web` | Active development target | Provider keys stay in the browser session; ChatGPT OAuth stays in Codex/keyring; Vault access is user-selected or loopback-only |
+| `desktop` | Capability profile defined; Electron host not implemented yet | Provider keys and subscription credentials use the OS keychain; filesystem and MCP access move behind desktop IPC |
+| `hosted-web` | Restricted profile only; not deployable yet | Local Vault, ChatGPT subscription OAuth, and local MCP are disabled until a separate multi-user backend is designed |
+
+Build mode (`development`, `test`, or `production`) is intentionally independent from runtime target.
+
+## Testing
+
+```bash
+npm test                 # existing Node tests + Vitest unit and provider contracts
+npm run test:e2e         # Playwright local-Web smoke tests
+npm run build            # production bundle
+npm run test:all         # all of the above
+```
+
+Playwright uses an installed Chrome locally and an isolated Chromium build in CI. GitHub Actions runs tests, production build, production dependency audit, and browser smoke tests on pushes and pull requests.
+
 ## Security and deployment scope
 
 This repository is currently a local-first Web prototype, not a hardened multi-user hosted service. Making the source repository public does not make the running development services safe to expose to the Internet.
@@ -45,6 +68,8 @@ Provider API credentials entered in the current Web prototype are intended for a
 - Markdown-aware chunking, multilingual BM25 ranking, one-hop `[[wikilink]]` expansion, and per-note evidence diversification
 - Provider-neutral evidence packets injected into the user-selected ChatGPT answer model with numbered source citations
 - Loopback-only ChatGPT/Codex OAuth bridge with PKCE, refresh-token rotation, account status, logout, and streaming Responses proxy
+- Runtime target capability matrix with fail-closed local feature discovery
+- Vitest unit tests, provider contract tests, Playwright smoke tests, and GitHub Actions CI
 - Visual concept in `design/concept-desktop.png`
 
 ## ChatGPT subscription bridge
@@ -66,7 +91,7 @@ After login, the service calls app-server `model/list` and shows the non-hidden 
 This is a local integration with the official Codex client, not the public OpenAI Platform API and not a subscription-to-API-key converter. Public API usage and ChatGPT subscriptions remain separate products. Do not expose the bridge on a public host or relay user credentials through a shared server. No other subscription login is included at this stage.
 
 The implementation notes and source comparison are in [`docs/chatgpt-api-integration.md`](docs/chatgpt-api-integration.md).
-The future multi-provider protocol boundary is documented in [`docs/provider-api-architecture.md`](docs/provider-api-architecture.md); those providers are researched but not enabled.
+The multi-provider protocol boundary is documented in [`docs/provider-api-architecture.md`](docs/provider-api-architecture.md). DeepSeek and Alibaba Cloud Model Studio adapters are implemented; additional providers remain incremental integrations.
 
 ## Local Vault adapter
 
@@ -91,4 +116,4 @@ The `Settings` action opens the knowledge-base profile with Markdown parsing, em
 1. Add optional embedding and reranker adapters behind the existing evidence-packet boundary.
 2. Persist stream state so an interrupted Web view can reattach to an active run.
 3. Add note editing safeguards and explicit change conflict handling.
-4. Add an MCP bridge over the same local Vault adapter, then move the stable Web app into Electron.
+4. Move the stable local services behind an Electron main-process and preload IPC boundary, then store provider API keys in the OS credential manager.

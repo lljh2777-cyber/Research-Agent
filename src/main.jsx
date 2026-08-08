@@ -64,6 +64,7 @@ import { executePipeline, loadPipelineRuns, savePipelineRuns } from './pipelineE
 import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources, retrieveEvidence } from './retrieval.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
 import { AUTH_SERVICE_UNAVAILABLE, getAuthStatus, getChatgptModels, logoutChatgpt, startChatgptLogin, streamChatgptResponse, waitForChatgptAuth } from './authClient.js'
+import { loadRuntimeManifest } from './runtime/client.js'
 import { closeWorkspaceTab, createWorkspaceTab, findReusableTab, MAX_WORKSPACE_TABS, researchTabTitle, titleFromQuestion } from './workspaceTabs.js'
 import {
   AGENT_PRESETS,
@@ -830,6 +831,7 @@ function App() {
   const [mcpRuntimeBusy, setMcpRuntimeBusy] = useState('')
   const [mcpRuntimeError, setMcpRuntimeError] = useState('')
   const [pendingToolApproval, setPendingToolApproval] = useState(null)
+  const [runtimeManifest, setRuntimeManifest] = useState(null)
   const [authStatus, setAuthStatus] = useState({ provider: 'chatgpt', connected: false, pending: false })
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState('')
@@ -846,6 +848,12 @@ function App() {
 
   const activeTab = workspaceTabs.find((tab) => tab.id === activeTabId) || workspaceTabs[0]
   const activeSection = activeTab?.kind || 'launcher'
+  const runtimeCapabilities = runtimeManifest?.capabilities
+  const runtimeReady = Boolean(runtimeCapabilities)
+  const supportsLoopbackMcp = runtimeCapabilities?.mcp === 'loopback'
+  const supportsChatgptSubscription = runtimeCapabilities?.chatgptSubscriptionOAuth === true
+  const supportsLocalVault = runtimeCapabilities?.localVault.available === true
+  const supportsLoopbackVault = runtimeCapabilities?.localVault.adapters.includes('loopback-adapter') === true
   const activeResearchSession = researchSessions[activeTabId] || createResearchSession({ modelId: modelConfig.chatModelId, knowledgeBaseId: vaultName })
   const { phase, input, messages, running, activeStage, answerMode, retrievalPacket } = activeResearchSession
   const activeHasVaultScope = Boolean(vaultName && activeResearchSession.configSnapshot?.knowledgeScopes?.some((scope) => scope.vaultId === vaultName))
@@ -869,18 +877,28 @@ function App() {
   const setInput = useCallback((value) => setActiveResearchField('input', value), [setActiveResearchField])
 
   useEffect(() => {
+    let cancelled = false
+    loadRuntimeManifest().then((manifest) => {
+      if (!cancelled) setRuntimeManifest(manifest)
+    })
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
     window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed))
   }, [sidebarCollapsed])
 
   useEffect(() => {
     let cancelled = false
-    bootstrapMcpRuntime().then((status) => { if (!cancelled) setMcpRuntime(status) }).catch(() => {})
+    if (supportsLoopbackMcp) {
+      bootstrapMcpRuntime().then((status) => { if (!cancelled) setMcpRuntime(status) }).catch(() => {})
+    }
     return () => {
       cancelled = true
       toolApprovalResolverRef.current?.(false)
       toolApprovalResolverRef.current = null
     }
-  }, [])
+  }, [supportsLoopbackMcp])
 
   const requestToolApproval = useCallback(({ entry, call }) => new Promise((resolve) => {
     toolApprovalResolverRef.current?.(false)
@@ -1076,14 +1094,19 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (!runtimeReady) return undefined
     let cancelled = false
+    if (!supportsChatgptSubscription) {
+      setAuthStatus({ provider: 'chatgpt', connected: false, pending: false, unavailable: true })
+      return () => { cancelled = true }
+    }
     getAuthStatus().then((status) => {
       if (!cancelled) setAuthStatus(status)
     }).catch(() => {
       if (!cancelled) setAuthStatus({ provider: 'chatgpt', connected: false, pending: false, unavailable: true })
     })
     return () => { cancelled = true }
-  }, [])
+  }, [runtimeReady, supportsChatgptSubscription])
 
   useEffect(() => {
     if (!authStatus.connected) {
@@ -1094,12 +1117,15 @@ function App() {
   }, [authStatus.connected, refreshChatgptModels])
 
   useEffect(() => {
+    if (!runtimeReady) return undefined
     let cancelled = false
     Promise.all([loadVaultSnapshot(), loadVaultHandle()]).then(async ([snapshot, handle]) => {
       if (cancelled) return
-      const localSynced = await syncFromLocalAdapter(true)
+      const localSynced = supportsLoopbackVault
+        ? await syncFromLocalAdapter(true)
+        : false
       if (localSynced || cancelled) return
-      if (handle) {
+      if (supportsLocalVault && handle) {
         setVaultHandle(handle)
         const synced = await syncFromHandle(handle)
         if (synced || cancelled) return
@@ -1113,13 +1139,13 @@ function App() {
       }
     })
     return () => { cancelled = true }
-  }, [])
+  }, [runtimeReady, supportsLocalVault, supportsLoopbackVault])
 
   useEffect(() => {
-    if (vaultSource !== 'local-adapter') return undefined
+    if (!supportsLoopbackVault || vaultSource !== 'local-adapter') return undefined
     const timer = window.setInterval(() => syncFromLocalAdapter(true), 15000)
     return () => window.clearInterval(timer)
-  }, [vaultSource, localRevision])
+  }, [supportsLoopbackVault, vaultSource, localRevision])
 
   useEffect(() => {
     Object.entries(researchSessions).forEach(([tabId, session]) => {

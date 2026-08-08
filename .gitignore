@@ -12,6 +12,9 @@ dist/
 
 # Local QA screenshots and browser-only artifacts
 qa/
+test-results/
+playwright-report/
+.playwright-browsers/
 
 # Editor and OS metadata
 .DS_Store
