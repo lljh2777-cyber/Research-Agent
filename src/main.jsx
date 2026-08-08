@@ -42,7 +42,7 @@ import KnowledgeGraphSection from './KnowledgeGraph.jsx'
 import { PipelinesSection, RunsSection } from './PipelineWorkspace.jsx'
 import SettingsWorkspace from './SettingsWorkspace.jsx'
 import { loadLocalVault } from './localVault.js'
-import { chatgptCatalogToModels, DEFAULT_MODEL_CONFIG, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
+import { chatgptCatalogToModels, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
 import { loadProviderConfigs, loadProviderSessionKeys, providerConfigsToModels, saveProviderConfigs } from './providerConfig.js'
 import { getDeepSeekRuntimeOptions } from '../shared/deepseek-provider.mjs'
 import { getBailianRuntimeOptions } from '../shared/bailian-provider.mjs'
@@ -65,6 +65,7 @@ import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalInd
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
 import { AUTH_SERVICE_UNAVAILABLE, getAuthStatus, getChatgptModels, logoutChatgpt, startChatgptLogin, streamChatgptResponse, waitForChatgptAuth } from './authClient.js'
 import { closeWorkspaceTab, createWorkspaceTab, findReusableTab, MAX_WORKSPACE_TABS, titleFromQuestion } from './workspaceTabs.js'
+import { createConversationConfigSnapshot, createRunSnapshot, updateConversationModel } from './agentPresets.js'
 import './styles.css'
 
 const navItems = [
@@ -77,7 +78,13 @@ const navItems = [
 const SIDEBAR_COLLAPSED_KEY = 'bioresearch-os:sidebar-collapsed'
 const INITIAL_RESEARCH_TAB_ID = 'research-initial'
 
-function createResearchSession(messages = []) {
+function createResearchSession({ messages = [], modelId = 'smart-default', knowledgeBaseId = '' } = {}) {
+  const configSnapshot = createConversationConfigSnapshot({
+    conversationOverrides: {
+      model: { mode: modelId === 'smart-default' ? 'auto' : 'fixed', providerId: null, modelId, endpointType: null },
+      knowledgeScopes: knowledgeBaseId ? [{ vaultId: knowledgeBaseId, paths: [], tags: [] }] : [],
+    },
+  })
   return {
     input: '',
     messages,
@@ -87,6 +94,18 @@ function createResearchSession(messages = []) {
     runMode: 'mock',
     answerMode: messages.length ? 'sample' : 'idle',
     retrievalPacket: null,
+    configSnapshot,
+    runSnapshots: [],
+  }
+}
+
+function modelReference(model) {
+  return {
+    mode: model.id === 'smart-default' ? 'auto' : 'fixed',
+    providerId: model.providerId || model.authProvider || null,
+    modelId: model.id,
+    apiModelId: model.apiModelId || model.id,
+    endpointType: model.endpointType || null,
   }
 }
 
@@ -642,7 +661,10 @@ function WorkspaceLauncher({ onOpen }) {
 function App() {
   const [workspaceTabs, setWorkspaceTabs] = useState(() => [createWorkspaceTab('research', { id: INITIAL_RESEARCH_TAB_ID })])
   const [activeTabId, setActiveTabId] = useState(INITIAL_RESEARCH_TAB_ID)
-  const [researchSessions, setResearchSessions] = useState(() => ({ [INITIAL_RESEARCH_TAB_ID]: createResearchSession() }))
+  const [researchSessions, setResearchSessions] = useState(() => {
+    const defaults = loadModelConfig()
+    return { [INITIAL_RESEARCH_TAB_ID]: createResearchSession({ modelId: defaults.chatModelId }) }
+  })
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true')
   const [vaultNotes, setVaultNotes] = useState([])
   const [vaultName, setVaultName] = useState('')
@@ -652,7 +674,7 @@ function App() {
   const [localRevision, setLocalRevision] = useState('')
   const [syncState, setSyncState] = useState('idle')
   const [selectedNote, setSelectedNote] = useState(null)
-  const [modelConfig, setModelConfig] = useState(DEFAULT_MODEL_CONFIG)
+  const [modelConfig, setModelConfig] = useState(loadModelConfig)
   const [providerConfigs, setProviderConfigs] = useState(loadProviderConfigs)
   const [mcpConfig, setMcpConfig] = useState(loadMcpConfig)
   const [mcpRuntime, setMcpRuntime] = useState({ sessions: [] })
@@ -675,7 +697,7 @@ function App() {
 
   const activeTab = workspaceTabs.find((tab) => tab.id === activeTabId) || workspaceTabs[0]
   const activeSection = activeTab?.kind || 'research'
-  const activeResearchSession = researchSessions[activeTabId] || createResearchSession()
+  const activeResearchSession = researchSessions[activeTabId] || createResearchSession({ modelId: modelConfig.chatModelId, knowledgeBaseId: vaultName })
   const { input, messages, running, activeStage, answerMode, retrievalPacket } = activeResearchSession
   const anyResearchRunning = Object.values(researchSessions).some((session) => session.running)
 
@@ -757,7 +779,8 @@ function App() {
     const apiModels = providerConfigsToModels(providerConfigs)
     return [smartModel, ...discoveredModels, ...apiModels, ...futureModels].filter(Boolean)
   }, [modelCatalog.models, providerConfigs, staticChatModels])
-  const selectedModel = useMemo(() => getModelById(modelConfig.chatModelId, chatModels), [chatModels, modelConfig.chatModelId])
+  const activeChatModelId = activeResearchSession.configSnapshot?.model?.modelId || modelConfig.chatModelId
+  const selectedModel = useMemo(() => getModelById(activeChatModelId, chatModels), [activeChatModelId, chatModels])
   const rerankModel = useMemo(() => MODEL_REGISTRY.find((model) => model.id === modelConfig.rerankModelId), [modelConfig.rerankModelId])
   const notesById = useMemo(() => new Map(vaultNotes.map((note) => [note.id, note])), [vaultNotes])
   const retrievedNotes = useMemo(() => {
@@ -883,10 +906,6 @@ function App() {
     }
   }
 
-  useEffect(() => {
-    setModelConfig(loadModelConfig())
-  }, [])
-
   const refreshChatgptModels = useCallback(async (force = false) => {
     setModelsBusy(true)
     try {
@@ -994,10 +1013,15 @@ function App() {
       title: kind === 'graph' && matchingGraphs ? `${graphBaseTitle} ${matchingGraphs + 1}` : undefined,
     })
     setWorkspaceTabs((current) => [...current, tab])
-    if (kind === 'research') setResearchSessions((current) => ({ ...current, [tab.id]: createResearchSession() }))
+    if (kind === 'research') {
+      setResearchSessions((current) => ({
+        ...current,
+        [tab.id]: createResearchSession({ modelId: modelConfig.chatModelId, knowledgeBaseId: vaultName }),
+      }))
+    }
     setActiveTabId(tab.id)
     return tab.id
-  }, [activeTabId, vaultName, workspaceTabs])
+  }, [activeTabId, modelConfig.chatModelId, vaultName, workspaceTabs])
 
   const handleSelectTab = useCallback((tabId) => {
     setActiveTabId(tabId)
@@ -1073,12 +1097,19 @@ function App() {
     }
     const apiProvider = selectedModel.authProvider === 'api'
     const live = apiProvider || ((selectedModel.authProvider === 'chatgpt' || selectedModel.id === 'smart-default') && chatgptConnected)
+    const runSnapshot = createRunSnapshot(session.configSnapshot, {
+      resolvedModel: {
+        ...modelReference(selectedModel),
+        requestedModelId: session.configSnapshot?.model?.modelId || selectedModel.id,
+      },
+    })
     setWorkspaceTabs((current) => current.map((tab) => tab.id === sessionId ? { ...tab, title: titleFromQuestion(question) } : tab))
     updateResearchSession(sessionId, (current) => ({
       ...current,
       answerMode: live ? 'chatgpt' : 'retrieval-only',
       messages: [...current.messages, { id: `user-${Date.now()}`, role: 'user', text: question, evidenceContext }],
       input: '',
+      runSnapshots: [...(current.runSnapshots || []), runSnapshot],
     }))
     if (live) {
       const assistantId = `assistant-${Date.now()}`
@@ -1179,6 +1210,9 @@ function App() {
         updateResearchSession(sessionId, (current) => ({
           ...current,
           activeStage: 5,
+          runSnapshots: (current.runSnapshots || []).map((snapshot) => snapshot.id === runSnapshot.id
+            ? { ...snapshot, model: { ...snapshot.model, modelId: result.model || snapshot.model.modelId } }
+            : snapshot),
           messages: current.messages.map((message) => message.id === assistantId ? {
             ...message,
             text: result.text || streamedText || 'The provider returned an empty response.',
@@ -1217,11 +1251,10 @@ function App() {
       const connected = await handleConnectChatgpt()
       if (!connected?.connected) return
     }
-    setModelConfig((current) => {
-      const next = { ...current, chatModelId }
-      saveModelConfig(next)
-      return next
-    })
+    updateResearchSession(activeTabId, (session) => ({
+      ...session,
+      configSnapshot: updateConversationModel(session.configSnapshot, modelReference(model)),
+    }))
   }
 
   const handlePause = () => {
