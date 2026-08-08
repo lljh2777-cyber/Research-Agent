@@ -55,6 +55,60 @@ final result: passed
 
 ---
 
+# Three-Column Settings Navigation and Full-Width Detail QA
+
+- Source visual truth: `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-a58d7257-efe0-4fea-816b-6bb721a7c5b3.png`
+- Implementation screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-agent-settings-three-column.png`
+- Compact implementation screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-agent-settings-three-column-compact.png`
+- Side-by-side comparison: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\settings-reference-comparison.png`
+- Source pixels: 2048 x 1218
+- Implementation pixels and CSS viewport: 1440 x 900 at device scale factor 1; settings workspace occupies 1376 x 828 CSS px after the persistent 64 px app rail and 72 px top bar
+- Compact viewport: 1100 x 780 at device scale factor 1
+- State: Settings → API Providers → OpenAI selected; provider list unfiltered
+
+## Full-view comparison evidence
+
+The Cherry Studio source and final Research Agent capture were normalized into one 1440 px-wide comparison image. Both expose three continuous vertical regions: grouped settings categories, searchable provider navigation, and provider details. The implementation removes the previous centered `max-width` wrapper and expands details to the right edge of the available application workspace. The additional 64 px rail and dark visual language are intentional product-shell constraints.
+
+## Focused region comparison evidence
+
+- Left and secondary navigation: both remain full-height, independently scrollable columns with clear active rows and a provider search control.
+- Detail header and configuration: provider identity, enable state, credentials, endpoint controls, model discovery, and safety status align to the top and use the full available width.
+- Empty space: no artificial left/right gutter or centered-card margin remains. Residual lower space is a truthful unconfigured-model state, not layout padding.
+- Compact view: at 1100 x 780, `body.scrollWidth` equals the 1100 px viewport and the settings workspace has no horizontal overflow (`scrollWidth` equals `clientWidth`, both 1036 px).
+
+## Required fidelity surfaces
+
+- Fonts and typography: existing Manrope/DM Mono tokens are retained; heading, row, helper, and status hierarchy match the dense settings pattern.
+- Spacing and layout rhythm: outer content padding is reduced to 22–24 px, page max-width and auto margins are removed, and the three columns directly abut through 1 px separators.
+- Colors and visual tokens: existing navy surfaces, blue selection, mint readiness indicator, and muted dividers remain consistent with BioResearch OS.
+- Image and asset quality: the source contains provider marks, while the implementation intentionally uses the established Lucide icon system because official provider brand assets are not yet bundled. No raster placeholders or handcrafted SVGs were introduced.
+- Copy and content: subscription access remains separate from API credentials; provider models are described as dynamically fetched and no potentially stale model names are hard-coded.
+
+## Comparison history
+
+1. P1: The previous settings page was limited by 940/1120 px max-width, auto margins, and responsive 4vw padding, creating large empty gutters. Fixed by making settings pages full-width and reducing outer padding.
+2. P1: The provider catalog was nested inside a detail card rather than acting as persistent secondary navigation. Fixed by promoting it to a full-height second column in the workspace grid.
+3. P2: The previous provider detail surface ended after a small summary grid and did not communicate automatic model discovery clearly. Fixed with top-aligned credential/endpoint sections, an explicit model catalog state, and capability metadata.
+4. P2: A three-column layout could overflow at compact desktop widths. Fixed with narrower 200/240 px rails and a stacked detail form below 1180 px; verified at 1100 px and 620 px with no horizontal overflow.
+
+## Browser verification
+
+- URL and page identity: `http://localhost:5173/` — `BioResearch OS`
+- Primary interaction: Settings → API Providers → search `Anthropic` → select result → detail heading and endpoint update → switch to `订阅登录` (secondary column removed) → return to API Providers (secondary column restored)
+- Blank page/framework overlay: absent
+- Console warnings/errors: none
+- Production build: passed
+- Automated tests: 22 passed
+
+## Findings
+
+No actionable P0, P1, or P2 findings remain. The source's light theme, official provider logos, and absence of the app-level rail are intentional differences from the existing Research Agent design system.
+
+final result: passed
+
+---
+
 # Dedicated Settings Workspace QA
 
 - Source visual truth:

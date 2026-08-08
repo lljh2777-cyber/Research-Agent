@@ -5,7 +5,6 @@ import {
   Boxes,
   CalendarClock,
   CheckCircle2,
-  ChevronRight,
   Cloud,
   Code2,
   Cpu,
@@ -14,9 +13,12 @@ import {
   HardDrive,
   Info,
   Keyboard,
+  KeyRound,
+  ListFilter,
   Network,
   Palette,
   Plug,
+  Plus,
   RefreshCw,
   ScanText,
   Search,
@@ -77,12 +79,12 @@ const SETTINGS_GROUPS = [
 ]
 
 const API_PROVIDERS = [
-  { id: 'openai', name: 'OpenAI', protocol: 'OpenAI Responses / Chat Completions', endpoint: 'https://api.openai.com/v1' },
-  { id: 'anthropic', name: 'Anthropic', protocol: 'Anthropic Messages', endpoint: 'https://api.anthropic.com' },
-  { id: 'gemini', name: 'Google Gemini', protocol: 'Google Generative Language', endpoint: 'https://generativelanguage.googleapis.com' },
-  { id: 'deepseek', name: 'DeepSeek', protocol: 'OpenAI compatible', endpoint: 'https://api.deepseek.com' },
-  { id: 'openrouter', name: 'OpenRouter', protocol: 'OpenAI compatible', endpoint: 'https://openrouter.ai/api/v1' },
-  { id: 'compatible', name: 'OpenAI Compatible', protocol: 'Custom endpoint', endpoint: 'User supplied' },
+  { id: 'openai', name: 'OpenAI', protocol: 'Responses / Chat Completions', endpoint: 'https://api.openai.com/v1', icon: Sparkles, tone: 'cyan' },
+  { id: 'anthropic', name: 'Anthropic', protocol: 'Anthropic Messages', endpoint: 'https://api.anthropic.com', icon: Network, tone: 'amber' },
+  { id: 'gemini', name: 'Google Gemini', protocol: 'Generative Language', endpoint: 'https://generativelanguage.googleapis.com', icon: Sparkles, tone: 'violet' },
+  { id: 'deepseek', name: 'DeepSeek', protocol: 'OpenAI compatible', endpoint: 'https://api.deepseek.com', icon: Search, tone: 'blue' },
+  { id: 'openrouter', name: 'OpenRouter', protocol: 'Multi-provider gateway', endpoint: 'https://openrouter.ai/api/v1', icon: Network, tone: 'mint' },
+  { id: 'compatible', name: 'OpenAI Compatible', protocol: 'Custom endpoint', endpoint: 'User supplied', icon: Code2, tone: 'slate' },
 ]
 
 const FEATURE_PREVIEWS = {
@@ -133,26 +135,60 @@ function SubscriptionPage({ authStatus, authBusy, authError, modelCatalog, model
   </div>
 }
 
-function ProvidersPage() {
-  const [query, setQuery] = useState('')
-  const [selectedId, setSelectedId] = useState(API_PROVIDERS[0].id)
+function ProviderNavigation({ query, onQueryChange, selectedId, onSelect }) {
   const filteredProviders = useMemo(() => API_PROVIDERS.filter((provider) => `${provider.name} ${provider.protocol}`.toLowerCase().includes(query.trim().toLowerCase())), [query])
-  const selected = API_PROVIDERS.find((provider) => provider.id === selectedId) || API_PROVIDERS[0]
-
-  return <div className="settings-page settings-page-wide">
-    <SettingsPageHeader eyebrow="API access" title="API Providers" description="Provider credentials are separate from subscription login and will use secure credential storage in the desktop build." />
-    <div className="provider-workspace">
-      <section className="provider-list-panel">
-        <label className="settings-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search providers" /></label>
-        <div className="provider-list">{filteredProviders.map((provider) => <button className={provider.id === selected.id ? 'active' : ''} onClick={() => setSelectedId(provider.id)} key={provider.id}><span><Cloud size={15} /></span><div><strong>{provider.name}</strong><small>{provider.protocol}</small></div><ChevronRight size={14} /></button>)}</div>
-      </section>
-      <section className="provider-detail-panel">
-        <div className="provider-detail-title"><span><Cloud size={21} /></span><div><h3>{selected.name}</h3><p>{selected.protocol}</p></div><small>Not configured</small></div>
-        <dl className="provider-detail-grid"><div><dt>Authentication</dt><dd>API Key</dd></div><div><dt>Default endpoint</dt><dd>{selected.endpoint}</dd></div><div><dt>Model discovery</dt><dd>Dynamic catalog</dd></div><div><dt>Credential storage</dt><dd>Desktop secure store</dd></div></dl>
-        <div className="provider-security-note"><ShieldCheck size={16} /><span><strong>Web-first safety boundary</strong>API keys are not stored in this web milestone. Provider forms will be enabled together with encrypted desktop credential storage.</span></div>
-        <button className="settings-secondary-button" disabled>Configure after desktop secure storage</button>
-      </section>
+  return <aside className="settings-secondary-navigation" aria-label="API provider navigation">
+    <div className="settings-secondary-search">
+      <label className="settings-search"><Search size={15} /><input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="Search providers…" /></label>
+      <button aria-label="Clear provider search" title="Clear provider search" onClick={() => onQueryChange('')} disabled={!query}><ListFilter size={15} /></button>
     </div>
+    <div className="provider-list">
+      {filteredProviders.map((provider) => {
+        const Icon = provider.icon
+        return <button className={provider.id === selectedId ? 'active' : ''} onClick={() => onSelect(provider.id)} key={provider.id}>
+          <span className={`provider-icon ${provider.tone}`}><Icon size={15} /></span>
+          <div><strong>{provider.name}</strong><small>{provider.protocol}</small></div>
+          <i aria-hidden="true" />
+        </button>
+      })}
+      {!filteredProviders.length && <div className="provider-list-empty">No matching providers</div>}
+    </div>
+    <button className="provider-add-button" onClick={() => { onQueryChange(''); onSelect('compatible') }}><Plus size={15} />Add provider</button>
+  </aside>
+}
+
+function ProvidersPage({ selectedId }) {
+  const selected = API_PROVIDERS.find((provider) => provider.id === selectedId) || API_PROVIDERS[0]
+  const SelectedIcon = selected.icon
+  const [endpoint, setEndpoint] = useState(selected.endpoint)
+  useEffect(() => setEndpoint(selected.endpoint), [selected.endpoint])
+
+  return <div className="settings-page provider-settings-page">
+    <header className="provider-page-header">
+      <span className={`provider-icon provider-icon-large ${selected.tone}`}><SelectedIcon size={21} /></span>
+      <div><span>API Provider</span><h2>{selected.name}</h2><p>{selected.protocol}</p></div>
+      <label className="provider-enable-toggle"><input type="checkbox" disabled /><span /><small>Disabled</small></label>
+    </header>
+
+    <section className="provider-config-section">
+      <div className="provider-field-heading"><div><KeyRound size={16} /><span><strong>API credentials</strong><small>Credentials will be encrypted by the desktop secure store.</small></span></div><button className="settings-text-button" disabled>Get API key</button></div>
+      <div className="provider-input-row"><input type="password" value="desktop-secure-store" readOnly disabled aria-label="API key" /><button className="settings-secondary-button" disabled>Verify</button></div>
+      <div className="provider-field-heading"><div><Cloud size={16} /><span><strong>API endpoint</strong><small>Override the default endpoint for gateways or compatible services.</small></span></div><span className="provider-field-status">Default</span></div>
+      <div className="provider-input-row"><input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} aria-label="API endpoint" /><button className="settings-secondary-button" onClick={() => setEndpoint(selected.endpoint)}>Reset</button></div>
+    </section>
+
+    <section className="provider-model-section">
+      <div className="provider-model-heading"><div><strong>Models</strong><small>Fetched from the provider after a successful connection.</small></div><button className="settings-secondary-button" disabled><RefreshCw size={14} />Fetch model list</button></div>
+      <div className="provider-model-empty"><span><Database size={20} /></span><div><strong>No model catalog yet</strong><small>Configure this provider, then fetch the model list automatically instead of maintaining hard-coded model names.</small></div></div>
+      <div className="provider-capability-grid">
+        <div><span>Model discovery</span><strong>Dynamic catalog</strong></div>
+        <div><span>Authentication</span><strong>API key</strong></div>
+        <div><span>Protocol</span><strong>{selected.protocol}</strong></div>
+        <div><span>Storage</span><strong>Desktop secure store</strong></div>
+      </div>
+    </section>
+
+    <div className="provider-security-note"><ShieldCheck size={16} /><span><strong>Web-first safety boundary</strong>API keys are not stored in this web milestone. The navigation and provider schema are ready; credential entry becomes available with encrypted desktop storage.</span></div>
   </div>
 }
 
@@ -223,20 +259,25 @@ function FeaturePreviewPage({ pageId }) {
 }
 
 export default function SettingsWorkspace({ authStatus, authBusy, authError, modelCatalog, modelsBusy, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, chatModels, modelConfig, onSaveModelConfig }) {
-  const [activePage, setActivePage] = useState('subscription')
+  const [activePage, setActivePage] = useState('providers')
+  const [providerQuery, setProviderQuery] = useState('')
+  const [selectedProviderId, setSelectedProviderId] = useState(API_PROVIDERS[0].id)
   let content
   if (activePage === 'subscription') content = <SubscriptionPage authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnect={onConnectChatgpt} onLogout={onLogoutChatgpt} onRefreshModels={onRefreshModels} />
-  else if (activePage === 'providers') content = <ProvidersPage />
+  else if (activePage === 'providers') content = <ProvidersPage selectedId={selectedProviderId} />
   else if (activePage === 'defaults') content = <DefaultModelsPage config={modelConfig} chatModels={chatModels} onSave={onSaveModelConfig} />
   else if (activePage === 'local-models') content = <LocalModelsPage />
   else if (activePage === 'retrieval') content = <RetrievalSettingsPage config={modelConfig} onSave={onSaveModelConfig} />
   else content = <FeaturePreviewPage pageId={activePage} />
 
-  return <div className="settings-workspace">
+  const hasSecondaryNavigation = activePage === 'providers'
+
+  return <div className={`settings-workspace ${hasSecondaryNavigation ? 'has-secondary-navigation' : ''}`}>
     <aside className="settings-navigation" aria-label="Settings navigation">
       <div className="settings-navigation-title"><Settings2 size={17} /><strong>Settings</strong></div>
       {SETTINGS_GROUPS.map((group) => <section key={group.label}><span>{group.label}</span>{group.items.map((item) => { const Icon = item.icon; return <button className={activePage === item.id ? 'active' : ''} onClick={() => setActivePage(item.id)} key={item.id}><Icon size={15} /><span>{item.label}</span></button> })}</section>)}
     </aside>
+    {hasSecondaryNavigation && <ProviderNavigation query={providerQuery} onQueryChange={setProviderQuery} selectedId={selectedProviderId} onSelect={setSelectedProviderId} />}
     <main className="settings-content">{content}</main>
   </div>
 }
