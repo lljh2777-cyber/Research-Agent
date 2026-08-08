@@ -92,7 +92,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .message-meta { color: rgba(230, 241, 255, .74); display: flex; justify-content: space-between; gap: 16px; font-size: 10px; font-family: var(--mono); margin-bottom: 9px; }
 .message-meta span:last-child { display: flex; align-items: center; gap: 3px; }
 .user-message p { font-size: 14px; line-height: 1.5; margin: 0; color: #f7faff; }
-.assistant-message { display: flex; gap: 13px; max-width: 810px; margin: 0 auto 21px; padding: 0 14px; }
+.assistant-message { display: flex; gap: 13px; width: min(1120px, calc(100% - 28px)); margin: 0 0 21px 14px; padding: 0 14px; }
 .assistant-avatar { flex: 0 0 33px; height: 33px; display: grid; place-items: center; color: var(--mint); border: 1px solid rgba(126, 226, 195, .55); background: rgba(19, 86, 75, .23); border-radius: 50%; margin-top: 2px; }
 .assistant-content { min-width: 0; flex: 1; }
 .assistant-title-row { display: flex; align-items: center; gap: 10px; margin: 3px 0 12px; font-size: 13px; }
@@ -710,7 +710,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
   .new-chat svg { border: 0; padding: 0; width: 18px; }
   .chat-column { padding-left: 7px; padding-right: 7px; }
   .user-message { width: 95%; margin-right: 5px; }
-  .assistant-message { padding: 0 7px; gap: 9px; }
+  .assistant-message { width: calc(100% - 14px); margin-left: 7px; padding: 0 7px; gap: 9px; }
   .assistant-content p, .assistant-content li { font-size: 13px; }
   .stage-row { gap: 4px; }
   .stage { padding: 5px 6px; font-size: 9px; }

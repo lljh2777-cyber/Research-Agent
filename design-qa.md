@@ -55,6 +55,51 @@ final result: passed
 
 ---
 
+# Research Conversation Horizontal Density QA
+
+- Source visual truth: `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-57d81391-3607-4e69-a893-5cb6d1829736.png`
+- Implementation screenshot: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-chat-layout.png`
+- Side-by-side comparison: `C:\Users\Thomas Wade\.codex\visualizations\2026\08\07\019fdabe-aa18-7c93-9629-d85f84a1385a\research-chat-layout-comparison.png`
+- Source pixels: 2048 x 968; normalized to a centered 1721 x 968 crop and scaled to 1280 x 720 for comparison
+- Implementation pixels and CSS viewport: 1280 x 720 at a browser-reported device pixel ratio of 1.5; Browser screenshots are normalized to CSS pixels
+- State: Research conversation with the navigation rail collapsed, sample question and answer visible
+
+## Full-view comparison evidence
+
+The normalized before/after comparison shows that the assistant answer no longer sits in a narrow centered 810 px column. The final answer begins 14 CSS px from the conversation edge and expands to the available chat width, while the user question remains right-aligned and the knowledge inspector remains intact.
+
+## Focused region comparison evidence
+
+- Before: the centered assistant column created a conspicuous empty band between the collapsed rail and the assistant avatar.
+- After: with the rail collapsed, the conversation begins at x=82 and the assistant container begins at x=96, a 14 px internal offset. The assistant container uses 812 of the 850 available conversation pixels at this viewport.
+- Overflow: `body.clientWidth` and `body.scrollWidth` both equal 1280; no horizontal overflow was introduced.
+
+## Required fidelity surfaces
+
+- Fonts and typography: Manrope and DM Mono, font sizes, weights, and answer line-height are unchanged.
+- Spacing and layout rhythm: only the assistant message width and horizontal alignment changed; question alignment, evidence trail, composer, inspector, and vertical spacing are preserved.
+- Colors and visual tokens: existing navy, blue, mint, border, and muted text tokens are unchanged.
+- Image and asset quality: no new visual assets were required; the existing Lucide icon system is preserved.
+- Copy and content: all sample conversation and evidence content is unchanged.
+
+## Browser verification
+
+- URL and page identity: `http://localhost:5174/` — `BioResearch OS`
+- Browser availability: in-app Browser available and used
+- Primary interaction: load Research, collapse the navigation sidebar, verify the conversation expands and the assistant answer remains 14 px from the conversation edge
+- Blank page/framework overlay: absent
+- Console warnings/errors: none
+- Production build: passed
+- Automated tests: 29 passed
+
+## Findings
+
+No actionable P0, P1, or P2 findings remain. At very wide viewports, the assistant answer is capped at 1120 px to preserve readable line lengths while staying left-aligned; this is intentional.
+
+final result: passed
+
+---
+
 # Functional Provider Configuration and Model Discovery QA
 
 - Source visual truth: `C:\Users\THOMAS~1\AppData\Local\Temp\codex-clipboard-a58d7257-efe0-4fea-816b-6bb721a7c5b3.png`
