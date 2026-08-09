@@ -18,7 +18,13 @@ Electron main process
 └── loopback Codex auth service
 ```
 
-The renderer has `sandbox: true`, `contextIsolation: true`, and `nodeIntegration: false`. It cannot access `ipcRenderer`, Node.js, the filesystem, or decrypted stored credentials directly.
+The renderer has `sandbox: true`, `contextIsolation: true`, and `nodeIntegration: false`. It cannot access `ipcRenderer`, Node.js, arbitrary filesystem paths, or decrypted stored credentials directly.
+
+## Vault access
+
+Desktop Vault access is owned by the Electron main process. The renderer asks the host to show the operating-system directory picker and receives an opaque, session-only Vault capability plus Markdown contents identified only by relative path. Later synchronization sends only that capability and a bounded revision string; absolute paths never cross the preload boundary.
+
+The scanner is read-only, skips plugin/trash/dependency directories and symbolic links, canonicalizes every traversed path, and enforces limits of 20,000 Markdown files, 10 MB per note, and 200 MB per Vault. A filesystem watcher sends only a debounced change notification, after which the renderer requests a fresh bounded snapshot. Closing the renderer revokes all of its Vault capabilities.
 
 ## Provider credentials
 
@@ -36,6 +42,6 @@ Provider model discovery and MCP transport remain loopback-backed. Long-running 
 
 - Development artifacts are unsigned and use Electron's default icon.
 - ChatGPT subscription login requires an installed official `codex` executable.
-- Vault access still uses the browser directory picker or the optional read-only loopback Vault adapter.
+- Desktop Vault capabilities are session-only. After a full application restart, the cached snapshot remains visible but the user must reselect the folder before live synchronization resumes.
 - Provider run recovery after a full application restart is not implemented. Switching workspace tabs keeps active run state, while closing a running tab cancels its request.
 - Hosted multi-user deployment is not supported by the desktop trust model.

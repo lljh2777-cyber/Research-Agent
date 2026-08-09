@@ -24,7 +24,7 @@ The application uses one codebase with separate build and runtime dimensions. Th
 | Runtime target | Current status | Credential and local-data boundary |
 | --- | --- | --- |
 | `local-web` | Active development target | Provider keys stay in the browser session; ChatGPT OAuth stays in Codex/keyring; Vault access is user-selected or loopback-only |
-| `desktop` | Electron host and unpacked/package build are available | Provider keys are encrypted with the OS credential service; streamed Provider requests run through protected IPC, while model discovery and MCP remain on an ephemeral loopback origin; subscription OAuth remains in Codex/keyring |
+| `desktop` | Electron host and unpacked/package build are available | Provider keys are encrypted with the OS credential service; streamed Provider requests and bounded read-only Vault access run through protected IPC, while model discovery and MCP remain on an ephemeral loopback origin; subscription OAuth remains in Codex/keyring |
 | `hosted-web` | Restricted profile only; not deployable yet | Local Vault, ChatGPT subscription OAuth, and local MCP are disabled until a separate multi-user backend is designed |
 
 Build mode (`development`, `test`, or `production`) is intentionally independent from runtime target.
@@ -79,6 +79,7 @@ Provider API credentials entered in the current Web prototype are intended for a
 - IndexedDB-backed Vault snapshot persistence and in-app Markdown note preview
 - Persistent browser directory handle with manual Vault rescan when File System Access API is available
 - Optional loopback-only local Vault adapter with 15-second revision polling and read-only Markdown access
+- Electron-owned Vault picker with opaque session capabilities, bounded Markdown scans, and filesystem change notifications
 - Account-aware ChatGPT model discovery through the official Codex app-server, with a six-hour metadata-only cache and manual refresh
 - Markdown-aware chunking, multilingual BM25 ranking, one-hop `[[wikilink]]` expansion, and per-note evidence diversification
 - Provider-neutral evidence packets injected into the user-selected ChatGPT answer model with numbered source citations

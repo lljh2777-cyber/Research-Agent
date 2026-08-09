@@ -19,6 +19,17 @@ const desktopApi = Object.freeze({
       return () => ipcRenderer.removeListener('providers:run-event', handler)
     },
   }),
+  vaults: Object.freeze({
+    select: () => ipcRenderer.invoke('vaults:select'),
+    sync: (vaultId, revision) => ipcRenderer.invoke('vaults:sync', vaultId, revision),
+    disconnect: (vaultId) => ipcRenderer.invoke('vaults:disconnect', vaultId),
+    onChanged: (listener) => {
+      if (typeof listener !== 'function') throw new TypeError('Vault change listener must be a function.')
+      const handler = (_event, payload) => listener(payload)
+      ipcRenderer.on('vaults:changed', handler)
+      return () => ipcRenderer.removeListener('vaults:changed', handler)
+    },
+  }),
 })
 
 contextBridge.exposeInMainWorld('researchDesktop', desktopApi)

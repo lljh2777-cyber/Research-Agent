@@ -41,6 +41,7 @@ import { buildVaultIndex, getVaultName, parseVaultDirectory, parseVaultFiles } f
 import KnowledgeGraphSection from './KnowledgeGraph.jsx'
 import { PipelinesSection, RunsSection } from './PipelineWorkspace.jsx'
 import SettingsWorkspace from './SettingsWorkspace.jsx'
+import { hasDesktopVaultBridge, onDesktopVaultChanged, selectDesktopVault, syncDesktopVault } from './desktopVault.js'
 import { loadLocalVault } from './localVault.js'
 import { chatgptCatalogToModels, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
 import { getProviderSessionKey, hydrateProviderSessionKeys, loadProviderConfigs, providerConfigsToModels, saveProviderConfigs } from './providerConfig.js'
@@ -819,6 +820,7 @@ function App() {
   const [vaultNotes, setVaultNotes] = useState([])
   const [vaultName, setVaultName] = useState('')
   const [vaultHandle, setVaultHandle] = useState(null)
+  const [vaultCapabilityId, setVaultCapabilityId] = useState('')
   const [vaultSource, setVaultSource] = useState('sample')
   const [localAdapterState, setLocalAdapterState] = useState('checking')
   const [localRevision, setLocalRevision] = useState('')
@@ -853,7 +855,8 @@ function App() {
   const runtimeReady = Boolean(runtimeCapabilities)
   const supportsLoopbackMcp = ['loopback', 'desktop-loopback'].includes(runtimeCapabilities?.mcp)
   const supportsChatgptSubscription = runtimeCapabilities?.chatgptSubscriptionOAuth === true
-  const supportsLocalVault = runtimeCapabilities?.localVault.available === true
+  const supportsDesktopVault = runtimeCapabilities?.localVault.preferred === 'desktop-ipc'
+  const supportsBrowserPickerVault = runtimeCapabilities?.localVault.adapters.includes('browser-picker') === true
   const supportsLoopbackVault = runtimeCapabilities?.localVault.adapters.includes('loopback-adapter') === true
   const activeResearchSession = researchSessions[activeTabId] || createResearchSession({ modelId: modelConfig.chatModelId, knowledgeBaseId: vaultName })
   const { phase, input, messages, running, activeStage, answerMode, retrievalPacket } = activeResearchSession
@@ -982,21 +985,39 @@ function App() {
   const inspectorNotes = activeHasVaultScope ? retrievalPacket ? retrievedNotes : vaultIndex.notes.length ? vaultIndex.linkedNotes : [] : []
   const inspectorSources = activeHasVaultScope ? retrievalPacket ? retrievedSources : vaultSources : []
 
-  const applyVault = async (notes, nextVaultName, { handle = null, source = 'manual', revision = '' } = {}) => {
-    if (!notes.length) {
-      setSyncState('empty')
-      return false
-    }
+  const applyVault = async (notes, nextVaultName, { capabilityId = '', handle = null, source = 'manual', revision = '' } = {}) => {
     setVaultNotes(notes)
     setVaultName(nextVaultName)
     setVaultHandle(handle)
+    setVaultCapabilityId(capabilityId)
     setVaultSource(source)
     setLocalRevision(revision)
     setResearchSessions((current) => Object.fromEntries(Object.entries(current).map(([id, session]) => [id, { ...session, retrievalPacket: null, answerMode: 'idle' }])))
     await saveVaultSnapshot({ vaultName: nextVaultName, notes, source, revision })
     if (handle) await saveVaultHandle(handle)
-    setSyncState(source === 'local-adapter' || handle ? 'ready' : 'manual')
+    setSyncState(notes.length ? (source === 'local-adapter' || source === 'desktop-ipc' || handle ? 'ready' : 'manual') : 'empty')
     return true
+  }
+
+  const syncFromDesktopVault = async (silent = false) => {
+    if (!vaultCapabilityId) return false
+    if (!silent) setSyncState('syncing')
+    try {
+      const payload = await syncDesktopVault({ vaultId: vaultCapabilityId, revision: localRevision })
+      if (payload.unchanged) {
+        setSyncState('ready')
+        return true
+      }
+      return applyVault(payload.notes || [], payload.vaultName || vaultName || 'local-vault', {
+        capabilityId: payload.vaultId,
+        source: 'desktop-ipc',
+        revision: payload.revision || '',
+      })
+    } catch {
+      setVaultCapabilityId('')
+      setSyncState(silent ? 'needs-permission' : 'error')
+      return false
+    }
   }
 
   const syncFromHandle = async (handle, requestPermission = false) => {
@@ -1050,8 +1071,30 @@ function App() {
   }
 
   const handleConnectVault = async () => {
-    if (await syncFromLocalAdapter()) return
-    if (typeof window.showDirectoryPicker === 'function') {
+    if (supportsDesktopVault) {
+      if (!hasDesktopVaultBridge()) {
+        setSyncState('error')
+        return
+      }
+      setSyncState('syncing')
+      try {
+        const payload = await selectDesktopVault()
+        if (payload?.cancelled) {
+          setSyncState(vaultNotes.length ? 'needs-permission' : 'manual')
+          return
+        }
+        await applyVault(payload.notes || [], payload.vaultName || 'local-vault', {
+          capabilityId: payload.vaultId,
+          source: 'desktop-ipc',
+          revision: payload.revision || '',
+        })
+      } catch {
+        setSyncState('error')
+      }
+      return
+    }
+    if (supportsLoopbackVault && await syncFromLocalAdapter()) return
+    if (supportsBrowserPickerVault && typeof window.showDirectoryPicker === 'function') {
       try {
         const handle = await window.showDirectoryPicker({ mode: 'read' })
         await syncFromHandle(handle, true)
@@ -1064,7 +1107,9 @@ function App() {
   }
 
   const handleSyncVault = async () => {
-    if (vaultSource === 'local-adapter') {
+    if (vaultSource === 'desktop-ipc' && vaultCapabilityId) {
+      await syncFromDesktopVault()
+    } else if (vaultSource === 'local-adapter') {
       await syncFromLocalAdapter()
     } else if (vaultHandle) {
       await syncFromHandle(vaultHandle, true)
@@ -1131,11 +1176,11 @@ function App() {
     let cancelled = false
     Promise.all([loadVaultSnapshot(), loadVaultHandle()]).then(async ([snapshot, handle]) => {
       if (cancelled) return
-      const localSynced = supportsLoopbackVault
+      const localSynced = !supportsDesktopVault && supportsLoopbackVault
         ? await syncFromLocalAdapter(true)
         : false
       if (localSynced || cancelled) return
-      if (supportsLocalVault && handle) {
+      if (supportsBrowserPickerVault && handle) {
         setVaultHandle(handle)
         const synced = await syncFromHandle(handle)
         if (synced || cancelled) return
@@ -1145,11 +1190,18 @@ function App() {
         setVaultName(snapshot.vaultName || getVaultName(snapshot.notes))
         setVaultSource(snapshot.source || (handle ? 'browser-handle' : 'manual'))
         setLocalRevision(snapshot.revision || '')
-        setSyncState(handle ? 'needs-permission' : 'manual')
+        setSyncState(supportsDesktopVault || handle ? 'needs-permission' : 'manual')
       }
     })
     return () => { cancelled = true }
-  }, [runtimeReady, supportsLocalVault, supportsLoopbackVault])
+  }, [runtimeReady, supportsBrowserPickerVault, supportsDesktopVault, supportsLoopbackVault])
+
+  useEffect(() => {
+    if (!supportsDesktopVault || !vaultCapabilityId) return undefined
+    return onDesktopVaultChanged(({ vaultId }) => {
+      if (vaultId === vaultCapabilityId) void syncFromDesktopVault(true)
+    })
+  }, [supportsDesktopVault, vaultCapabilityId, localRevision])
 
   useEffect(() => {
     if (!supportsLoopbackVault || vaultSource !== 'local-adapter') return undefined
@@ -1644,7 +1696,7 @@ function App() {
         onLogoutChatgpt={handleLogoutChatgpt}
         authError={authError}
       />
-      <input ref={vaultInputRef} className="visually-hidden" type="file" webkitdirectory="true" directory="true" multiple onChange={handleVaultSelection} />
+      {supportsBrowserPickerVault && <input ref={vaultInputRef} className="visually-hidden" type="file" webkitdirectory="true" directory="true" multiple onChange={handleVaultSelection} />}
       <main className="main-shell">
         <header className="topbar workspace-topbar">
           <WorkspaceTabs tabs={workspaceTabs} activeTabId={activeTabId} onSelect={handleSelectTab} onClose={handleCloseTab} onCreate={(kind) => openWorkspaceTab(kind, { forceNew: kind === 'research' || kind === 'graph' })} />

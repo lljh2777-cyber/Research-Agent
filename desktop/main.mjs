@@ -1,13 +1,14 @@
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { app, BrowserWindow, ipcMain, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
 
 import { startAuthServer } from '../server/auth-server.mjs'
 import { BUILD_MODES, createRuntimeManifest, RUNTIME_TARGETS } from '../shared/runtime-capabilities.mjs'
 import { createDesktopAppServer } from './app-server.mjs'
 import { EncryptedCredentialStore } from './credential-store.mjs'
 import { ProviderRunManager } from './provider-run-manager.mjs'
+import { DesktopVaultManager } from './vault-manager.mjs'
 
 const desktopDir = fileURLToPath(new URL('.', import.meta.url))
 const projectRoot = resolve(desktopDir, '..')
@@ -30,6 +31,7 @@ let ownedAuthServer
 let desktopOrigin = ''
 let credentialStore
 let providerRunManager
+let vaultManager
 
 function isTrustedLoopbackUrl(value) {
   try {
@@ -101,6 +103,28 @@ function registerIpc(runtimeManifest) {
     requireTrustedSender(event)
     return providerRunManager.cancel(event.sender.id, runId)
   })
+  ipcMain.handle('vaults:select', async (event) => {
+    requireTrustedSender(event)
+    const owner = BrowserWindow.fromWebContents(event.sender)
+    const options = {
+      title: 'Select an Obsidian Vault',
+      properties: ['openDirectory'],
+    }
+    const selection = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
+    if (selection.canceled || selection.filePaths.length !== 1) return { cancelled: true }
+    const ownerId = event.sender.id
+    return vaultManager.connect(ownerId, selection.filePaths[0], (payload) => {
+      if (!event.sender.isDestroyed()) event.sender.send('vaults:changed', payload)
+    })
+  })
+  ipcMain.handle('vaults:sync', (event, vaultId, revision) => {
+    requireTrustedSender(event)
+    return vaultManager.sync(event.sender.id, vaultId, revision)
+  })
+  ipcMain.handle('vaults:disconnect', (event, vaultId) => {
+    requireTrustedSender(event)
+    return vaultManager.disconnect(event.sender.id, vaultId)
+  })
 }
 
 async function createMainWindow() {
@@ -134,7 +158,10 @@ async function createMainWindow() {
   })
   mainWindow.once('ready-to-show', () => mainWindow.show())
   const ownerId = mainWindow.webContents.id
-  mainWindow.webContents.once('destroyed', () => providerRunManager?.cancelOwner(ownerId))
+  mainWindow.webContents.once('destroyed', () => {
+    providerRunManager?.cancelOwner(ownerId)
+    vaultManager?.cancelOwner(ownerId)
+  })
   await mainWindow.loadURL(devUrl || desktopOrigin)
 }
 
@@ -145,6 +172,10 @@ async function shutdown() {
   ipcMain.removeHandler('credentials:delete-provider-key')
   ipcMain.removeHandler('providers:start-run')
   ipcMain.removeHandler('providers:cancel-run')
+  ipcMain.removeHandler('vaults:select')
+  ipcMain.removeHandler('vaults:sync')
+  ipcMain.removeHandler('vaults:disconnect')
+  vaultManager?.close()
   await appServer?.close().catch(() => {})
   if (ownedAuthServer?.listening) await new Promise((resolveClose) => ownedAuthServer.close(resolveClose))
 }
@@ -176,6 +207,7 @@ else {
     providerRunManager = new ProviderRunManager({
       credentialResolver: (providerId, endpoint) => credentialStore.get(providerId, endpoint),
     })
+    vaultManager = new DesktopVaultManager()
     if (!devUrl) {
       appServer = createDesktopAppServer({
         rootDir: join(projectRoot, 'dist'),

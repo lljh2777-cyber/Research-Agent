@@ -31,8 +31,8 @@ const CAPABILITY_PROFILES = Object.freeze({
   [RUNTIME_TARGETS.DESKTOP]: Object.freeze({
     localVault: Object.freeze({
       available: true,
-      adapters: Object.freeze(['browser-picker', 'loopback-adapter']),
-      preferred: 'browser-picker',
+      adapters: Object.freeze(['desktop-ipc']),
+      preferred: 'desktop-ipc',
     }),
     credentials: Object.freeze({
       providerApiKeys: 'os-keychain',
