@@ -63,7 +63,10 @@ either error as source-backed evidence.
 
 `evidenceSources(packet)` returns one source per Note with `chunkIds`, preserving
 the reverse map from displayed source to every contributing evidence chunk.
-`search_vault` forwards each evidence item's `id`, `noteId`, and `source` unchanged.
+`search_vault` serializes the complete consumer packet envelope: `schemaVersion`,
+`query`, `question`, `retrieval`, `evidence`, `sources`, and `error`. Evidence
+items retain `id`, `noteId`, and `source`; `sources` retains every contributing
+`chunkIds` mapping even when excerpts are shortened for the tool result.
 
 ## Consumer impact
 
