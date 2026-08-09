@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bioresearch.local/schemas/worktree-status.schema.json",
+  "title": "BioResearch Worktree Task Status",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "task",
+    "branch",
+    "worktree",
+    "baseCommit",
+    "headCommit",
+    "state",
+    "currentStep",
+    "updatedAt",
+    "steps",
+    "contracts",
+    "tests",
+    "blockedBy",
+    "needsNotification",
+    "knownIssues",
+    "readyForIntegration"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "task": { "type": "string", "minLength": 1 },
+    "branch": { "type": "string", "minLength": 1 },
+    "worktree": { "type": "string", "minLength": 1 },
+    "baseCommit": { "type": ["string", "null"] },
+    "headCommit": { "type": ["string", "null"] },
+    "state": {
+      "enum": ["not_started", "in_progress", "blocked", "ready_for_integration", "integrated", "failed"]
+    },
+    "currentStep": { "type": ["string", "null"] },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "state"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "state": { "enum": ["not_started", "in_progress", "completed", "blocked"] },
+          "notes": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "contracts": {
+      "type": "object",
+      "required": ["changed", "files", "summary"],
+      "properties": {
+        "changed": { "type": "boolean" },
+        "files": { "type": "array", "items": { "type": "string" } },
+        "summary": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["command", "state", "summary"],
+        "properties": {
+          "command": { "type": "string" },
+          "state": { "enum": ["not_run", "running", "passed", "failed"] },
+          "summary": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "blockedBy": { "type": "array", "items": { "type": "string" } },
+    "needsNotification": { "type": "array", "items": { "type": "string" } },
+    "knownIssues": { "type": "array", "items": { "type": "string" } },
+    "readyForIntegration": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}
