@@ -85,3 +85,24 @@ test('resolves wikilinks by Vault suffix, basename, and heading', () => {
   })
   assert.equal(resolveWikilink(notes, notes[0], { target: 'missing-note' }).missing, true)
 })
+
+test('resolves relative wikilinks and frontmatter aliases through the Vault resolver', () => {
+  const overview = { id: 'research/notes/overview.md', path: 'research/notes/overview.md', title: 'Overview', body: '# Overview' }
+  const method = {
+    id: 'research/methods/cellchat.md',
+    path: 'research/methods/cellchat.md',
+    name: 'cellchat.md',
+    title: 'CellChat',
+    frontmatter: { aliases: ['Cell Chat method'] },
+    body: '# CellChat\n## Results\nDetails',
+  }
+  const notes = [overview, method]
+
+  assert.equal(resolveWikilink(notes, overview, { target: '../methods/cellchat' }).note, method)
+  assert.deepEqual(resolveWikilink(notes, overview, { target: 'Cell Chat method', heading: 'Results' }), {
+    note: method,
+    anchorId: 'heading-1',
+    missing: false,
+    missingHeading: false,
+  })
+})

@@ -1,5 +1,8 @@
 const WIKILINK_PATTERN = /\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g
 
+export const VAULT_NOTE_SCHEMA_VERSION = 1
+export const VAULT_INDEX_SCHEMA_VERSION = 1
+
 function cleanValue(value) {
   const trimmed = value.trim()
   if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
@@ -70,6 +73,80 @@ function isIgnoredPath(path) {
   return path.split('/').some((part) => part === '.obsidian' || part === '.trash' || part === 'node_modules')
 }
 
+export function normalizeVaultPath(value) {
+  const segments = String(value || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/\.md$/i, '')
+    .split('/')
+  const normalized = []
+  for (const segment of segments) {
+    if (!segment || segment === '.') continue
+    if (segment === '..') {
+      normalized.pop()
+    } else {
+      normalized.push(segment)
+    }
+  }
+  return normalized.join('/').toLocaleLowerCase()
+}
+
+export function parseWikilinkTarget(value) {
+  const raw = String(value || '').trim().replace(/^\[\[|\]\]$/g, '')
+  const destination = raw.split('|', 1)[0].trim()
+  const headingIndex = destination.indexOf('#')
+  return {
+    target: (headingIndex >= 0 ? destination.slice(0, headingIndex) : destination).trim(),
+    heading: headingIndex >= 0 ? destination.slice(headingIndex + 1).trim() : '',
+  }
+}
+
+function noteAliases(note) {
+  const rawAliases = note?.frontmatter?.aliases ?? note?.frontmatter?.alias ?? []
+  const values = Array.isArray(rawAliases) ? rawAliases : String(rawAliases).split(',')
+  return values.map((alias) => normalizeVaultPath(alias)).filter(Boolean)
+}
+
+function noteDirectory(note) {
+  const path = String(note?.path || note?.id || '').replace(/\\/g, '/')
+  const slashIndex = path.lastIndexOf('/')
+  return slashIndex >= 0 ? path.slice(0, slashIndex) : ''
+}
+
+export function resolveVaultWikilink(notes = [], sourceNote = null, value = '') {
+  const { target, heading } = parseWikilinkTarget(value)
+  if (!target) return { note: sourceNote || null, target, heading, reason: sourceNote ? null : 'missing' }
+
+  const targetPath = normalizeVaultPath(target)
+  const isRelative = /^(?:\.\/|\.\.\/)/.test(target.replace(/\\/g, '/'))
+  const relativePath = isRelative ? normalizeVaultPath(`${noteDirectory(sourceNote)}/${target}`) : ''
+  const notesByPath = new Map()
+  for (const note of notes) {
+    const path = normalizeVaultPath(note.path || note.id)
+    if (!notesByPath.has(path)) notesByPath.set(path, [])
+    notesByPath.get(path).push(note)
+  }
+  for (const path of [relativePath, targetPath].filter(Boolean)) {
+    const matches = notesByPath.get(path) || []
+    if (matches.length === 1) return { note: matches[0], target, heading, reason: null }
+    if (matches.length > 1) return { note: null, target, heading, reason: 'ambiguous' }
+  }
+
+  const targetBasename = targetPath.split('/').at(-1)
+  const candidates = notes.filter((note) => {
+    const aliases = [
+      normalizeVaultPath(note.title),
+      normalizeVaultPath(note.name || String(note.path || '').split('/').pop()),
+      normalizeVaultPath(note.path || note.id).split('/').at(-1),
+      ...noteAliases(note),
+    ]
+    return aliases.includes(targetPath) || aliases.includes(targetBasename)
+  })
+  if (candidates.length === 1) return { note: candidates[0], target, heading, reason: null }
+  return { note: null, target, heading, reason: candidates.length ? 'ambiguous' : 'missing' }
+}
+
 async function parseVaultEntries(entries) {
   const files = entries.filter((file) => /\.md$/i.test(file.name) && !isIgnoredPath(file.webkitRelativePath || file.name))
   const notes = await Promise.all(files.map(async (file) => {
@@ -79,6 +156,7 @@ async function parseVaultEntries(entries) {
     const wikilinks = extractWikilinks(markdown)
     const title = titleFromMarkdown(path, body, frontmatter)
     return {
+      schemaVersion: VAULT_NOTE_SCHEMA_VERSION,
       id: path,
       path,
       name: path.split('/').pop() || path,
@@ -125,32 +203,17 @@ export async function parseVaultDirectory(directoryHandle) {
   return parseVaultEntries(entries)
 }
 
-function normalizeTarget(target) {
-  return target
-    .replace(/\\/g, '/')
-    .replace(/^\.\//, '')
-    .replace(/\.md$/i, '')
-    .toLowerCase()
-}
-
 export function buildVaultIndex(notes) {
-  const byPath = new Map()
-  const byTitle = new Map()
-  notes.forEach((note) => {
-    byPath.set(normalizeTarget(note.path), note)
-    byTitle.set(normalizeTarget(note.title), note)
-    byTitle.set(normalizeTarget(note.name), note)
-  })
-
   const edges = []
   notes.forEach((note) => {
     note.wikilinks.forEach((target) => {
-      const destination = byPath.get(normalizeTarget(target)) || byTitle.get(normalizeTarget(target))
-      edges.push({ source: note, target: destination || { title: target, path: target, missing: true } })
+      const resolved = resolveVaultWikilink(notes, note, target)
+      edges.push({ source: note, target: resolved.note || { title: target, path: target, missing: true, reason: resolved.reason } })
     })
   })
 
   return {
+    schemaVersion: VAULT_INDEX_SCHEMA_VERSION,
     notes,
     edges,
     linkedNotes: notes.map((note) => ({

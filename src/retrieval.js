@@ -1,3 +1,8 @@
+import { resolveVaultWikilink } from './vault.js'
+
+export const RETRIEVAL_INDEX_SCHEMA_VERSION = 1
+export const EVIDENCE_PACKET_SCHEMA_VERSION = 1
+
 const WORD_PATTERN = /[\p{L}\p{N}]+(?:[-_.][\p{L}\p{N}]+)*/gu
 const CJK_PATTERN = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+$/u
 const HEADING_PATTERN = /^(#{1,6})\s+(.+)$/
@@ -125,22 +130,11 @@ export function chunkVaultNote(note, options = {}) {
   return chunks
 }
 
-function normalizeTarget(value) {
-  return normalizeText(value).replace(/\\/g, '/').replace(/^\.\//, '').replace(/\.md$/i, '')
-}
-
 function buildGraph(notes) {
-  const aliases = new Map()
   const graph = new Map(notes.map((note) => [note.id, new Set()]))
   notes.forEach((note) => {
-    aliases.set(normalizeTarget(note.path), note.id)
-    aliases.set(normalizeTarget(note.name || note.path.split('/').pop()), note.id)
-    aliases.set(normalizeTarget(note.title), note.id)
-  })
-
-  notes.forEach((note) => {
     for (const target of note.wikilinks || []) {
-      const targetId = aliases.get(normalizeTarget(target))
+      const targetId = resolveVaultWikilink(notes, note, target).note?.id
       if (!targetId || targetId === note.id) continue
       graph.get(note.id)?.add(targetId)
       graph.get(targetId)?.add(note.id)
@@ -181,6 +175,7 @@ export function buildRetrievalIndex(notes, options = {}) {
     ? chunks.reduce((total, chunk) => total + chunk.bodyTokens.length, 0) / chunks.length
     : 1
   return {
+    schemaVersion: RETRIEVAL_INDEX_SCHEMA_VERSION,
     notes,
     chunks,
     chunksByNote,
@@ -214,6 +209,12 @@ function toEvidence(candidate, maxScore) {
   return {
     id: candidate.chunk.id,
     noteId: candidate.chunk.noteId,
+    source: {
+      chunkId: candidate.chunk.id,
+      noteId: candidate.chunk.noteId,
+      path: candidate.chunk.path,
+      heading: candidate.chunk.heading || null,
+    },
     title: candidate.chunk.title,
     path: candidate.chunk.path,
     type: candidate.chunk.type,
@@ -227,16 +228,37 @@ function toEvidence(candidate, maxScore) {
 }
 
 export function retrieveEvidence(index, question, options = {}) {
+  const normalizedQuestion = typeof question === 'string' ? question : String(question || '')
   const topK = Math.min(50, Math.max(1, Number(options.topK) || 6))
   const threshold = Math.min(1, Math.max(0, Number(options.similarityThreshold) || 0))
   const expandWikilinks = options.expandWikilinks !== false
   const strategy = expandWikilinks ? 'bm25+wikilink' : 'bm25'
-  const queryTokens = tokenize(question)
-  if (!index?.chunks?.length || !queryTokens.length) {
+  const queryTokens = tokenize(normalizedQuestion)
+  if (!index || !Array.isArray(index.chunks)) {
     return {
-      question,
+      schemaVersion: EVIDENCE_PACKET_SCHEMA_VERSION,
+      question: normalizedQuestion,
       retrieval: { strategy, topK, candidateCount: 0, directCount: 0, graphExpanded: 0 },
       evidence: [],
+      error: { code: 'retrieval_index_unavailable', message: 'No retrieval index is available.' },
+    }
+  }
+  if (!queryTokens.length) {
+    return {
+      schemaVersion: EVIDENCE_PACKET_SCHEMA_VERSION,
+      question: normalizedQuestion,
+      retrieval: { strategy, topK, candidateCount: 0, directCount: 0, graphExpanded: 0 },
+      evidence: [],
+      error: { code: 'query_empty', message: 'The retrieval query does not contain searchable terms.' },
+    }
+  }
+  if (!index.chunks.length) {
+    return {
+      schemaVersion: EVIDENCE_PACKET_SCHEMA_VERSION,
+      question: normalizedQuestion,
+      retrieval: { strategy, topK, candidateCount: 0, directCount: 0, graphExpanded: 0 },
+      evidence: [],
+      error: null,
     }
   }
 
@@ -283,7 +305,8 @@ export function retrieveEvidence(index, question, options = {}) {
     if (evidence.length >= topK) break
   }
   return {
-    question,
+    schemaVersion: EVIDENCE_PACKET_SCHEMA_VERSION,
+    question: normalizedQuestion,
     retrieval: {
       strategy,
       topK,
@@ -292,6 +315,7 @@ export function retrieveEvidence(index, question, options = {}) {
       graphExpanded: evidence.filter((item) => item.relationship === 'wikilink').length,
     },
     evidence,
+    error: null,
   }
 }
 
@@ -329,11 +353,14 @@ export function buildEvidenceUserContext(packet) {
 
 export function evidenceSources(packet) {
   const sources = []
-  const seen = new Set()
+  const byNoteId = new Map()
   for (const item of packet?.evidence || []) {
-    if (seen.has(item.noteId)) continue
-    seen.add(item.noteId)
-    sources.push({
+    const existing = byNoteId.get(item.noteId)
+    if (existing) {
+      existing.chunkIds.push(item.id)
+      continue
+    }
+    const source = {
       id: item.noteId,
       name: item.path.split('/').pop() || item.path,
       title: item.title,
@@ -341,7 +368,10 @@ export function evidenceSources(packet) {
       kind: item.type === 'paper' ? 'paper' : 'note',
       score: item.score,
       relationship: item.relationship,
-    })
+      chunkIds: [item.id],
+    }
+    byNoteId.set(item.noteId, source)
+    sources.push(source)
   }
   return sources
 }

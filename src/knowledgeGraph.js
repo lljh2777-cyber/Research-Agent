@@ -1,3 +1,5 @@
+export const KNOWLEDGE_GRAPH_SCHEMA_VERSION = 1
+
 const GRAPH_WIDTH = 900
 const GRAPH_HEIGHT = 520
 const KNOWN_TYPES = new Set(['paper', 'method', 'concept', 'dataset', 'gene'])
@@ -91,6 +93,7 @@ export function createKnowledgeGraph(index) {
   const noteNodes = nodes.filter((node) => !node.missing)
 
   return {
+    schemaVersion: KNOWLEDGE_GRAPH_SCHEMA_VERSION,
     width: GRAPH_WIDTH,
     height: GRAPH_HEIGHT,
     nodes,

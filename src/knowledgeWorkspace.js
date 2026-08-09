@@ -1,3 +1,5 @@
+import { resolveVaultWikilink } from './vault.js'
+
 export const DEFAULT_DOCK_LAYOUT = Object.freeze({
   left: ['files', 'outline', 'tags'],
   right: ['graph', 'web', 'plugins'],
@@ -37,15 +39,6 @@ export function extractMarkdownOutline(markdown = '') {
   })
 }
 
-const normalizeWikilinkPath = (value = '') => String(value)
-  .trim()
-  .replace(/\\/g, '/')
-  .replace(/^\/+|\/+$/g, '')
-  .replace(/\.md$/i, '')
-  .toLocaleLowerCase()
-
-const wikilinkBasename = (value = '') => normalizeWikilinkPath(value).split('/').at(-1) || ''
-
 export function parseWikilinks(value = '') {
   const text = String(value)
   const segments = []
@@ -71,20 +64,10 @@ export function parseWikilinks(value = '') {
 }
 
 export function resolveWikilink(notes = [], currentNote = null, link = {}) {
-  const targetPath = normalizeWikilinkPath(link.target)
-  let note = currentNote
-
-  if (targetPath) {
-    note = notes.find((candidate) => {
-      const candidatePath = normalizeWikilinkPath(candidate.path || candidate.id)
-      return candidatePath === targetPath || candidatePath.endsWith(`/${targetPath}`)
-    }) || notes.find((candidate) => {
-      const names = [candidate.title, candidate.name, candidate.path, candidate.id].map(wikilinkBasename)
-      return names.includes(wikilinkBasename(targetPath))
-    }) || null
-  }
-
-  const heading = String(link.heading || '').trim()
+  const raw = link.raw || `[[${String(link.target || '')}${link.heading ? `#${link.heading}` : ''}]]`
+  const resolved = resolveVaultWikilink(notes, currentNote, raw)
+  const note = resolved.note
+  const heading = resolved.heading || String(link.heading || '').trim()
   const outlineHeading = note && heading
     ? extractMarkdownOutline(note.body).find((item) => item.title.toLocaleLowerCase() === heading.toLocaleLowerCase())
     : null

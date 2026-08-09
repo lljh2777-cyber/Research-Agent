@@ -25,6 +25,7 @@ function normalizeStoredNote(value, index) {
     ? [...new Set(value.wikilinks.filter((target) => typeof target === 'string' && target.trim()).map((target) => target.trim()))]
     : extractWikilinks(body)
   return {
+    schemaVersion: 1,
     id: typeof value.id === 'string' && value.id ? value.id : path,
     path,
     name,
