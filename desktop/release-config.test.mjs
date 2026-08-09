@@ -13,6 +13,7 @@ test('desktop release metadata is explicit and local-first', () => {
   assert.equal(config.asar, true)
   assert.equal(config.electronDist, 'node_modules/electron/dist')
   assert.equal(config.publish, undefined)
+  assert.match(packageJson.scripts['dist:desktop'], /--publish never$/)
 })
 
 test('Windows installer stays per-user and produces deterministic artifacts', () => {
