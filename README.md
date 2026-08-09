@@ -37,11 +37,12 @@ The desktop target reuses the same React application and starts it inside a hard
 npm run dev:desktop       # Vite on loopback + Electron
 npm run build:desktop     # unpacked desktop application under release/
 npm run dist:desktop      # platform installer/package under release/
+npm run verify:desktop    # validate packaged layout and secret exclusions
 ```
 
 The renderer has no Node.js integration and receives only a narrow preload API. Existing provider keys are never returned to the renderer: Electron encrypts them with the operating-system credential service, binds each saved key to the endpoint origins confirmed when it was entered, and resolves it inside the desktop Provider adapter only for those origins. Changing a provider to a new gateway therefore requires entering its key again. The static application, Provider adapter, and MCP adapter use a random `127.0.0.1` port with exact Host/Origin checks. ChatGPT subscription login still requires the official `codex` executable and keeps OAuth credentials in Codex's keyring.
 
-Desktop packages are currently unsigned development artifacts. Production distribution still requires platform signing, release provenance, and installer testing. API keys must never be embedded in the application bundle or supplied through `VITE_*` variables, because Vite variables are readable by the renderer.
+Desktop packaging reuses the platform-specific Electron runtime installed by `npm ci`, avoiding a second extraction step and making local and CI packaging deterministic. The manual `Desktop package` GitHub Actions workflow builds a seven-day unsigned Windows artifact for review. Production distribution still requires platform signing, release provenance, and installer testing. API keys must never be embedded in the application bundle or supplied through `VITE_*` variables, because Vite variables are readable by the renderer.
 
 ## Testing
 
@@ -50,6 +51,7 @@ npm test                 # existing Node tests + Vitest unit and provider contra
 npm run test:desktop     # desktop host and encrypted-credential boundary tests
 npm run test:e2e         # Playwright local-Web smoke tests
 npm run build            # production bundle
+npm run verify:desktop   # inspect an unpacked desktop artifact
 npm run test:all         # all of the above
 ```
 

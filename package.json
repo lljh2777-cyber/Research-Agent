@@ -15,11 +15,12 @@
     "build": "vite build",
     "build:desktop": "npm run build && electron-builder --dir",
     "dist:desktop": "npm run build && electron-builder",
+    "verify:desktop": "node desktop/release-verifier.mjs",
     "test": "npm run test:legacy && npm run test:unit && npm run test:contracts && npm run test:desktop",
     "test:legacy": "node --test shared/bailian-provider.test.mjs shared/deepseek-provider.test.mjs server/auth-server.test.mjs server/mcp-api.test.mjs server/mcp-runtime.test.mjs server/provider-api.test.mjs server/provider-errors.test.mjs server/provider-runtime.test.mjs src/agentPresets.test.js src/authClient.test.js src/conversationContext.test.js src/desktopVault.test.js src/knowledgeGraph.test.js src/knowledgeWorkspace.test.js src/mcpConfig.test.js src/mcpRuntimeClient.test.js src/modelConfig.test.js src/pipelineEngine.test.js src/providerAgent.test.js src/providerConfig.test.js src/providerRuntimeClient.test.js src/researchTools.test.js src/retrieval.test.js src/toolRegistry.test.js src/workspacePersistence.test.js src/workspaceTabs.test.js",
     "test:unit": "vitest run tests/unit",
     "test:contracts": "vitest run tests/contracts",
-    "test:desktop": "node --test desktop/credential-store.test.mjs desktop/provider-run-manager.test.mjs desktop/vault-manager.test.mjs desktop/app-server.test.mjs",
+    "test:desktop": "node --test desktop/credential-store.test.mjs desktop/provider-run-manager.test.mjs desktop/vault-manager.test.mjs desktop/app-server.test.mjs desktop/release-config.test.mjs desktop/release-verifier.test.mjs",
     "test:e2e": "playwright test",
     "test:all": "npm test && npm run test:e2e && npm run build",
     "test:auth": "node --test server/auth-server.test.mjs",
@@ -32,6 +33,7 @@
     "@modelcontextprotocol/client": "2.0.0"
   },
   "devDependencies": {
+    "@electron/asar": "^3.4.1",
     "@playwright/test": "^1.62.1",
     "@vitejs/plugin-react": "latest",
     "electron": "^39.2.7",
@@ -45,7 +47,10 @@
   "build": {
     "appId": "io.bioresearch.os",
     "productName": "BioResearch OS",
+    "artifactName": "BioResearch-OS-${version}-${os}-${arch}.${ext}",
     "asar": true,
+    "compression": "normal",
+    "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "release"
     },
@@ -59,9 +64,24 @@
       "package.json"
     ],
     "win": {
+      "executableName": "BioResearch OS",
+      "requestedExecutionLevel": "asInvoker",
       "target": [
-        "nsis"
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "BioResearch OS",
+      "uninstallDisplayName": "BioResearch OS"
     },
     "mac": {
       "target": [
@@ -69,6 +89,8 @@
       ]
     },
     "linux": {
+      "category": "Science",
+      "executableName": "bioresearch-os",
       "target": [
         "AppImage"
       ]
