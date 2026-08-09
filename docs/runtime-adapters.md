@@ -4,13 +4,30 @@ The React application is Web-first. Business features use the adapter returned b
 
 ## Boundary
 
-The adapter owns five runtime surfaces:
+Runtime Adapter v1 owns these stable runtime surfaces:
 
-- `api`: HTTP transport used by ChatGPT, Provider, MCP, Vault, and runtime-manifest clients.
-- `vault`: loopback loading, browser folder selection and parsing, plus the optional Electron Vault bridge.
-- `credentials`: browser-session Provider keys or opaque OS-keychain operations.
-- `providerRuns`: optional Electron-owned streaming runs.
+- `api.fetch(input, init)`: the low-level HTTP transport. It returns `Response` and passes an `AbortSignal` in `init` unchanged.
+- `vault.selectDirectory()`, `syncDirectory(handle, options)`, and `parseSelectedFiles(files)`: browser directory and file access. `loadLoopback({ revision, timeout, signal })` and `probeLoopback({ timeout, signal })` return normalized payloads; the supplied signal is combined with the adapter timeout.
+- `credentials.read/write` for Web session credentials, or `hasProviderKey/setProviderKey/deleteProviderKey` for opaque desktop keychain operations.
+- `storage.readLocal/writeLocal/removeLocal`: browser-local configuration persistence with an optional injected storage target for tests.
+- `providers.discoverModels({ providerId, endpoint, apiKey, signal })` and `providers.streamResponse({ providerId, endpoint, endpointType, apiKey, model, messages, options, signal })`: Web Provider HTTP transport. Both return `Response`; stream parsing and display remain client/domain behavior.
+- `mcp.bootstrap({ signal })` and `mcp.request({ path, body, runtimeToken, signal })`: MCP loopback transport. Both return `Response`; the MCP client owns token lifecycle and response normalization.
+- `providerRuns`: optional Electron-owned streaming runs with `available`, `start`, `cancel`, and `onEvent`.
+- `researchRuns`: replayable run transport, including `follow(runId, after, signal)` for abortable SSE.
 - `dataFiles`: browser downloads or native Electron backup dialogs.
+- `runtime.getManifest()` and `browser` utilities for capability discovery, popup access, and timers.
+
+Every capability is present as a stable property. Unsupported optional operations remain callable but either expose `available`/`native`/`hasDesktopBridge` as `false` or reject with a clear "unavailable" error; consumers must not probe browser globals or preload APIs directly.
+
+## Request, error, and cancellation contract
+
+Adapter transport methods deliberately return raw `Response` values. Their corresponding client modules normalize non-OK responses into domain errors, preserving server messages when available. Browser directory permission outcomes are returned as data (`{ permission, notes, handle }`), not thrown for a denied grant. Desktop-only operations reject when no allowlisted preload capability exists.
+
+All long-lived network methods accept an optional `AbortSignal`. Provider and MCP signals are passed to `fetch`; Vault signals are composed with the existing bounded timeout, so either cancellation source stops the request. No Adapter method silently retries or changes a caller-supplied signal.
+
+## Stable UI mock
+
+UI and client tests can create the complete Web contract with `createWebRuntimeAdapter({ windowRef, fetchImpl, env })`. Supply only a fake `windowRef` and `fetchImpl`; the factory returns the same frozen v1 surface used in production, including disabled desktop capabilities. This is the supported mock boundary; tests should not construct `window.researchDesktop` or replace individual browser globals in business components.
 
 Pure research logic, retrieval, pipelines, configuration normalization, and React presentation stay runtime-independent.
 

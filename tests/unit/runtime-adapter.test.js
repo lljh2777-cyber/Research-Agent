@@ -32,6 +32,7 @@ describe('runtime adapters', () => {
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     const windowRef = {
       sessionStorage: storage,
+      localStorage: storage,
       setTimeout,
       clearTimeout,
       showDirectoryPicker: vi.fn(async () => ({ name: 'picked-vault' })),
@@ -40,6 +41,8 @@ describe('runtime adapters', () => {
 
     adapter.credentials.write('provider-keys', '{"deepseek":"session-secret"}')
     expect(adapter.credentials.read('provider-keys')).toContain('session-secret')
+    adapter.storage.writeLocal('provider-config', '{"deepseek":true}')
+    expect(adapter.storage.readLocal('provider-config')).toContain('deepseek')
     await expect(adapter.vault.selectDirectory()).resolves.toEqual({ handle: { name: 'picked-vault' } })
 
     const snapshot = await adapter.vault.loadLoopback({ revision: 'old' })
@@ -63,6 +66,41 @@ describe('runtime adapters', () => {
       '/api/research/runs/run-web/tool-results',
       expect.objectContaining({ method: 'POST', body: JSON.stringify({ requestId: 'request-1', result: { content: '{}' } }) }),
     )
+  })
+
+  it('exposes stable Provider and MCP Web transports and composes Vault cancellation', async () => {
+    const fetchImpl = vi.fn(async () => new Response('{}', {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    const adapter = createWebRuntimeAdapter({
+      fetchImpl,
+      env: {},
+      windowRef: { setTimeout, clearTimeout },
+    })
+    const controller = new AbortController()
+
+    await adapter.providers.discoverModels({
+      providerId: 'deepseek', endpoint: 'https://api.deepseek.com', apiKey: 'session-key', signal: controller.signal,
+    })
+    await adapter.providers.streamResponse({
+      providerId: 'deepseek', endpoint: 'https://api.deepseek.com', model: 'deepseek-chat', messages: [], options: {}, signal: controller.signal,
+    })
+    await adapter.mcp.bootstrap({ signal: controller.signal })
+    await adapter.mcp.request({ path: '/api/mcp/sessions/connect', body: { server: { id: 'bio' } }, runtimeToken: 'runtime-token', signal: controller.signal })
+    await adapter.vault.probeLoopback({ signal: controller.signal })
+
+    const modelCall = fetchImpl.mock.calls.find(([url]) => url === '/api/providers/models')
+    expect(JSON.parse(modelCall[1].body)).toMatchObject({ providerId: 'deepseek', apiKey: 'session-key' })
+    expect(modelCall[1].signal).toBe(controller.signal)
+    const streamCall = fetchImpl.mock.calls.find(([url]) => url === '/api/providers/responses/stream')
+    expect(streamCall[1].headers.Accept).toBe('text/event-stream')
+    const mcpCall = fetchImpl.mock.calls.find(([url]) => url === '/api/mcp/sessions/connect')
+    expect(mcpCall[1].headers['x-bioresearch-runtime-token']).toBe('runtime-token')
+    const vaultCall = fetchImpl.mock.calls.find(([url]) => url === 'http://127.0.0.1:4317/api/health')
+    expect(vaultCall[1].signal).toBeInstanceOf(AbortSignal)
+    controller.abort()
+    expect(vaultCall[1].signal.aborted).toBe(true)
   })
 
   it('replaces only runtime operations when an Electron preload bridge exists', async () => {

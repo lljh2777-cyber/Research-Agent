@@ -140,23 +140,28 @@ export function normalizeProviderConfigs(value) {
   return defaults
 }
 
-export function loadProviderConfigs(storage = globalThis.window?.localStorage) {
+export function loadProviderConfigs(storage) {
   try {
-    return normalizeProviderConfigs(JSON.parse(storage?.getItem(CONFIG_STORAGE_KEY) || 'null'))
+    const serialized = storage
+      ? storage.getItem(CONFIG_STORAGE_KEY)
+      : getRuntimeAdapter().storage.readLocal(CONFIG_STORAGE_KEY)
+    return normalizeProviderConfigs(JSON.parse(serialized || 'null'))
   } catch {
     return createDefaultProviderConfigs()
   }
 }
 
-export function saveProviderConfigs(configs, storage = globalThis.window?.localStorage) {
+export function saveProviderConfigs(configs, storage) {
   try {
-    storage?.setItem(CONFIG_STORAGE_KEY, JSON.stringify(normalizeProviderConfigs(configs)))
+    const serialized = JSON.stringify(normalizeProviderConfigs(configs))
+    if (storage) storage.setItem(CONFIG_STORAGE_KEY, serialized)
+    else getRuntimeAdapter().storage.writeLocal(CONFIG_STORAGE_KEY, serialized)
   } catch {
     // Persistence is optional in restricted browser contexts.
   }
 }
 
-export function loadProviderSessionKeys(storage = globalThis.window?.sessionStorage) {
+export function loadProviderSessionKeys(storage) {
   const credentials = credentialAdapter()
   if (credentials.mode === 'os-keychain') return { ...desktopProviderKeys }
   try {
@@ -174,7 +179,7 @@ export function providerCredentialEndpoints(providerId, config) {
   return config.endpoint ? [config.endpoint] : []
 }
 
-export function saveProviderSessionKeys(keys, storage = globalThis.window?.sessionStorage, endpointScopes = {}) {
+export function saveProviderSessionKeys(keys, storage, endpointScopes = {}) {
   const normalized = normalizeProviderKeys(keys)
   const credentials = credentialAdapter()
   if (credentials.mode === 'os-keychain') {
@@ -220,13 +225,19 @@ export async function getProviderSessionKey(providerId) {
   return loadProviderSessionKeys()[providerId] || ''
 }
 
-export async function fetchProviderModels({ providerId, endpoint, apiKey, signal }, fetchImpl = (...args) => getRuntimeAdapter().api.fetch(...args)) {
-  const response = await fetchImpl('/api/providers/models', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ providerId, endpoint, apiKey: credentialAdapter().mode === 'os-keychain' && apiKey === DESKTOP_STORED_KEY ? '' : apiKey }),
+export async function fetchProviderModels({ providerId, endpoint, apiKey, signal }, fetchImpl) {
+  const request = {
+    providerId,
+    endpoint,
+    apiKey: credentialAdapter().mode === 'os-keychain' && apiKey === DESKTOP_STORED_KEY ? '' : apiKey,
     signal,
-  })
+  }
+  const { signal: requestSignal, ...requestBody } = request
+  const response = fetchImpl
+    ? await fetchImpl('/api/providers/models', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody), signal: requestSignal,
+    })
+    : await getRuntimeAdapter().providers.discoverModels(request)
   const contentType = response.headers.get('content-type') || ''
   const payload = contentType.includes('application/json')
     ? await response.json().catch(() => ({}))
