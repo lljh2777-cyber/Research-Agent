@@ -464,22 +464,31 @@ async function providerResponseError(response) {
   return runtimeError(`Provider request failed: ${String(detail).slice(0, 500)}`, response.status >= 400 && response.status < 500 ? 400 : 502)
 }
 
+export function createProviderRequestSignal(signal, timeoutMs = REQUEST_TIMEOUT_MS) {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs)
+  return {
+    signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
+    timeoutSignal,
+  }
+}
+
 export async function* streamProviderChat(input, fetchImpl = fetch) {
   const request = buildProviderChatRequest(input)
   const runId = randomUUID()
   yield { type: 'run.started', runId, providerId: input.providerId, model: input.model, endpointType: request.protocol }
   let response
+  const { signal: requestSignal, timeoutSignal } = createProviderRequestSignal(input.signal)
   try {
     response = await fetchImpl(request.url, {
       method: 'POST',
       headers: request.headers,
       body: JSON.stringify(request.body),
-      signal: input.signal || AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: requestSignal,
     })
   } catch (error) {
-    if (error?.name === 'AbortError') throw error
-    const message = error?.name === 'TimeoutError' ? 'The provider response timed out.' : `Could not reach the provider endpoint: ${error?.message || 'network request failed'}`
-    throw runtimeError(message, error?.name === 'TimeoutError' ? 504 : 502)
+    if (input.signal?.aborted) throw Object.assign(new Error('Generation stopped.'), { name: 'AbortError' })
+    if (timeoutSignal.aborted || error?.name === 'TimeoutError') throw runtimeError('The provider response timed out.', 504)
+    throw runtimeError(`Could not reach the provider endpoint: ${error?.message || 'network request failed'}`, 502)
   }
   if (!response.ok) throw await providerResponseError(response)
 

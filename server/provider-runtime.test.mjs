@@ -1,12 +1,27 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildBailianResponseResourceRequest, buildProviderChatRequest, streamProviderChat } from './provider-runtime.mjs'
+import { buildBailianResponseResourceRequest, buildProviderChatRequest, createProviderRequestSignal, streamProviderChat } from './provider-runtime.mjs'
 
 const messages = [
   { role: 'system', content: 'Use vault evidence.' },
   { role: 'user', content: 'Summarize this result.' },
 ]
+
+test('combines caller cancellation with an independent provider timeout', async () => {
+  const caller = new AbortController()
+  const combined = createProviderRequestSignal(caller.signal, 10)
+  assert.equal(combined.signal.aborted, false)
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(combined.timeoutSignal.aborted, true)
+  assert.equal(combined.signal.aborted, true)
+
+  const cancelled = new AbortController()
+  const callerCombined = createProviderRequestSignal(cancelled.signal, 1_000)
+  cancelled.abort()
+  assert.equal(callerCombined.signal.aborted, true)
+  assert.equal(callerCombined.timeoutSignal.aborted, false)
+})
 
 const vaultTool = {
   name: 'search_vault',

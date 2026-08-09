@@ -20,7 +20,7 @@ test('hydrates and persists desktop provider keys through the narrow credential 
     assert.equal(credentials.has('deepseek'), false)
     assert.equal(credentials.get('bailian'), 'new-secret')
     assert.deepEqual(credentials.get('bailian:endpoints'), ['https://dashscope.aliyuncs.com/compatible-mode/v1'])
-    assert.equal(await getProviderSessionKey('bailian'), 'new-secret')
+    assert.equal(await getProviderSessionKey('bailian'), '')
 
     let requestBody
     await fetchProviderModels({ providerId: 'deepseek', endpoint: 'https://api.deepseek.com', apiKey: DESKTOP_STORED_KEY }, async (_url, options) => {

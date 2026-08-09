@@ -1,4 +1,5 @@
 import { appendProviderRoute, buildBailianResponseResourceRequest, cleanProviderBaseUrl, streamProviderChat } from './provider-runtime.mjs'
+import { normalizeProviderError } from './provider-errors.mjs'
 import { withDeepSeekModelProfile } from '../shared/deepseek-provider.mjs'
 import { BAILIAN_OFFICIAL_MODELS, withBailianModelProfile } from '../shared/bailian-provider.mjs'
 
@@ -189,10 +190,11 @@ function sendEvent(response, event) {
   response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
 }
 
-export function createProviderApiMiddleware({ fetchImpl = fetch, credentialResolver } = {}) {
+export function createProviderApiMiddleware({ fetchImpl = fetch, credentialResolver, allowStreaming = true } = {}) {
   return async function providerApiMiddleware(request, response, next) {
     const path = new URL(request.url || '/', 'http://localhost').pathname
     if (!['/api/providers/models', '/api/providers/responses/stream', '/api/providers/bailian/responses/resource'].includes(path)) return next()
+    if (path === '/api/providers/responses/stream' && !allowStreaming) return sendJson(response, 404, { error: 'Desktop provider streams use the protected IPC runtime.' })
     if (request.method !== 'POST') {
       response.setHeader('Allow', 'POST')
       return sendJson(response, 405, { error: 'Method not allowed.' })
@@ -219,7 +221,7 @@ export function createProviderApiMiddleware({ fetchImpl = fetch, credentialResol
             if (!response.destroyed) sendEvent(response, event)
           }
         } catch (error) {
-          if (!response.destroyed && error?.name !== 'AbortError') sendEvent(response, { type: 'run.failed', error: error?.message || 'Provider request failed.' })
+          if (!response.destroyed && error?.name !== 'AbortError') sendEvent(response, { type: 'run.failed', error: normalizeProviderError(error) })
         }
         if (!response.destroyed) response.end()
         return

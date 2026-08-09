@@ -39,7 +39,7 @@ const CAPABILITY_PROFILES = Object.freeze({
       subscriptionOAuth: 'os-keychain',
     }),
     chatgptSubscriptionOAuth: true,
-    providerTransport: 'desktop-loopback',
+    providerTransport: 'desktop-ipc',
     mcp: 'desktop-loopback',
   }),
   [RUNTIME_TARGETS.HOSTED_WEB]: Object.freeze({

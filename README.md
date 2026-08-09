@@ -24,7 +24,7 @@ The application uses one codebase with separate build and runtime dimensions. Th
 | Runtime target | Current status | Credential and local-data boundary |
 | --- | --- | --- |
 | `local-web` | Active development target | Provider keys stay in the browser session; ChatGPT OAuth stays in Codex/keyring; Vault access is user-selected or loopback-only |
-| `desktop` | Electron host and unpacked/package build are available | Provider keys are encrypted with the OS credential service and resolved only inside the desktop host; subscription OAuth remains in Codex/keyring; Provider and MCP adapters stay on an ephemeral loopback origin |
+| `desktop` | Electron host and unpacked/package build are available | Provider keys are encrypted with the OS credential service; streamed Provider requests run through protected IPC, while model discovery and MCP remain on an ephemeral loopback origin; subscription OAuth remains in Codex/keyring |
 | `hosted-web` | Restricted profile only; not deployable yet | Local Vault, ChatGPT subscription OAuth, and local MCP are disabled until a separate multi-user backend is designed |
 
 Build mode (`development`, `test`, or `production`) is intentionally independent from runtime target.

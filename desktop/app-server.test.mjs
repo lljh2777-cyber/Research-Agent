@@ -42,6 +42,14 @@ test('serves the desktop bundle, resolves credentials server-side, and rejects c
     assert.equal(models.status, 200)
     assert.equal(upstreamAuthorization, 'Bearer desktop-secret')
 
+    const stream = await fetch(`${origin}/api/providers/responses/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: origin },
+      body: JSON.stringify({ providerId: 'deepseek', endpoint: 'https://api.deepseek.com', model: 'deepseek-chat', messages: [{ role: 'user', content: 'test' }] }),
+    })
+    assert.equal(stream.status, 404)
+    assert.match((await stream.json()).error, /protected IPC runtime/)
+
     const rejected = await fetch(`${origin}/api/runtime`, { headers: { Origin: 'https://attacker.example' } })
     assert.equal(rejected.status, 403)
   } finally {

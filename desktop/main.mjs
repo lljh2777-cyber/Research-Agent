@@ -7,6 +7,7 @@ import { startAuthServer } from '../server/auth-server.mjs'
 import { BUILD_MODES, createRuntimeManifest, RUNTIME_TARGETS } from '../shared/runtime-capabilities.mjs'
 import { createDesktopAppServer } from './app-server.mjs'
 import { EncryptedCredentialStore } from './credential-store.mjs'
+import { ProviderRunManager } from './provider-run-manager.mjs'
 
 const desktopDir = fileURLToPath(new URL('.', import.meta.url))
 const projectRoot = resolve(desktopDir, '..')
@@ -28,6 +29,7 @@ let appServer
 let ownedAuthServer
 let desktopOrigin = ''
 let credentialStore
+let providerRunManager
 
 function isTrustedLoopbackUrl(value) {
   try {
@@ -88,6 +90,17 @@ function registerIpc(runtimeManifest) {
     await credentialStore.delete(providerId)
     return { ok: true }
   })
+  ipcMain.handle('providers:start-run', (event, input) => {
+    requireTrustedSender(event)
+    const ownerId = event.sender.id
+    return providerRunManager.start(ownerId, input, (payload) => {
+      if (!event.sender.isDestroyed()) event.sender.send('providers:run-event', payload)
+    })
+  })
+  ipcMain.handle('providers:cancel-run', (event, runId) => {
+    requireTrustedSender(event)
+    return providerRunManager.cancel(event.sender.id, runId)
+  })
 }
 
 async function createMainWindow() {
@@ -120,6 +133,8 @@ async function createMainWindow() {
     if (!trusted) event.preventDefault()
   })
   mainWindow.once('ready-to-show', () => mainWindow.show())
+  const ownerId = mainWindow.webContents.id
+  mainWindow.webContents.once('destroyed', () => providerRunManager?.cancelOwner(ownerId))
   await mainWindow.loadURL(devUrl || desktopOrigin)
 }
 
@@ -128,6 +143,8 @@ async function shutdown() {
   ipcMain.removeHandler('credentials:has-provider-key')
   ipcMain.removeHandler('credentials:set-provider-key')
   ipcMain.removeHandler('credentials:delete-provider-key')
+  ipcMain.removeHandler('providers:start-run')
+  ipcMain.removeHandler('providers:cancel-run')
   await appServer?.close().catch(() => {})
   if (ownedAuthServer?.listening) await new Promise((resolveClose) => ownedAuthServer.close(resolveClose))
 }
@@ -155,6 +172,9 @@ else {
       filePath: join(app.getPath('userData'), 'provider-credentials.json'),
       encrypt: async (value) => safeStorage.encryptString(value).toString('base64'),
       decrypt: async (value) => safeStorage.decryptString(Buffer.from(value, 'base64')),
+    })
+    providerRunManager = new ProviderRunManager({
+      credentialResolver: (providerId, endpoint) => credentialStore.get(providerId, endpoint),
     })
     if (!devUrl) {
       appServer = createDesktopAppServer({

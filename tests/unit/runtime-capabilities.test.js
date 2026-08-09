@@ -41,7 +41,7 @@ describe('runtime capability matrix', () => {
 
     expect(manifest.buildMode).toBe(BUILD_MODES.DEVELOPMENT)
     expect(manifest.capabilities.credentials.providerApiKeys).toBe('os-keychain')
-    expect(manifest.capabilities.providerTransport).toBe('desktop-loopback')
+    expect(manifest.capabilities.providerTransport).toBe('desktop-ipc')
     expect(manifest.capabilities.localVault.preferred).toBe('browser-picker')
     expect(manifest.capabilities.mcp).toBe('desktop-loopback')
   })

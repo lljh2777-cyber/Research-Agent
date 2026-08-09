@@ -62,7 +62,7 @@ export function createDesktopAppServer({ rootDir, runtimeManifest, fetchImpl = f
   const middlewares = [
     createRuntimeApiMiddleware({ manifest: runtimeManifest }),
     mcpApi,
-    createProviderApiMiddleware({ fetchImpl, credentialResolver }),
+    createProviderApiMiddleware({ fetchImpl, credentialResolver, allowStreaming: false }),
   ]
   let expectedOrigin = ''
 

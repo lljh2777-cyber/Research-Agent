@@ -842,7 +842,7 @@ function App() {
   const [pipelineRunningId, setPipelineRunningId] = useState(null)
   const [selectedPipelineRunId, setSelectedPipelineRunId] = useState(null)
   const vaultInputRef = useRef(null)
-  const requestAbortRef = useRef(null)
+  const requestAbortControllersRef = useRef(new Map())
   const pipelineRunTimerRef = useRef(null)
   const mockRunTimersRef = useRef(new Map())
   const toolApprovalResolverRef = useRef(null)
@@ -1219,7 +1219,8 @@ function App() {
 
   const handleCloseTab = useCallback((tabId) => {
     const closingSession = researchSessions[tabId]
-    if (closingSession?.running) requestAbortRef.current?.abort()
+    if (closingSession?.running) requestAbortControllersRef.current.get(tabId)?.abort()
+    requestAbortControllersRef.current.delete(tabId)
     const timers = mockRunTimersRef.current.get(tabId) || []
     timers.forEach((timer) => window.clearTimeout(timer))
     mockRunTimersRef.current.delete(tabId)
@@ -1388,7 +1389,7 @@ function App() {
     if (live) {
       const assistantId = `assistant-${Date.now()}`
       const controller = new AbortController()
-      requestAbortRef.current = controller
+      requestAbortControllersRef.current.set(sessionId, controller)
       updateResearchSession(sessionId, (current) => ({
         ...current,
         runMode: 'live',
@@ -1518,7 +1519,7 @@ function App() {
           } : message),
         }))
       } finally {
-        if (requestAbortRef.current === controller) requestAbortRef.current = null
+        if (requestAbortControllersRef.current.get(sessionId) === controller) requestAbortControllersRef.current.delete(sessionId)
         updateResearchSession(sessionId, { running: false, runMode: 'mock' })
       }
       return
@@ -1546,7 +1547,7 @@ function App() {
   }
 
   const handlePause = () => {
-    requestAbortRef.current?.abort()
+    requestAbortControllersRef.current.get(activeTabId)?.abort()
     updateResearchSession(activeTabId, { activeStage: 5, running: false })
   }
 

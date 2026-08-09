@@ -33,7 +33,6 @@ const DEEPSEEK_CONFIG_VERSION = 3
 const BAILIAN_CONFIG_VERSION = 2
 export const DESKTOP_STORED_KEY = '__stored_in_os_keychain__'
 let desktopProviderKeys = {}
-let desktopTransientProviderKeys = {}
 let desktopProviderKeysHydration
 
 function desktopCredentialBridge() {
@@ -187,9 +186,6 @@ export function saveProviderSessionKeys(keys, storage = globalThis.window?.sessi
         ? bridge.setProviderKey(providerId, normalized[providerId], endpointScopes[providerId] || [])
         : bridge.deleteProviderKey(providerId)
     ))).then(() => {
-      desktopTransientProviderKeys = Object.fromEntries(Object.entries(normalized).flatMap(([providerId, value]) => (
-        value && value !== DESKTOP_STORED_KEY ? [[providerId, value]] : []
-      )))
       desktopProviderKeys = Object.fromEntries(Object.entries(desktopProviderKeys).map(([providerId, value]) => [
         providerId,
         value ? DESKTOP_STORED_KEY : value,
@@ -217,7 +213,7 @@ export async function hydrateProviderSessionKeys(providerIds = PROVIDER_PRESETS.
 export async function getProviderSessionKey(providerId) {
   if (desktopCredentialBridge()) {
     await (desktopProviderKeysHydration || hydrateProviderSessionKeys())
-    return desktopTransientProviderKeys[String(providerId || '')] || ''
+    return ''
   }
   return loadProviderSessionKeys()[providerId] || ''
 }
