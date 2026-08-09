@@ -26,6 +26,10 @@ Desktop Vault access is owned by the Electron main process. The renderer asks th
 
 The scanner is read-only, skips plugin/trash/dependency directories and symbolic links, canonicalizes every traversed path, and enforces limits of 20,000 Markdown files, 10 MB per note, and 200 MB per Vault. A filesystem watcher sends only a debounced change notification, after which the renderer requests a fresh bounded snapshot. Closing the renderer revokes all of its Vault capabilities.
 
+## Workspace persistence
+
+Workspace tabs, conversation messages, drafts, agent configuration snapshots, and completed run metadata are saved locally in a versioned IndexedDB snapshot, with a bounded localStorage fallback. Restored configuration is normalized against the current agent permission ceiling. Active requests, tool approvals, retrieval packets, decrypted credentials, OAuth tokens, directory handles, and desktop Vault capabilities are never persisted or resumed.
+
 ## Provider credentials
 
 Electron `safeStorage` encrypts each provider key before it is written under the application's user-data directory. The encrypted record also contains a bounded list of allowed endpoint origins captured when the user enters the key.

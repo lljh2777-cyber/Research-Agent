@@ -32,3 +32,17 @@ test('exposes a validated local Web runtime manifest', async ({ request }) => {
     },
   })
 })
+
+test('restores workspace tabs and conversation configuration after reload', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Open launcher' }).click()
+  await page.locator('.workspace-launcher-grid').getByRole('button', { name: /Research Start an independent conversation/i }).click()
+  await page.getByRole('textbox', { name: 'Agent name' }).fill('Persistent Biologist')
+  const tabCount = await page.getByRole('tab').count()
+
+  await page.waitForTimeout(450)
+  await page.reload()
+
+  await expect(page.getByRole('textbox', { name: 'Agent name' })).toHaveValue('Persistent Biologist')
+  await expect(page.getByRole('tab')).toHaveCount(tabCount)
+})

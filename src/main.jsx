@@ -67,6 +67,7 @@ import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot 
 import { AUTH_SERVICE_UNAVAILABLE, getAuthStatus, getChatgptModels, logoutChatgpt, startChatgptLogin, streamChatgptResponse, waitForChatgptAuth } from './authClient.js'
 import { loadRuntimeManifest } from './runtime/client.js'
 import { closeWorkspaceTab, createWorkspaceTab, findReusableTab, MAX_WORKSPACE_TABS, researchTabTitle, titleFromQuestion } from './workspaceTabs.js'
+import { loadWorkspaceSnapshot, saveWorkspaceSnapshot } from './workspacePersistence.js'
 import {
   AGENT_PRESETS,
   createConversationConfigSnapshot,
@@ -816,6 +817,7 @@ function App() {
     const defaults = loadModelConfig()
     return { [INITIAL_RESEARCH_TAB_ID]: createResearchSession({ modelId: defaults.chatModelId }) }
   })
+  const [workspaceHydrated, setWorkspaceHydrated] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true')
   const [vaultNotes, setVaultNotes] = useState([])
   const [vaultName, setVaultName] = useState('')
@@ -848,6 +850,27 @@ function App() {
   const pipelineRunTimerRef = useRef(null)
   const mockRunTimersRef = useRef(new Map())
   const toolApprovalResolverRef = useRef(null)
+
+  useEffect(() => {
+    let cancelled = false
+    loadWorkspaceSnapshot().then((snapshot) => {
+      if (cancelled || !snapshot) return
+      setWorkspaceTabs(snapshot.tabs)
+      setActiveTabId(snapshot.activeTabId)
+      setResearchSessions(snapshot.sessions)
+    }).finally(() => {
+      if (!cancelled) setWorkspaceHydrated(true)
+    })
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    if (!workspaceHydrated) return undefined
+    const timer = window.setTimeout(() => {
+      void saveWorkspaceSnapshot({ tabs: workspaceTabs, activeTabId, sessions: researchSessions })
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [activeTabId, researchSessions, workspaceHydrated, workspaceTabs])
 
   const activeTab = workspaceTabs.find((tab) => tab.id === activeTabId) || workspaceTabs[0]
   const activeSection = activeTab?.kind || 'launcher'
