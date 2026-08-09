@@ -61,7 +61,7 @@ function ModelPicker({ selectedModel, models, onSelect, disabled = false, placem
         })}
         <div className="model-menu-account">
           <span className={`auth-dot ${authStatus?.connected ? 'connected' : ''}`} />
-          <span><strong>ChatGPT account</strong><small>{authStatus?.connected ? `${modelCatalog?.models?.length || 0} models 闁?${modelCatalog?.source || 'discovering'}` : authStatus?.unavailable ? 'Local service offline 闁?restart npm run dev' : 'Connect to discover available models'}</small></span>
+          <span><strong>ChatGPT account</strong><small>{authStatus?.connected ? `${modelCatalog?.models?.length || 0} models -${modelCatalog?.source || 'discovering'}` : authStatus?.unavailable ? 'Local service offline -restart npm run dev' : 'Connect to discover available models'}</small></span>
           {authStatus?.connected ? <button className="auth-inline-button" onClick={() => { onLogout(); setOpen(false) }}>Sign out</button> : <button className="auth-inline-button" onClick={() => { onConnect(); setOpen(false) }}>{authBusy ? 'Waiting...' : authStatus?.unavailable ? 'Retry' : 'Connect'}</button>}
         </div>
         {modelCatalog?.warning && <div className="model-catalog-warning">{modelCatalog.warning}</div>}
@@ -346,13 +346,13 @@ function ResearchSetup({
           <div className="system-prompt-field">
             <div><label htmlFor="research-agent-system-prompt">System prompt</label><button type="button" onClick={onResetSystemPrompt}><RefreshCw size={11} />Restore preset</button></div>
             <textarea id="research-agent-system-prompt" value={config.systemPrompt || ''} maxLength={6000} rows={4} onChange={(event) => onUpdateSystemPrompt(event.target.value)} placeholder="Describe how this agent should reason, use evidence, and format its answer." />
-            <small>{(config.systemPrompt || '').length} / 6000 闁?saved in this conversation snapshot</small>
+            <small>{(config.systemPrompt || '').length} / 6000 -saved in this conversation snapshot</small>
           </div>
         </section>
         <section className="research-config-block">
           <div className="research-config-heading"><span><Atom size={16} />Model</span><small>Temporary for this conversation</small></div>
           <div className="research-model-choice">
-            <div><strong>{selectedModel.name}</strong><small>{selectedModel.provider} 闁?{selectedModel.detail || 'Research model'}</small></div>
+            <div><strong>{selectedModel.name}</strong><small>{selectedModel.provider} -{selectedModel.detail || 'Research model'}</small></div>
             <ModelPicker selectedModel={selectedModel} models={models} onSelect={onSelectModel} placement="bottom" authStatus={authStatus} authBusy={authBusy} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnect={onConnectChatgpt} onLogout={onLogoutChatgpt} onRefreshModels={onRefreshModels} />
           </div>
         </section>
@@ -360,7 +360,7 @@ function ResearchSetup({
           <div className="research-config-heading"><span><Database size={16} />Knowledge base</span><small>Evidence boundary</small></div>
           <div className="knowledge-scope-options">
             <button type="button" className={!hasVaultScope ? 'selected' : ''} aria-pressed={!hasVaultScope} onClick={() => onSelectVault(false)}><span><strong>No Vault</strong><small>Use model knowledge and enabled external tools only.</small></span>{!hasVaultScope && <Check size={15} />}</button>
-            {vaultName ? <button type="button" className={hasVaultScope ? 'selected' : ''} aria-pressed={hasVaultScope} onClick={() => onSelectVault(true)}><Database size={18} /><span><strong>{vaultPresentation.title}</strong><small>{vaultPresentation.status === VAULT_CONNECTION_STATUS.CACHED ? vaultPresentation.detail : `${vaultPresentation.detail} 闁?read-only evidence`}</small></span>{hasVaultScope && <Check size={15} />}</button>
+            {vaultName ? <button type="button" className={hasVaultScope ? 'selected' : ''} aria-pressed={hasVaultScope} onClick={() => onSelectVault(true)}><Database size={18} /><span><strong>{vaultPresentation.title}</strong><small>{vaultPresentation.status === VAULT_CONNECTION_STATUS.CACHED ? vaultPresentation.detail : `${vaultPresentation.detail} -read-only evidence`}</small></span>{hasVaultScope && <Check size={15} />}</button>
               : <button type="button" className="connect-vault-option" onClick={onConnectVault}><Database size={18} /><span><strong>Connect an Obsidian Vault</strong><small>Select a local knowledge-base folder.</small></span><ArrowRight size={15} /></button>}
           </div>
         </section>
@@ -477,7 +477,7 @@ function RetrievalPath({ activeStage, vaultName, topK, rerankLabel, packet, answ
   const path = [
     ['Query', query, packet ? 'done' : 'current'],
     [`${wikilinksEnabled ? 'BM25 + Wikilinks' : 'BM25'} (top-k=${topK})`, vaultName ? `vault: ${vaultName}` : 'no Vault connected', packet ? 'done' : 'current'],
-    ['Graph expansion', wikilinksEnabled ? packet ? `${retrieval?.graphExpanded || 0} one-hop result${retrieval?.graphExpanded === 1 ? '' : 's'} 闁?rerank: ${rerankLabel}` : 'waiting for a query' : 'Disabled for this conversation', packet || !wikilinksEnabled ? 'done' : 'current'],
+    ['Graph expansion', wikilinksEnabled ? packet ? `${retrieval?.graphExpanded || 0} one-hop result${retrieval?.graphExpanded === 1 ? '' : 's'} -rerank: ${rerankLabel}` : 'waiting for a query' : 'Disabled for this conversation', packet || !wikilinksEnabled ? 'done' : 'current'],
     [`Selected (${evidenceCount} chunks)`, packet ? `${retrieval?.candidateCount || 0} lexical candidates` : 'no evidence selected yet', packet ? 'done' : 'current'],
     ['Answer model', packet ? activeStage >= 4 ? answerMode === 'chatgpt' ? 'Cited answer generated' : 'Retrieval preview only' : 'Agent working...' : 'waiting for evidence', packet && activeStage >= 4 ? 'done' : 'current'],
   ]
