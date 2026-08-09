@@ -60,6 +60,9 @@ export function executeResearchTool(call, { retrievalIndex }) {
     const packet = retrieveEvidence(retrievalIndex, query, { topK, similarityThreshold: 0 })
     const evidence = packet.evidence.map((item, index) => ({
       citation: index + 1,
+      id: item.id,
+      noteId: item.noteId,
+      source: item.source,
       title: item.title,
       path: item.path,
       heading: item.heading || null,

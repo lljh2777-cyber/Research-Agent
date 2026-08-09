@@ -19,6 +19,7 @@ test('normalizes a user-selected versioned Vault snapshot', () => {
     schemaVersion: VAULT_SNAPSHOT_SCHEMA_VERSION,
     vaultName: 'research',
     notes: [{
+      schemaVersion: 1,
       id: 'note-1',
       path: 'notes/paper.md',
       name: 'paper.md',
