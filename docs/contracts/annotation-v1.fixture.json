@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "id": "annotation-1",
+  "source": {
+    "vaultId": "vault-1",
+    "noteId": "note-1",
+    "path": "papers/findings.md",
+    "revision": "note-rev-4"
+  },
+  "anchor": {
+    "schemaVersion": 1,
+    "quote": {
+      "exact": "selected evidence",
+      "prefix": "# Findings\nThe ",
+      "suffix": " is reproducible.\n"
+    },
+    "position": {
+      "start": 15,
+      "end": 32
+    },
+    "heading": {
+      "text": "Findings",
+      "level": 1,
+      "line": 1,
+      "relativeStartLine": 1,
+      "relativeEndLine": 1
+    },
+    "line": {
+      "start": 2,
+      "end": 2
+    }
+  },
+  "sections": {
+    "manual": "Researcher-authored Markdown.",
+    "ai": "AI-authored Markdown."
+  },
+  "archived": false,
+  "timestamps": {
+    "createdAt": "2026-08-09T12:00:00.000Z",
+    "updatedAt": "2026-08-09T12:05:00.000Z",
+    "archivedAt": null
+  },
+  "relocation": {
+    "schemaVersion": 1,
+    "status": "anchored",
+    "strategy": "position",
+    "start": 15,
+    "end": 32,
+    "candidates": 1
+  }
+}
