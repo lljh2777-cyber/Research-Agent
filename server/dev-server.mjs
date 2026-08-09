@@ -40,8 +40,9 @@ try {
   }
 
   // Provider API middleware is registered by vite.config.js so both
-  // `npm run dev` and the lightweight `npm run dev:web` expose the same API.
-  viteServer = await createViteServer()
+  // local-runtime identifies the launcher that owns the ChatGPT auth service.
+  // Bare npm run dev:web remains fail-closed.
+  viteServer = await createViteServer({ mode: 'local-runtime' })
   await viteServer.listen()
   viteServer.printUrls()
 } catch (error) {

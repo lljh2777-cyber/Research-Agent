@@ -6,6 +6,7 @@ export const BUILD_MODES = Object.freeze({
 
 export const RUNTIME_TARGETS = Object.freeze({
   LOCAL_WEB: 'local-web',
+  VITE_WEB: 'vite-web',
   DESKTOP: 'desktop',
   HOSTED_WEB: 'hosted-web',
 })
@@ -25,6 +26,22 @@ const CAPABILITY_PROFILES = Object.freeze({
       subscriptionOAuth: 'os-keychain',
     }),
     chatgptSubscriptionOAuth: true,
+    providerTransport: 'loopback',
+    researchRuns: 'loopback-event-buffer',
+    researchExecution: 'loopback-provider',
+    mcp: 'loopback',
+  }),
+  [RUNTIME_TARGETS.VITE_WEB]: Object.freeze({
+    localVault: Object.freeze({
+      available: true,
+      adapters: Object.freeze(['browser-picker']),
+      preferred: 'browser-picker',
+    }),
+    credentials: Object.freeze({
+      providerApiKeys: 'session',
+      subscriptionOAuth: false,
+    }),
+    chatgptSubscriptionOAuth: false,
     providerTransport: 'loopback',
     researchRuns: 'loopback-event-buffer',
     researchExecution: 'loopback-provider',

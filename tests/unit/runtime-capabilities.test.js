@@ -6,7 +6,7 @@ import {
   isRuntimeManifest,
   RUNTIME_TARGETS,
 } from '../../shared/runtime-capabilities.mjs'
-import { createLocalWebRuntimeManifest } from '../../server/runtime-api.mjs'
+import { createLocalWebRuntimeManifest, createViteWebRuntimeManifest } from '../../server/runtime-api.mjs'
 
 describe('runtime capability matrix', () => {
   it('keeps local Web behavior local-first', () => {
@@ -75,5 +75,22 @@ describe('runtime capability matrix', () => {
       target: RUNTIME_TARGETS.LOCAL_WEB,
       appVersion: '1.2.3',
     })
+  })
+
+  it('fails Vite-only dev Web closed for unavailable loopback services', () => {
+    const manifest = createViteWebRuntimeManifest({ nodeEnv: 'test', version: '1.2.3' })
+
+    expect(manifest).toMatchObject({
+      schemaVersion: 1,
+      buildMode: BUILD_MODES.TEST,
+      target: RUNTIME_TARGETS.VITE_WEB,
+      appVersion: '1.2.3',
+      capabilities: {
+        chatgptSubscriptionOAuth: false,
+        credentials: { subscriptionOAuth: false },
+        localVault: { adapters: ['browser-picker'] },
+      },
+    })
+    expect(isRuntimeManifest(manifest)).toBe(true)
   })
 })

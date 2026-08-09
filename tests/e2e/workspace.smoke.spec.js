@@ -23,16 +23,17 @@ test('opens the local research workspace and launcher without runtime errors', a
   expect(consoleErrors).toEqual([])
 })
 
-test('exposes a validated local Web runtime manifest', async ({ request }) => {
+test('exposes a fail-closed Vite-only runtime manifest', async ({ request }) => {
   const response = await request.get('/api/runtime')
   const manifest = await response.json()
 
   expect(response.ok()).toBe(true)
   expect(manifest).toMatchObject({
     schemaVersion: 1,
-    target: 'local-web',
+    target: 'vite-web',
     capabilities: {
-      chatgptSubscriptionOAuth: true,
+      chatgptSubscriptionOAuth: false,
+      localVault: { adapters: ['browser-picker'] },
       providerTransport: 'loopback',
       mcp: 'loopback',
     },

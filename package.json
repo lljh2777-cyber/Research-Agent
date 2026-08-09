@@ -22,6 +22,7 @@
     "test:contracts": "vitest run tests/contracts",
     "test:desktop": "node --test desktop/credential-store.test.mjs desktop/data-file-manager.test.mjs desktop/provider-run-manager.test.mjs desktop/vault-manager.test.mjs desktop/app-server.test.mjs desktop/release-config.test.mjs desktop/release-verifier.test.mjs",
     "test:e2e": "playwright test",
+    "test:e2e:local-runtime": "playwright test --config playwright.local-runtime.config.js",
     "test:all": "npm test && npm run test:e2e && npm run build",
     "test:auth": "node --test server/auth-server.test.mjs",
     "test:retrieval": "node --test src/retrieval.test.js",
