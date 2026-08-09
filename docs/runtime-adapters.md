@@ -35,6 +35,10 @@ Pure research logic, retrieval, pipelines, configuration normalization, and Reac
 
 `createWebRuntimeAdapter` is the default implementation and the primary feature target. It keeps Provider credentials in session storage, uses the local HTTP adapters, and owns File System Access API calls. Web tests should be completed before extending desktop behavior.
 
+The Runtime manifest distinguishes the full `local-web` launcher from Vite-only `vite-web` development. `npm run dev` owns the loopback ChatGPT auth service and therefore advertises OAuth and the loopback Vault adapter. `npm run dev:web` advertises only services that Vite hosts itself: it disables subscription OAuth and the absent Vault loopback adapter while retaining browser directory selection and same-origin Provider, MCP, and research-run middleware.
+
+React and client code must consume those capability values before using optional runtime services. They must not probe a loopback port to discover availability.
+
 `createDesktopRuntimeAdapter` decorates the Web adapter with the allowlisted preload capabilities that are actually present. Existing IPC channels remain compatibility wrappers. A later Electron milestone should change this adapter and the main/preload host, not feature components.
 
 ## Rules for new features

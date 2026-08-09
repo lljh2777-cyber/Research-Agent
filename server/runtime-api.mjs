@@ -17,6 +17,17 @@ export function createLocalWebRuntimeManifest({
   })
 }
 
+export function createViteWebRuntimeManifest({
+  nodeEnv = process.env.NODE_ENV,
+  version = process.env.npm_package_version || '0.1.0',
+} = {}) {
+  return createRuntimeManifest({
+    buildMode: buildModeFromEnvironment(nodeEnv),
+    target: RUNTIME_TARGETS.VITE_WEB,
+    version,
+  })
+}
+
 export function createRuntimeApiMiddleware(options = {}) {
   const manifest = options.manifest || createLocalWebRuntimeManifest(options)
   return function runtimeApiMiddleware(request, response, next) {

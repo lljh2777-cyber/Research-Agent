@@ -2,7 +2,11 @@ import { expect, test } from '@playwright/test'
 
 test('opens the local research workspace and launcher without runtime errors', async ({ page }) => {
   const pageErrors = []
+  const consoleErrors = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
+  page.on('console', (message) => {
+    if (message.type() === 'error' && /^http:\/\/127\.0\.0\.1:431[78]\//.test(message.location().url)) consoleErrors.push(message.text())
+  })
 
   await page.goto('/')
 
@@ -18,18 +22,20 @@ test('opens the local research workspace and launcher without runtime errors', a
   await expect(page.getByRole('heading', { name: 'Applications' })).toBeVisible()
   await expect(page.locator('.workspace-launcher-grid').getByRole('button', { name: /Knowledge graph/i })).toBeVisible()
   expect(pageErrors).toEqual([])
+  expect(consoleErrors).toEqual([])
 })
 
-test('exposes a validated local Web runtime manifest', async ({ request }) => {
+test('exposes a fail-closed Vite-only runtime manifest', async ({ request }) => {
   const response = await request.get('/api/runtime')
   const manifest = await response.json()
 
   expect(response.ok()).toBe(true)
   expect(manifest).toMatchObject({
     schemaVersion: 1,
-    target: 'local-web',
+    target: 'vite-web',
     capabilities: {
-      chatgptSubscriptionOAuth: true,
+      chatgptSubscriptionOAuth: false,
+      localVault: { adapters: ['browser-picker'] },
       providerTransport: 'loopback',
       mcp: 'loopback',
     },
