@@ -48,3 +48,52 @@ React and client code must consume those capability values before using optional
 3. Implement and stabilize the Web method first.
 4. Keep desktop behavior compatible until the Web flow and browser tests pass.
 5. Add Electron-specific IPC only during the focused desktop adaptation milestone.
+
+## Runtime Action/Annotation v1
+
+Round 2 adds two optional, frozen Web surfaces. They are always present on the Adapter and fail closed with `{ ok: false, unavailable: true, code: 'runtime_unavailable', surface, reason }` until a validated manifest enables them.
+
+### Annotations
+
+- `annotations.list({ signal })`
+- `annotations.read({ path, signal })`
+- `annotations.write({ intent, approval, idempotencyKey, signal })`
+
+The write transport accepts the Knowledge Base-owned Annotation Patch Intent v1 exactly:
+
+```js
+{
+  kind: 'annotation.upsert',
+  annotationId,
+  target: { vaultId, path, expectedRevision },
+  contentType: 'text/markdown',
+  content,
+}
+```
+
+Runtime validates the intent shape, explicit per-call approval, stable idempotency key, Vault identity, path scope, expected revision, and the 65,536-byte content ceiling. It treats `content` as opaque: source references, TextAnchor variants, independent manual/AI sections, archive timestamps, and relocation data are never parsed, collapsed, or rewritten. Writes are serialized per path, compare the revision again before rename, use an atomic same-directory rename, and replay only an identical idempotent request. A stale revision, changed scope, or reused key with different content returns a typed conflict.
+
+### Actions
+
+- `actions.list({ signal })` returns the five Runtime-executable Core descriptors for `knowledge.lint`, `knowledge.paper.ingest`, `knowledge.xray`, `knowledge.code.analyze`, and `knowledge.synthesis.write`; their capability keys remain `knowledge.lint`, `actions.paperIngest`, `actions.xray`, `actions.codeAnalysis`, and `actions.synthesis`.
+- `actions.start({ schemaVersion, toolId, requestId, runId, sessionId, context, scope, idempotencyKey, input, approval, signal })` accepts the Core Knowledge Action input envelope plus Runtime's per-call approval proof.
+- `actions.follow(runId, { after, signal })` returns an abortable SSE `Response`.
+- `actions.cancel(runId, { signal })`
+
+Descriptors retain the Core-owned fields and risk semantics. Every descriptor with `approvalPolicy: 'explicit'` requires approval on every call, even when a broader permission is `allow`. Write Actions require explicit scope and an idempotency key. Runtime owns atomic in-process dedupe/replay and returns the original run, including its terminal result, for an identical key and scoped request.
+
+KnowledgeContext v1 is opaque. Runtime checks only object shape, `schemaVersion: 1`, JSON serializability, and the Knowledge Base-owned 65,536-byte normalized JSON ceiling; it passes all fields through unchanged. Superseding transport limits are:
+
+- KnowledgeContext: 65,536 bytes.
+- Action input and session handoff: 131,072 bytes.
+- Action output: 65,536 bytes.
+- Annotation content: 65,536 bytes.
+- Annotation request: 131,072 bytes, so a maximum content value remains transportable with Patch Intent metadata.
+
+Action progress and terminal events reuse Research Run v1. Terminal states are `run.completed`, `run.failed`, or `run.cancelled`; a late runner result cannot regress a terminal run.
+
+The local Action runner maps those five IDs to the existing Research Vault lint, ingest, X-Ray, static-code-analysis, and synthesis skills. Process creation, credentials, filesystem permissions, and writes stay server-side. React imports neither plugin runtime code nor child-process APIs.
+
+### Capability behavior
+
+A configured full `local-web` manifest advertises same-origin Annotation and Action services plus their exact byte limits and per-Action capability map. `vite-web`, hosted Web, unconfigured local Web, and desktop fail closed without loopback probes. Browser directory selection and Vite-hosted Provider, MCP, Research Run, and research-execution capabilities are unchanged. Desktop compatibility is preserved without adding Electron IPC.

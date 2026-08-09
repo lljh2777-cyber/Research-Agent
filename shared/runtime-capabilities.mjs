@@ -1,3 +1,12 @@
+import {
+  MAX_KNOWLEDGE_ACTION_INPUT_BYTES,
+  MAX_KNOWLEDGE_ACTION_OUTPUT_BYTES,
+  MAX_KNOWLEDGE_CONTEXT_BYTES,
+  RUNTIME_ACTION_CAPABILITIES,
+  RUNTIME_ANNOTATION_CONTENT_MAX_BYTES,
+  RUNTIME_ANNOTATION_REQUEST_MAX_BYTES,
+} from './runtime-action-contracts.mjs'
+
 export const BUILD_MODES = Object.freeze({
   DEVELOPMENT: 'development',
   TEST: 'test',
@@ -81,6 +90,58 @@ const CAPABILITY_PROFILES = Object.freeze({
   }),
 })
 
+function unavailableReason(target, surface) {
+  if (target === RUNTIME_TARGETS.LOCAL_WEB) return 'Local Vault root is not configured.'
+  if (target === RUNTIME_TARGETS.VITE_WEB) return 'Vite-only Web does not expose local ' + surface + '.'
+  if (target === RUNTIME_TARGETS.DESKTOP) return 'Desktop ' + surface + ' is not implemented in this round.'
+  return 'Hosted Web does not expose local ' + surface + '.'
+}
+
+function optionalRuntimeServices(target, services = {}) {
+  const local = target === RUNTIME_TARGETS.LOCAL_WEB
+  const annotationsAvailable = local && services.annotations === true
+  const actionsAvailable = local && services.actions === true
+  return {
+    annotations: Object.freeze({
+      available: annotationsAvailable,
+      transport: annotationsAvailable ? 'same-origin' : false,
+      capability: 'annotations.write',
+      maxContentBytes: RUNTIME_ANNOTATION_CONTENT_MAX_BYTES,
+      maxRequestBytes: RUNTIME_ANNOTATION_REQUEST_MAX_BYTES,
+      reason: annotationsAvailable ? null : unavailableReason(target, 'annotation persistence'),
+    }),
+    actions: Object.freeze({
+      available: actionsAvailable,
+      transport: actionsAvailable ? 'same-origin' : false,
+      maxInputBytes: MAX_KNOWLEDGE_ACTION_INPUT_BYTES,
+      maxOutputBytes: MAX_KNOWLEDGE_ACTION_OUTPUT_BYTES,
+      maxContextBytes: MAX_KNOWLEDGE_CONTEXT_BYTES,
+      maxSessionHandoffBytes: MAX_KNOWLEDGE_ACTION_INPUT_BYTES,
+      capabilities: Object.freeze(Object.fromEntries(
+        RUNTIME_ACTION_CAPABILITIES.map((capability) => [capability, actionsAvailable]),
+      )),
+      reason: actionsAvailable ? null : unavailableReason(target, 'Action service'),
+    }),
+  }
+}
+
+function sameOptionalService(actual, expected) {
+  return Boolean(
+    actual
+    && actual.available === expected.available
+    && actual.transport === expected.transport
+    && ['maxContentBytes', 'maxRequestBytes', 'maxInputBytes', 'maxOutputBytes', 'maxContextBytes', 'maxSessionHandoffBytes']
+      .every((field) => (
+        expected[field] === undefined
+        || actual[field] === expected[field]
+      ))
+    && actual.reason === expected.reason
+    && (expected.capability === undefined || actual.capability === expected.capability)
+    && (expected.capabilities === undefined
+      || JSON.stringify(actual.capabilities) === JSON.stringify(expected.capabilities)),
+  )
+}
+
 export function normalizeBuildMode(value) {
   return BUILD_MODE_VALUES.has(value) ? value : BUILD_MODES.PRODUCTION
 }
@@ -93,14 +154,16 @@ export function createRuntimeManifest({
   buildMode = BUILD_MODES.PRODUCTION,
   target = RUNTIME_TARGETS.HOSTED_WEB,
   version = '0.1.0',
+  services = {},
 } = {}) {
   const normalizedTarget = normalizeRuntimeTarget(target)
+  const optionalServices = optionalRuntimeServices(normalizedTarget, services)
   return {
     schemaVersion: 1,
     buildMode: normalizeBuildMode(buildMode),
     target: normalizedTarget,
     appVersion: String(version || '0.1.0'),
-    capabilities: CAPABILITY_PROFILES[normalizedTarget],
+    capabilities: Object.freeze({ ...CAPABILITY_PROFILES[normalizedTarget], ...optionalServices }),
   }
 }
 
@@ -123,5 +186,13 @@ export function isRuntimeManifest(value) {
     && capabilities.researchRuns === expected.researchRuns
     && capabilities.researchExecution === expected.researchExecution
     && capabilities.mcp === expected.mcp
+    && sameOptionalService(
+      capabilities.annotations,
+      optionalRuntimeServices(value.target, { annotations: capabilities.annotations?.available === true }).annotations,
+    )
+    && sameOptionalService(
+      capabilities.actions,
+      optionalRuntimeServices(value.target, { actions: capabilities.actions?.available === true }).actions,
+    )
   )
 }

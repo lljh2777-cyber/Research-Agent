@@ -1,3 +1,4 @@
+import { statSync } from 'node:fs'
 import { BUILD_MODES, createRuntimeManifest, RUNTIME_TARGETS } from '../shared/runtime-capabilities.mjs'
 
 function buildModeFromEnvironment(value) {
@@ -6,14 +7,30 @@ function buildModeFromEnvironment(value) {
   return BUILD_MODES.DEVELOPMENT
 }
 
+function isVaultDirectory(value) {
+  if (!value) return false
+  try {
+    return statSync(value).isDirectory()
+  } catch {
+    return false
+  }
+}
+
 export function createLocalWebRuntimeManifest({
   nodeEnv = process.env.NODE_ENV,
   version = process.env.npm_package_version || '0.1.0',
+  vaultRoot = process.env.BIORESEARCH_VAULT_ROOT,
+  services,
 } = {}) {
+  const vaultAvailable = isVaultDirectory(vaultRoot)
   return createRuntimeManifest({
     buildMode: buildModeFromEnvironment(nodeEnv),
     target: RUNTIME_TARGETS.LOCAL_WEB,
     version,
+    services: services || {
+      annotations: vaultAvailable,
+      actions: vaultAvailable,
+    },
   })
 }
 

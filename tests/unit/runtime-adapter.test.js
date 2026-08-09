@@ -143,4 +143,87 @@ describe('runtime adapters', () => {
     expect(adapter.credentials.mode).toBe('os-keychain')
     expect('researchDesktop' in adapter).toBe(false)
   })
+
+  it('fails optional surfaces closed, then uses same-origin AbortSignal-aware transports after manifest discovery', async () => {
+    const fetchImpl = vi.fn(async (url) => new Response(
+      url.includes('/events?') ? '' : JSON.stringify({ ok: true }),
+      { status: 200, headers: { 'Content-Type': url.includes('/events?') ? 'text/event-stream' : 'application/json' } },
+    ))
+    const adapter = createWebRuntimeAdapter({
+      fetchImpl,
+      env: {},
+      windowRef: { setTimeout, clearTimeout },
+    })
+
+    await expect(adapter.annotations.list()).resolves.toMatchObject({
+      ok: false,
+      unavailable: true,
+      surface: 'annotations',
+    })
+    await expect(adapter.actions.list()).resolves.toMatchObject({
+      ok: false,
+      unavailable: true,
+      surface: 'actions',
+    })
+    expect(fetchImpl).not.toHaveBeenCalled()
+
+    adapter.runtime.setManifest(createRuntimeManifest({
+      target: RUNTIME_TARGETS.LOCAL_WEB,
+      services: { annotations: true, actions: true },
+    }))
+    const controller = new AbortController()
+    const intent = {
+      kind: 'annotation.upsert',
+      annotationId: 'annotation-1',
+      target: {
+        vaultId: 'vault-1',
+        path: 'wiki/annotations/annotation-1.md',
+        expectedRevision: null,
+      },
+      contentType: 'text/markdown',
+      content: '# Annotation v1',
+    }
+    await adapter.annotations.read({ path: intent.target.path, signal: controller.signal })
+    await adapter.annotations.write({
+      intent,
+      idempotencyKey: 'annotation-write-1',
+      approval: { status: 'approved' },
+      signal: controller.signal,
+    })
+    await adapter.actions.list({ signal: controller.signal })
+    await adapter.actions.start({
+      schemaVersion: 1,
+      toolId: 'knowledge.lint',
+      requestId: 'call-1',
+      runId: 'run-1',
+      sessionId: 'session-1',
+      context: { schemaVersion: 1 },
+      scope: null,
+      idempotencyKey: null,
+      input: { rules: [] },
+      signal: controller.signal,
+    })
+    const followed = await adapter.actions.follow('run-1', { after: 2, signal: controller.signal })
+    await adapter.actions.cancel('run-1', { signal: controller.signal })
+
+    expect(followed).toMatchObject({ ok: true, response: expect.any(Response) })
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/api/runtime/annotations?path=wiki%2Fannotations%2Fannotation-1.md',
+      expect.objectContaining({ signal: controller.signal }),
+    )
+    const annotationWrite = fetchImpl.mock.calls.find(([, init]) => init?.method === 'PUT')
+    expect(JSON.parse(annotationWrite[1].body)).toEqual({
+      intent,
+      idempotencyKey: 'annotation-write-1',
+      approval: { status: 'approved' },
+    })
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/api/runtime/actions/run-1/events?after=2',
+      expect.objectContaining({ signal: controller.signal }),
+    )
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/api/runtime/actions/run-1',
+      expect.objectContaining({ method: 'DELETE', signal: controller.signal }),
+    )
+  })
 })

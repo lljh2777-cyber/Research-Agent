@@ -36,6 +36,8 @@ test('exposes a fail-closed Vite-only runtime manifest', async ({ request }) => 
       localVault: { adapters: ['browser-picker'] },
       providerTransport: 'loopback',
       mcp: 'loopback',
+      annotations: { available: false, transport: false },
+      actions: { available: false, transport: false },
     },
   })
 })
