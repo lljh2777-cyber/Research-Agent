@@ -72,3 +72,33 @@ test('exports, clears, and restores portable local data', async ({ page }) => {
   await expect(conversationSummary.locator('strong')).toHaveText('1')
   await expect(page.locator('.data-action-feedback')).toContainText(/restored/i)
 })
+
+test('routes backup files through the desktop preload bridge when available', async ({ page }) => {
+  await page.addInitScript(() => {
+    let backupContent = ''
+    window.researchDesktop = {
+      dataFiles: {
+        saveBackup: async ({ content }) => {
+          backupContent = content
+          return { cancelled: false, fileName: 'native-backup.json', bytes: new TextEncoder().encode(content).length }
+        },
+        openBackup: async () => ({ cancelled: false, fileName: 'native-backup.json', content: backupContent }),
+      },
+    }
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('button', { name: '数据管理', exact: true }).click()
+
+  const conversationSummary = page.locator('.data-summary-strip > div').filter({ hasText: 'Conversations' })
+  await page.getByRole('button', { name: 'Export backup', exact: true }).click()
+  await expect(page.locator('.data-action-feedback')).toContainText('Saved native-backup.json')
+  await expect(page.getByLabel('Select BioResearch OS backup')).toHaveCount(0)
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByRole('button', { name: 'Clear history', exact: true }).click()
+  await expect(conversationSummary.locator('strong')).toHaveText('0')
+  await page.getByRole('button', { name: 'Import backup', exact: true }).click()
+  await expect(conversationSummary.locator('strong')).toHaveText('1')
+  await expect(page.locator('.data-action-feedback')).toContainText('Restored 1 conversation')
+})

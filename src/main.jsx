@@ -69,6 +69,7 @@ import { loadRuntimeManifest } from './runtime/client.js'
 import { closeWorkspaceTab, createWorkspaceTab, findReusableTab, MAX_WORKSPACE_TABS, researchTabTitle, titleFromQuestion } from './workspaceTabs.js'
 import { clearWorkspaceSnapshot, createWorkspaceSnapshot, loadWorkspaceSnapshot, saveWorkspaceSnapshot } from './workspacePersistence.js'
 import { createDataBackup, createLocalDataSummary, parseDataBackup, serializeDataBackup } from './dataManagement.js'
+import { hasDesktopDataFilesBridge, openDesktopDataBackup, saveDesktopDataBackup } from './desktopDataFiles.js'
 import {
   AGENT_PRESETS,
   createConversationConfigSnapshot,
@@ -887,6 +888,7 @@ function App() {
   const activeHasVaultScope = Boolean(vaultName && activeResearchSession.configSnapshot?.knowledgeScopes?.some((scope) => scope.vaultId === vaultName))
   const anyResearchRunning = Object.values(researchSessions).some((session) => session.running)
   const dataActionBlocked = anyResearchRunning || Boolean(pipelineRunningId)
+  const supportsDesktopDataFiles = hasDesktopDataFilesBridge()
   const localDataSummary = useMemo(() => createLocalDataSummary({
     workspace: { tabs: workspaceTabs, activeTabId, sessions: researchSessions },
     pipelineRuns,
@@ -1659,6 +1661,7 @@ function App() {
     const serialized = serializeDataBackup(backup)
     const date = backup.createdAt.slice(0, 10) || new Date().toISOString().slice(0, 10)
     const fileName = `bioresearch-os-backup-${date}.json`
+    if (supportsDesktopDataFiles) return saveDesktopDataBackup({ fileName, content: serialized })
     const url = URL.createObjectURL(new Blob([serialized], { type: 'application/json' }))
     const anchor = document.createElement('a')
     anchor.href = url
@@ -1686,6 +1689,13 @@ function App() {
     setPipelineRuns(nextPipelineRuns)
     setSelectedPipelineRunId(null)
     return createLocalDataSummary({ workspace, pipelineRuns: nextPipelineRuns, vaultNoteCount: vaultNotes.length })
+  }
+
+  const handleImportLocalDataFromDesktop = async () => {
+    const selection = await openDesktopDataBackup()
+    if (selection.cancelled) return selection
+    const summary = await handleImportLocalData(selection.content)
+    return { ...summary, cancelled: false, fileName: selection.fileName }
   }
 
   const handleClearLocalHistory = async () => {
@@ -1788,7 +1798,7 @@ function App() {
           <div className="topbar-actions"><button className="icon-button mobile-settings-button" onClick={() => handleOpenSection('settings')} aria-label="Open settings"><Settings2 size={18} /></button></div>
         </header>
 
-        {activeSection === 'launcher' ? <WorkspaceLauncher onOpen={openWorkspaceTab} /> : activeSection === 'settings' ? <SettingsWorkspace key={`settings-${providerCredentialsRevision}`} authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} mcpConfig={mcpConfig} onSaveMcpConfig={handleMcpConfigSave} mcpRuntime={mcpRuntime} mcpRuntimeBusy={mcpRuntimeBusy} mcpRuntimeError={mcpRuntimeError} onConnectMcpServer={handleConnectMcpServer} onDisconnectMcpServer={handleDisconnectMcpServer} vaultNoteCount={vaultNotes.length} dataSummary={localDataSummary} dataActionBlocked={dataActionBlocked} runtimeTarget={runtimeManifest?.target} onExportData={handleExportLocalData} onImportData={handleImportLocalData} onClearHistory={handleClearLocalHistory} /> : activeSection === 'graph' ? <KnowledgeGraphSection key={activeTabId} index={vaultIndex} onConnectVault={handleConnectVault} /> : activeSection === 'pipelines' ? (
+        {activeSection === 'launcher' ? <WorkspaceLauncher onOpen={openWorkspaceTab} /> : activeSection === 'settings' ? <SettingsWorkspace key={`settings-${providerCredentialsRevision}`} authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} mcpConfig={mcpConfig} onSaveMcpConfig={handleMcpConfigSave} mcpRuntime={mcpRuntime} mcpRuntimeBusy={mcpRuntimeBusy} mcpRuntimeError={mcpRuntimeError} onConnectMcpServer={handleConnectMcpServer} onDisconnectMcpServer={handleDisconnectMcpServer} vaultNoteCount={vaultNotes.length} dataSummary={localDataSummary} dataActionBlocked={dataActionBlocked} runtimeTarget={runtimeManifest?.target} useNativeDataFiles={supportsDesktopDataFiles} onExportData={handleExportLocalData} onImportData={handleImportLocalData} onImportDataFromDesktop={handleImportLocalDataFromDesktop} onClearHistory={handleClearLocalHistory} /> : activeSection === 'graph' ? <KnowledgeGraphSection key={activeTabId} index={vaultIndex} onConnectVault={handleConnectVault} /> : activeSection === 'pipelines' ? (
           <PipelinesSection vaultName={vaultName} noteCount={vaultNotes.length} runs={pipelineRuns} runningPipelineId={pipelineRunningId} onRun={handleRunPipeline} onViewRun={handleViewPipelineRun} onConnectVault={handleConnectVault} />
         ) : activeSection === 'runs' ? (
           <RunsSection runs={pipelineRuns} selectedRunId={selectedPipelineRunId} onSelectRun={setSelectedPipelineRunId} />

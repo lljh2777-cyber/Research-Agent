@@ -2,10 +2,9 @@ import { DEFAULT_MODEL_CONFIG } from './modelConfig.js'
 import { normalizeMcpConfig } from './mcpConfig.js'
 import { normalizeProviderConfigs } from './providerConfig.js'
 import { createWorkspaceSnapshot, normalizeWorkspaceSnapshot } from './workspacePersistence.js'
+import { assertSupportedDataBackupText, DATA_BACKUP_KIND, DATA_BACKUP_SCHEMA_VERSION, dataBackupByteLength, MAX_DATA_BACKUP_BYTES } from '../shared/data-backup-policy.mjs'
 
-export const DATA_BACKUP_KIND = 'bioresearch-os-local-backup'
-export const DATA_BACKUP_SCHEMA_VERSION = 1
-export const MAX_DATA_BACKUP_BYTES = 16 * 1024 * 1024
+export { DATA_BACKUP_KIND, DATA_BACKUP_SCHEMA_VERSION, MAX_DATA_BACKUP_BYTES }
 
 function boundedString(value, limit = 2_000) {
   return typeof value === 'string' ? value.slice(0, limit) : ''
@@ -86,7 +85,7 @@ export function createDataBackup({ workspace, modelConfig, providerConfigs, mcpC
 
 export function serializeDataBackup(backup) {
   const serialized = JSON.stringify(backup, null, 2)
-  if (new TextEncoder().encode(serialized).length > MAX_DATA_BACKUP_BYTES) {
+  if (dataBackupByteLength(serialized) > MAX_DATA_BACKUP_BYTES) {
     throw new Error('The local backup exceeds the 16 MiB portable backup limit.')
   }
   return serialized
@@ -94,15 +93,13 @@ export function serializeDataBackup(backup) {
 
 export function parseDataBackup(serialized) {
   if (typeof serialized !== 'string') throw new Error('Backup content must be JSON text.')
-  if (new TextEncoder().encode(serialized).length > MAX_DATA_BACKUP_BYTES) throw new Error('The selected backup exceeds the 16 MiB import limit.')
+  if (dataBackupByteLength(serialized) > MAX_DATA_BACKUP_BYTES) throw new Error('The selected backup exceeds the 16 MiB import limit.')
   let parsed
   try {
-    parsed = JSON.parse(serialized)
-  } catch {
-    throw new Error('The selected file is not valid JSON.')
-  }
-  if (parsed?.kind !== DATA_BACKUP_KIND || parsed?.schemaVersion !== DATA_BACKUP_SCHEMA_VERSION) {
-    throw new Error('This is not a supported BioResearch OS backup.')
+    parsed = assertSupportedDataBackupText(serialized)
+  } catch (error) {
+    if (error.message === 'Backup content must be valid JSON.') throw new Error('The selected file is not valid JSON.')
+    throw error
   }
   const workspace = normalizeWorkspaceSnapshot(parsed.data?.workspace)
   if (!workspace) throw new Error('The backup does not contain a valid workspace snapshot.')

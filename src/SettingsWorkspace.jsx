@@ -615,7 +615,7 @@ function formatStorageBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`
 }
 
-function DataManagementPage({ summary, runtimeTarget, actionBlocked, onExport, onImport, onClearHistory }) {
+function DataManagementPage({ summary, runtimeTarget, actionBlocked, useNativeFiles, onExport, onImport, onImportFromDesktop, onClearHistory }) {
   const importInputRef = useRef(null)
   const [busyAction, setBusyAction] = useState('')
   const [feedback, setFeedback] = useState(null)
@@ -626,7 +626,7 @@ function DataManagementPage({ summary, runtimeTarget, actionBlocked, onExport, o
     setFeedback(null)
     try {
       const result = await callback()
-      setFeedback({ tone: 'success', text: result.message })
+      if (result?.message) setFeedback({ tone: 'success', text: result.message })
     } catch (error) {
       setFeedback({ tone: 'error', text: error.message || 'The local data action could not be completed.' })
     } finally {
@@ -641,6 +641,18 @@ function DataManagementPage({ summary, runtimeTarget, actionBlocked, onExport, o
     await runAction('import', async () => {
       const result = await onImport(await file.text())
       return { message: `Restored ${result.conversations} conversation${result.conversations === 1 ? '' : 's'} and ${result.pipelineRuns} pipeline run${result.pipelineRuns === 1 ? '' : 's'} from ${file.name}.` }
+    })
+  }
+
+  const handleImportClick = async () => {
+    if (!useNativeFiles) {
+      importInputRef.current?.click()
+      return
+    }
+    await runAction('import', async () => {
+      const result = await onImportFromDesktop()
+      if (result.cancelled) return null
+      return { message: `Restored ${result.conversations} conversation${result.conversations === 1 ? '' : 's'} and ${result.pipelineRuns} pipeline run${result.pipelineRuns === 1 ? '' : 's'} from ${result.fileName}.` }
     })
   }
 
@@ -671,9 +683,9 @@ function DataManagementPage({ summary, runtimeTarget, actionBlocked, onExport, o
         <span className="data-management-icon"><FileJson size={19} /></span>
         <div><h3>Portable backup</h3><p>Export conversations, tabs, model settings, Provider metadata, MCP configuration, and Pipeline history as versioned JSON.</p><small>API keys, OAuth tokens, OS credentials, Vault content, and filesystem handles are always excluded.</small></div>
         <div className="data-management-actions">
-          <button className="settings-primary-button" onClick={() => runAction('export', async () => { const result = await onExport(); return { message: `Downloaded ${result.fileName} (${formatStorageBytes(result.bytes)}).` } })} disabled={busy}><Download size={14} />{busyAction === 'export' ? 'Exporting…' : 'Export backup'}</button>
-          <button className="settings-secondary-button" onClick={() => importInputRef.current?.click()} disabled={busy || actionBlocked}><Upload size={14} />{busyAction === 'import' ? 'Importing…' : 'Import backup'}</button>
-          <input ref={importInputRef} className="visually-hidden" type="file" accept="application/json,.json" aria-label="Select BioResearch OS backup" onChange={handleImport} />
+          <button className="settings-primary-button" onClick={() => runAction('export', async () => { const result = await onExport(); return result.cancelled ? null : { message: `${useNativeFiles ? 'Saved' : 'Downloaded'} ${result.fileName} (${formatStorageBytes(result.bytes)}).` } })} disabled={busy}><Download size={14} />{busyAction === 'export' ? 'Exporting…' : 'Export backup'}</button>
+          <button className="settings-secondary-button" onClick={handleImportClick} disabled={busy || actionBlocked}><Upload size={14} />{busyAction === 'import' ? 'Importing…' : 'Import backup'}</button>
+          {!useNativeFiles && <input ref={importInputRef} className="visually-hidden" type="file" accept="application/json,.json" aria-label="Select BioResearch OS backup" onChange={handleImport} />}
         </div>
       </div>
     </section>
@@ -693,7 +705,7 @@ function DataManagementPage({ summary, runtimeTarget, actionBlocked, onExport, o
   </div>
 }
 
-export default function SettingsWorkspace({ authStatus, authBusy, authError, modelCatalog, modelsBusy, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, chatModels, modelConfig, onSaveModelConfig, providerConfigs, onSaveProviderConfigs, mcpConfig, onSaveMcpConfig, mcpRuntime, mcpRuntimeBusy, mcpRuntimeError, onConnectMcpServer, onDisconnectMcpServer, vaultNoteCount, dataSummary, dataActionBlocked, runtimeTarget, onExportData, onImportData, onClearHistory }) {
+export default function SettingsWorkspace({ authStatus, authBusy, authError, modelCatalog, modelsBusy, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, chatModels, modelConfig, onSaveModelConfig, providerConfigs, onSaveProviderConfigs, mcpConfig, onSaveMcpConfig, mcpRuntime, mcpRuntimeBusy, mcpRuntimeError, onConnectMcpServer, onDisconnectMcpServer, vaultNoteCount, dataSummary, dataActionBlocked, runtimeTarget, useNativeDataFiles, onExportData, onImportData, onImportDataFromDesktop, onClearHistory }) {
   const [activePage, setActivePage] = useState('providers')
   const [providerQuery, setProviderQuery] = useState('')
   const [selectedProviderId, setSelectedProviderId] = useState(API_PROVIDERS[0].id)
@@ -704,7 +716,7 @@ export default function SettingsWorkspace({ authStatus, authBusy, authError, mod
   else if (activePage === 'local-models') content = <LocalModelsPage />
   else if (activePage === 'mcp') content = <McpSettingsPage config={mcpConfig} onChange={onSaveMcpConfig} runtime={mcpRuntime} runtimeBusy={mcpRuntimeBusy} runtimeError={mcpRuntimeError} onConnectServer={onConnectMcpServer} onDisconnectServer={onDisconnectMcpServer} vaultNoteCount={vaultNoteCount} />
   else if (activePage === 'retrieval') content = <RetrievalSettingsPage config={modelConfig} onSave={onSaveModelConfig} />
-  else if (activePage === 'data') content = <DataManagementPage summary={dataSummary} runtimeTarget={runtimeTarget} actionBlocked={dataActionBlocked} onExport={onExportData} onImport={onImportData} onClearHistory={onClearHistory} />
+  else if (activePage === 'data') content = <DataManagementPage summary={dataSummary} runtimeTarget={runtimeTarget} actionBlocked={dataActionBlocked} useNativeFiles={useNativeDataFiles} onExport={onExportData} onImport={onImportData} onImportFromDesktop={onImportDataFromDesktop} onClearHistory={onClearHistory} />
   else content = <FeaturePreviewPage pageId={activePage} />
 
   const hasSecondaryNavigation = activePage === 'providers'

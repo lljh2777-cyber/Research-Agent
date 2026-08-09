@@ -7,6 +7,7 @@ import { startAuthServer } from '../server/auth-server.mjs'
 import { BUILD_MODES, createRuntimeManifest, RUNTIME_TARGETS } from '../shared/runtime-capabilities.mjs'
 import { createDesktopAppServer } from './app-server.mjs'
 import { EncryptedCredentialStore } from './credential-store.mjs'
+import { DesktopDataFileManager } from './data-file-manager.mjs'
 import { ProviderRunManager } from './provider-run-manager.mjs'
 import { DesktopVaultManager } from './vault-manager.mjs'
 
@@ -30,6 +31,7 @@ let appServer
 let ownedAuthServer
 let desktopOrigin = ''
 let credentialStore
+let dataFileManager
 let providerRunManager
 let vaultManager
 
@@ -91,6 +93,14 @@ function registerIpc(runtimeManifest) {
     requireTrustedSender(event)
     await credentialStore.delete(providerId)
     return { ok: true }
+  })
+  ipcMain.handle('data-files:save-backup', async (event, input) => {
+    requireTrustedSender(event)
+    return dataFileManager.saveBackup(BrowserWindow.fromWebContents(event.sender), input)
+  })
+  ipcMain.handle('data-files:open-backup', async (event) => {
+    requireTrustedSender(event)
+    return dataFileManager.openBackup(BrowserWindow.fromWebContents(event.sender))
   })
   ipcMain.handle('providers:start-run', (event, input) => {
     requireTrustedSender(event)
@@ -170,6 +180,8 @@ async function shutdown() {
   ipcMain.removeHandler('credentials:has-provider-key')
   ipcMain.removeHandler('credentials:set-provider-key')
   ipcMain.removeHandler('credentials:delete-provider-key')
+  ipcMain.removeHandler('data-files:save-backup')
+  ipcMain.removeHandler('data-files:open-backup')
   ipcMain.removeHandler('providers:start-run')
   ipcMain.removeHandler('providers:cancel-run')
   ipcMain.removeHandler('vaults:select')
@@ -204,6 +216,7 @@ else {
       encrypt: async (value) => safeStorage.encryptString(value).toString('base64'),
       decrypt: async (value) => safeStorage.decryptString(Buffer.from(value, 'base64')),
     })
+    dataFileManager = new DesktopDataFileManager({ dialog })
     providerRunManager = new ProviderRunManager({
       credentialResolver: (providerId, endpoint) => credentialStore.get(providerId, endpoint),
     })

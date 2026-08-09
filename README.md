@@ -61,6 +61,8 @@ Playwright uses an installed Chrome locally and an isolated Chromium build in CI
 
 `Settings → 数据管理` exports a versioned JSON backup of workspace tabs, conversation snapshots, model and Provider metadata, MCP configuration, and completed Pipeline history. Import validates and normalizes the file before replacing portable local state. Conversation and Pipeline history can also be cleared without changing Provider configuration or the connected Vault.
 
+Local Web uses the browser download and file picker. The Electron target uses native save/open dialogs through an allowlisted preload bridge; the main process performs the bounded read/write and returns only the selected file name, never its full path.
+
 Portable backups intentionally exclude API keys, OAuth tokens, operating-system credentials, Vault note content, filesystem handles, active requests, and transient tool approvals. MCP commands and endpoints remain part of the exported configuration, so treat every backup as user data even though the file contains no credentials.
 
 ## Security and deployment scope

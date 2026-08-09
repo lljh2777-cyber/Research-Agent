@@ -9,6 +9,10 @@ const desktopApi = Object.freeze({
     setProviderKey: (providerId, value, allowedEndpoints) => ipcRenderer.invoke('credentials:set-provider-key', providerId, value, allowedEndpoints),
     deleteProviderKey: (providerId) => ipcRenderer.invoke('credentials:delete-provider-key', providerId),
   }),
+  dataFiles: Object.freeze({
+    saveBackup: (input) => ipcRenderer.invoke('data-files:save-backup', input),
+    openBackup: () => ipcRenderer.invoke('data-files:open-backup'),
+  }),
   providerRuns: Object.freeze({
     start: (input) => ipcRenderer.invoke('providers:start-run', input),
     cancel: (runId) => ipcRenderer.invoke('providers:cancel-run', runId),

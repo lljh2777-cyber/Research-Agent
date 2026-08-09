@@ -30,6 +30,8 @@ The scanner is read-only, skips plugin/trash/dependency directories and symbolic
 
 Workspace tabs, conversation messages, drafts, agent configuration snapshots, and completed run metadata are saved locally in a versioned IndexedDB snapshot, with a bounded localStorage fallback. Restored configuration is normalized against the current agent permission ceiling. Active requests, tool approvals, retrieval packets, decrypted credentials, OAuth tokens, directory handles, and desktop Vault capabilities are never persisted or resumed.
 
+Portable backup export/import uses native Electron save/open dialogs. The renderer sends only bounded JSON content and a suggested file name when exporting; the main process owns the chosen path and file I/O. Imports are limited to one user-selected JSON file of at most 16 MiB, and the full filesystem path is never returned through preload IPC.
+
 ## Provider credentials
 
 Electron `safeStorage` encrypts each provider key before it is written under the application's user-data directory. The encrypted record also contains a bounded list of allowed endpoint origins captured when the user enters the key.
