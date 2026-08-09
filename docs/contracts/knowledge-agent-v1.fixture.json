@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "kind": "knowledge-agent-v1-consumer-fixture",
+  "context": {
+    "schemaVersion": 1,
+    "surface": "research",
+    "vault": {
+      "id": "vault-1",
+      "name": "Lab Vault",
+      "revision": "vault-rev-9"
+    },
+    "activeNote": {
+      "id": "note-1",
+      "path": "papers/findings.md",
+      "title": "Findings",
+      "revision": "note-rev-4"
+    },
+    "selection": {
+      "noteId": "note-1",
+      "anchor": {
+        "schemaVersion": 1,
+        "quote": {
+          "exact": "selected evidence",
+          "prefix": "# Findings\nThe ",
+          "suffix": " is reproducible.\n"
+        },
+        "position": { "start": 15, "end": 32 },
+        "heading": {
+          "text": "Findings",
+          "level": 1,
+          "line": 1,
+          "relativeStartLine": 1,
+          "relativeEndLine": 1
+        },
+        "line": { "start": 2, "end": 2 }
+      }
+    },
+    "attachments": [
+      {
+        "id": "attachment-1",
+        "name": "Dataset",
+        "kind": "artifact",
+        "reference": "artifact://dataset-7",
+        "mediaType": "text/csv"
+      }
+    ],
+    "contextRevision": "context-rev-3"
+  }
+}

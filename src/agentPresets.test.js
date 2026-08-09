@@ -20,10 +20,25 @@ test('ships focused, versioned research agent presets', () => {
     'literature-analyst',
     'bioinformatics-coder',
     'research-planner',
+    'knowledge-curator',
   ])
   assert(AGENT_PRESETS.every((preset) => preset.version === 1 && preset.shortName && preset.systemPrompt))
 })
 
+test('knowledge-curator is one surface-neutral identity with read-only defaults', () => {
+  const preset = getAgentPreset('knowledge-curator')
+  const config = resolveConversationConfig({ agentId: 'knowledge-curator' })
+  const run = createRunSnapshot(config, { id: 'knowledge-run-1' })
+
+  assert.deepEqual(preset.supportedSurfaces, ['research', 'knowledge-sidebar'])
+  assert.equal(config.contextContract, 'knowledge-context.v1')
+  assert.deepEqual(config.enabledTools, [TOOL_IDS.KNOWLEDGE_QUERY, TOOL_IDS.KNOWLEDGE_EXPLAIN, TOOL_IDS.KNOWLEDGE_LINT])
+  assert(!config.enabledTools.includes(TOOL_IDS.KNOWLEDGE_ANNOTATION))
+  assert.deepEqual(run.supportedSurfaces, ['research', 'knowledge-sidebar'])
+  assert.equal(run.contextContract, 'knowledge-context.v1')
+  assert.match(preset.systemPrompt, /untrusted evidence/i)
+  assert.match(preset.systemPrompt, /never repairs/i)
+})
 test('conversation overrides win for ordinary settings without expanding agent permissions', () => {
   const config = resolveConversationConfig({
     agentId: 'biologist',
