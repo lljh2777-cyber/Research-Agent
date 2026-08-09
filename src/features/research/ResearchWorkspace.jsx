@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, Atom, Bookmark, BookOpen, Check, CheckCircle2, ChevronDown, ChevronUp, CircleDot, Code2, Database, ExternalLink, FileText, GitBranch, LoaderCircle, MessageSquare, Network, Paperclip, Pause, RefreshCw, Search, Send, ShieldCheck, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react'
 import { describeVaultConnection, VAULT_CONNECTION_STATUS } from '../../vaultConnection.js'
 import { AGENT_PRESETS, getAgentPreset, TOOL_IDS } from '../../agentPresets.js'
+import { getResearchRunPresentation } from './runPresentation.js'
 
 const stages = ['Query parsed', 'Retrieve', 'Rerank', 'Synthesize', 'Cite']
 const RESEARCH_TOOL_OPTIONS = Object.freeze({
@@ -470,7 +471,7 @@ function ToolApprovalDialog({ approval, onResolve }) {
   </div>
 }
 
-function RetrievalPath({ activeStage, vaultName, topK, rerankLabel, packet, answerMode, wikilinksEnabled }) {
+function RetrievalPath({ vaultName, topK, rerankLabel, packet, wikilinksEnabled, presentation }) {
   const evidenceCount = packet?.evidence?.length || 0
   const retrieval = packet?.retrieval
   const query = packet?.question || 'Ask a question to retrieve evidence'
@@ -479,7 +480,7 @@ function RetrievalPath({ activeStage, vaultName, topK, rerankLabel, packet, answ
     [`${wikilinksEnabled ? 'BM25 + Wikilinks' : 'BM25'} (top-k=${topK})`, vaultName ? `vault: ${vaultName}` : 'no Vault connected', packet ? 'done' : 'current'],
     ['Graph expansion', wikilinksEnabled ? packet ? `${retrieval?.graphExpanded || 0} one-hop result${retrieval?.graphExpanded === 1 ? '' : 's'} - rerank: ${rerankLabel}` : 'waiting for a query' : 'Disabled for this conversation', packet || !wikilinksEnabled ? 'done' : 'current'],
     [`Selected (${evidenceCount} chunks)`, packet ? `${retrieval?.candidateCount || 0} lexical candidates` : 'no evidence selected yet', packet ? 'done' : 'current'],
-    ['Answer model', packet ? activeStage >= 4 ? answerMode === 'chatgpt' ? 'Cited answer generated' : 'Retrieval preview only' : 'Agent working...' : 'waiting for evidence', packet && activeStage >= 4 ? 'done' : 'current'],
+    ['Answer model', presentation.answerDetail, presentation.answerStatus],
   ]
   return (
     <section className="inspector-section retrieval-path">
@@ -499,18 +500,18 @@ function RetrievalPath({ activeStage, vaultName, topK, rerankLabel, packet, answ
   )
 }
 
-function AgentStatus({ activeStage, running, hasActivity, onPause }) {
-  const percentage = hasActivity ? running ? Math.min(91, Math.round(((activeStage + 0.7) / stages.length) * 100)) : 100 : 0
+function AgentStatus({ running, hasActivity, onPause, presentation }) {
+  const canPause = running && !presentation.terminalStatus
   return (
     <section className="inspector-section agent-status">
       <div className="inspector-heading"><span>Agent status</span><ChevronUp size={15} /></div>
-      <div className="status-line"><span className="live-dot" /> <strong>{running ? 'Agent running' : 'Agent ready'}</strong>{hasActivity && <span className="run-id">Current run</span>}{running && <button onClick={onPause} aria-label="Pause run"><Pause size={15} /></button>}</div>
+      <div className="status-line"><span className={`live-dot ${presentation.terminalStatus || ''}`} /> <strong>{presentation.agentLabel}</strong>{hasActivity && <span className="run-id">Current run</span>}{canPause && <button onClick={onPause} aria-label="Pause run"><Pause size={15} /></button>}</div>
       <div className="run-card">
         <div className="run-icon"><Atom size={18} /></div>
-        <div className="run-copy"><strong>Research agent</strong><span>{running ? 'Synthesizing answer and citing sources...' : hasActivity ? 'Run complete' : 'Ready for your first question'}</span></div>
-        {hasActivity && <span className="run-percent">{percentage}%</span>}
+        <div className="run-copy"><strong>Research agent</strong><span>{presentation.runDetail}</span></div>
+        {hasActivity && presentation.progressLabel && <span className="run-percent">{presentation.progressLabel}</span>}
       </div>
-      <div className="progress-track"><span style={{ width: `${percentage}%` }} /></div>
+      <div className="progress-track"><span style={{ width: `${presentation.progress}%` }} /></div>
       {hasActivity && <button className="full-run">View full run details <ArrowRight size={15} /></button>}
     </section>
   )
@@ -533,13 +534,14 @@ function Sources({ sources, onOpenNote }) {
   )
 }
 
-function Inspector({ activeStage, running, hasActivity, onPause, linkedNotes, sources, vaultName, topK, rerankLabel, packet, answerMode, wikilinksEnabled, onOpenNote }) {
+function Inspector({ activeStage, running, hasActivity, onPause, linkedNotes, sources, vaultName, topK, rerankLabel, packet, answerMode, runStatus, wikilinksEnabled, onOpenNote }) {
+  const presentation = getResearchRunPresentation({ runStatus, running, hasActivity, activeStage, stageCount: stages.length, packet, answerMode })
   return (
     <aside className="inspector">
       <div className="inspector-title"><BookOpen size={18} /> <span>Knowledge context</span><ChevronUp size={16} /></div>
       <LinkedNotes notes={linkedNotes} onOpenNote={onOpenNote} />
-      <RetrievalPath activeStage={activeStage} vaultName={vaultName} topK={topK} rerankLabel={rerankLabel} packet={packet} answerMode={answerMode} wikilinksEnabled={wikilinksEnabled} />
-      <AgentStatus activeStage={activeStage} running={running} hasActivity={hasActivity} onPause={onPause} />
+      <RetrievalPath vaultName={vaultName} topK={topK} rerankLabel={rerankLabel} packet={packet} wikilinksEnabled={wikilinksEnabled} presentation={presentation} />
+      <AgentStatus running={running} hasActivity={hasActivity} onPause={onPause} presentation={presentation} />
       <Sources sources={sources} onOpenNote={onOpenNote} />
     </aside>
   )
@@ -547,7 +549,7 @@ function Inspector({ activeStage, running, hasActivity, onPause, linkedNotes, so
 
 export function ResearchWorkspace({ phase, setupProps, conversationProps, note, onCloseNote, approval, onResolveApproval }) {
   if (phase === 'setup') return <ResearchSetup {...setupProps} />
-  const { config, selectedModel, vaultName, mcpConnected, canEdit, onEdit, messages, running, activeStage, retrievalPacket, input, setInput, onSubmit, disabled, models, authStatus, authBusy, modelCatalog, modelsBusy, onSelectModel, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, onOpenNote, linkedNotes, sources, topK, rerankLabel, answerMode, wikilinksEnabled, onPause } = conversationProps
+  const { config, selectedModel, vaultName, mcpConnected, canEdit, onEdit, messages, running, activeStage, retrievalPacket, input, setInput, onSubmit, disabled, models, authStatus, authBusy, modelCatalog, modelsBusy, onSelectModel, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, onOpenNote, linkedNotes, sources, topK, rerankLabel, answerMode, runStatus, wikilinksEnabled, onPause } = conversationProps
   const hasActivity = messages.length > 0 || Boolean(retrievalPacket)
   return <>
     <div className="workspace-content">
@@ -563,7 +565,7 @@ export function ResearchWorkspace({ phase, setupProps, conversationProps, note, 
         <EvidenceTrail activeStage={activeStage} running={running} hasActivity={hasActivity} />
         <Composer value={input} setValue={setInput} onSubmit={onSubmit} disabled={disabled} selectedModel={selectedModel} models={models} onSelectModel={onSelectModel} authStatus={authStatus} authBusy={authBusy} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={onConnectChatgpt} onLogoutChatgpt={onLogoutChatgpt} onRefreshModels={onRefreshModels} />
       </div>
-      <Inspector activeStage={activeStage} running={running} hasActivity={hasActivity} onPause={onPause} linkedNotes={linkedNotes} sources={sources} vaultName={vaultName} topK={topK} rerankLabel={rerankLabel} packet={retrievalPacket} answerMode={answerMode} wikilinksEnabled={wikilinksEnabled} onOpenNote={onOpenNote} />
+      <Inspector activeStage={activeStage} running={running} hasActivity={hasActivity} onPause={onPause} linkedNotes={linkedNotes} sources={sources} vaultName={vaultName} topK={topK} rerankLabel={rerankLabel} packet={retrievalPacket} answerMode={answerMode} runStatus={runStatus} wikilinksEnabled={wikilinksEnabled} onOpenNote={onOpenNote} />
     </div>
     {note && <NotePreview note={note} onClose={onCloseNote} />}
     <ToolApprovalDialog approval={approval} onResolve={onResolveApproval} />

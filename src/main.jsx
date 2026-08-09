@@ -397,6 +397,7 @@ function App() {
   const supportsLoopbackResearchExecution = runtimeCapabilities?.researchExecution === 'loopback-provider'
   const activeResearchSession = researchSessions[activeTabId] || createResearchSession({ modelId: modelConfig.chatModelId, knowledgeBaseId: vaultName })
   const { phase, input, messages, running, activeStage, answerMode, retrievalPacket } = activeResearchSession
+  const runStatus = activeResearchSession.runSnapshots?.at(-1)?.status
   const activeHasVaultScope = Boolean(vaultName && activeResearchSession.configSnapshot?.knowledgeScopes?.some((scope) => scope.vaultId === vaultName))
   const anyResearchRunning = Object.values(researchSessions).some((session) => session.running)
   const dataActionBlocked = anyResearchRunning || Boolean(pipelineRunningId)
@@ -713,7 +714,6 @@ function App() {
       }
       return
     }
-    if (supportsLoopbackVault && await syncFromLocalAdapter()) return
     if (supportsBrowserPickerVault && runtimeAdapter.vault.canSelectDirectory) {
       try {
         const selection = await runtimeAdapter.vault.selectDirectory()
@@ -723,6 +723,7 @@ function App() {
         if (error?.name === 'AbortError') return
       }
     }
+    if (supportsLoopbackVault && await syncFromLocalAdapter()) return
     vaultInputRef.current?.open()
   }
 
@@ -792,7 +793,7 @@ function App() {
     let cancelled = false
     Promise.all([loadVaultSnapshot(), loadVaultHandle()]).then(async ([snapshot, handle]) => {
       if (cancelled) return
-      const localSynced = !supportsDesktopVault && supportsLoopbackVault
+      const localSynced = !supportsDesktopVault && !supportsBrowserPickerVault && supportsLoopbackVault
         ? await syncFromLocalAdapter(true)
         : false
       if (localSynced || cancelled) return
@@ -1238,9 +1239,9 @@ function App() {
         if (renderFrame) window.cancelAnimationFrame(renderFrame)
         const usage = providerUsageSummary(result.usage)
         const contextLabel = `Context ${compactTokenCount(contextPlan.estimatedInputTokens)}/${compactTokenCount(contextPlan.inputBudgetTokens)}`
-        const omittedLabel = contextPlan.omittedTurns ? ` 闂?${contextPlan.omittedTurns} older turn${contextPlan.omittedTurns === 1 ? '' : 's'} omitted` : ''
+        const omittedLabel = contextPlan.omittedTurns ? ` - ${contextPlan.omittedTurns} older turn${contextPlan.omittedTurns === 1 ? '' : 's'} omitted` : ''
         const cacheLabel = apiProvider && selectedModel.providerId === 'deepseek' && usage && usage.hitTokens !== null
-          ? ` 闂?cache ${compactTokenCount(usage.hitTokens)} hit${usage.missTokens !== null ? ` / ${compactTokenCount(usage.missTokens)} miss` : ''}`
+          ? ` - cache ${compactTokenCount(usage.hitTokens)} hit${usage.missTokens !== null ? ` / ${compactTokenCount(usage.missTokens)} miss` : ''}`
           : ''
         updateResearchSession(sessionId, (current) => ({
           ...current,
@@ -1255,7 +1256,7 @@ function App() {
             toolTrace: [...toolTrace],
             usage: result.usage || null,
             contextPlan: { estimatedInputTokens: contextPlan.estimatedInputTokens, inputBudgetTokens: contextPlan.inputBudgetTokens, retainedTurns: contextPlan.retainedTurns, omittedTurns: contextPlan.omittedTurns },
-            closing: `Generated with ${result.model} through ${apiProvider ? selectedModel.provider : 'the connected ChatGPT subscription'} 闂?${agentOutput.iterations} model pass${agentOutput.iterations === 1 ? '' : 'es'} 闂?${packet.evidence.length} Vault evidence chunk${packet.evidence.length === 1 ? '' : 's'}${result.webSearchEvents?.length ? ' 闂?hosted web search used' : ''}. ${contextLabel}${omittedLabel}${cacheLabel}.`,
+            closing: `Generated with ${result.model} through ${apiProvider ? selectedModel.provider : 'the connected ChatGPT subscription'} - ${agentOutput.iterations} model pass${agentOutput.iterations === 1 ? '' : 'es'} - ${packet.evidence.length} Vault evidence chunk${packet.evidence.length === 1 ? '' : 's'}${result.webSearchEvents?.length ? ' - hosted web search used' : ''}. ${contextLabel}${omittedLabel}${cacheLabel}.`,
           } : message),
         }))
       } catch (error) {
@@ -1326,7 +1327,6 @@ function App() {
 
   const handlePause = () => {
     requestAbortControllersRef.current.get(activeTabId)?.abort()
-    updateResearchSession(activeTabId, { activeStage: 5, running: false })
   }
 
   const handleSettingsSave = (nextConfig) => {
@@ -1493,7 +1493,7 @@ function App() {
           <ResearchWorkspace
             phase={phase}
             setupProps={{ config: activeResearchSession.configSnapshot, selectedModel, models: chatModels, vaultName, vaultNoteCount: vaultNotes.length, vaultSyncState: syncState, mcpConnected: mcpRuntime.sessions.length > 0, authStatus, authBusy, modelCatalog, modelsBusy, onSelectAgent: handleSelectAgent, onUpdateIdentity: handleUpdateAgentIdentity, onUpdateSystemPrompt: handleUpdateAgentSystemPrompt, onResetSystemPrompt: handleResetAgentSystemPrompt, onSelectModel: handleModelSelect, onSelectVault: handleSelectResearchVault, onToggleTool: handleToggleResearchTool, onConnectVault: handleConnectVault, onConnectChatgpt: handleConnectChatgpt, onLogoutChatgpt: handleLogoutChatgpt, onRefreshModels: refreshChatgptModels, onStart: handleStartResearch }}
-            conversationProps={{ config: activeResearchSession.configSnapshot, selectedModel, vaultName: activeHasVaultScope ? vaultName : '', mcpConnected: mcpRuntime.sessions.length > 0, canEdit: messages.length === 0, onEdit: handleEditResearchSetup, messages, running, activeStage, retrievalPacket, input, setInput, onSubmit: submitQuestion, disabled: anyResearchRunning, models: chatModels, authStatus, authBusy, modelCatalog, modelsBusy, onSelectModel: handleModelSelect, onConnectChatgpt: handleConnectChatgpt, onLogoutChatgpt: handleLogoutChatgpt, onRefreshModels: refreshChatgptModels, onOpenNote: setSelectedNote, linkedNotes: inspectorNotes, sources: inspectorSources, topK: modelConfig.topK, rerankLabel: rerankModel?.name || 'Disabled by profile', answerMode, wikilinksEnabled: activeHasVaultScope && activeResearchSession.configSnapshot?.enabledTools?.includes(TOOL_IDS.VAULT_WIKILINKS), onPause: handlePause }}
+            conversationProps={{ config: activeResearchSession.configSnapshot, selectedModel, vaultName: activeHasVaultScope ? vaultName : '', mcpConnected: mcpRuntime.sessions.length > 0, canEdit: messages.length === 0, onEdit: handleEditResearchSetup, messages, running, activeStage, retrievalPacket, input, setInput, onSubmit: submitQuestion, disabled: anyResearchRunning, models: chatModels, authStatus, authBusy, modelCatalog, modelsBusy, onSelectModel: handleModelSelect, onConnectChatgpt: handleConnectChatgpt, onLogoutChatgpt: handleLogoutChatgpt, onRefreshModels: refreshChatgptModels, onOpenNote: setSelectedNote, linkedNotes: inspectorNotes, sources: inspectorSources, topK: modelConfig.topK, rerankLabel: rerankModel?.name || 'Disabled by profile', answerMode, runStatus, wikilinksEnabled: activeHasVaultScope && activeResearchSession.configSnapshot?.enabledTools?.includes(TOOL_IDS.VAULT_WIKILINKS), onPause: handlePause }}
             note={selectedNote}
             onCloseNote={() => setSelectedNote(null)}
             approval={pendingToolApproval}
