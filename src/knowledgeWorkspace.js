@@ -2,7 +2,7 @@ import { resolveVaultWikilink } from './vault.js'
 
 export const DEFAULT_DOCK_LAYOUT = Object.freeze({
   left: ['files', 'outline', 'tags'],
-  right: ['graph', 'web', 'plugins'],
+  right: ['agent', 'graph', 'web', 'plugins'],
 })
 
 export const PANEL_IDS = Object.freeze([...DEFAULT_DOCK_LAYOUT.left, ...DEFAULT_DOCK_LAYOUT.right])

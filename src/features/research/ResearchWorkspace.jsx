@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, Atom, Bookmark, BookOpen, Check, CheckCircle2, ChevronDown, ChevronUp, CircleDot, Code2, Database, ExternalLink, FileText, GitBranch, LoaderCircle, MessageSquare, Network, Paperclip, Pause, RefreshCw, Search, Send, ShieldCheck, Sparkles, ThumbsDown, ThumbsUp, X } from 'lucide-react'
 import { describeVaultConnection, VAULT_CONNECTION_STATUS } from '../../vaultConnection.js'
 import { AGENT_PRESETS, getAgentPreset, TOOL_IDS } from '../../agentPresets.js'
+import { AgentConversationPanel } from '../knowledge/AgentConversationPanel.jsx'
 import { getResearchRunPresentation } from './runPresentation.js'
 
 const stages = ['Query parsed', 'Retrieve', 'Rerank', 'Synthesize', 'Cite']
@@ -547,7 +548,10 @@ function Inspector({ activeStage, running, hasActivity, onPause, linkedNotes, so
   )
 }
 
-export function ResearchWorkspace({ phase, setupProps, conversationProps, note, onCloseNote, approval, onResolveApproval }) {
+export function ResearchWorkspace({ phase, setupProps, conversationProps, knowledgePanelProps, note, onCloseNote, approval, onResolveApproval }) {
+  if (knowledgePanelProps) return <div className="knowledge-research-surface">
+    <AgentConversationPanel variant="full" {...knowledgePanelProps} />
+  </div>
   if (phase === 'setup') return <ResearchSetup {...setupProps} />
   const { config, selectedModel, vaultName, mcpConnected, canEdit, onEdit, messages, running, activeStage, retrievalPacket, input, setInput, onSubmit, disabled, models, authStatus, authBusy, modelCatalog, modelsBusy, onSelectModel, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, onOpenNote, linkedNotes, sources, topK, rerankLabel, answerMode, runStatus, wikilinksEnabled, onPause } = conversationProps
   const hasActivity = messages.length > 0 || Boolean(retrievalPacket)

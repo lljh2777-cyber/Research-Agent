@@ -6,13 +6,13 @@ import { buildVaultFileTree, collectVaultTags, DEFAULT_DOCK_LAYOUT, extractMarkd
 test('normalizes dock layout without duplicates or missing panels', () => {
   const layout = normalizeDockLayout({ left: ['files', 'files', 'web'], right: ['graph', 'unknown'] })
   assert.deepEqual(layout.left, ['files', 'web', 'outline', 'tags'])
-  assert.deepEqual(layout.right, ['graph', 'plugins'])
+  assert.deepEqual(layout.right, ['graph', 'agent', 'plugins'])
 })
 
 test('moves a panel across docks and preserves ordering', () => {
   const moved = moveDockPanel(DEFAULT_DOCK_LAYOUT, 'files', 'right', 'web')
   assert.deepEqual(moved.left, ['outline', 'tags'])
-  assert.deepEqual(moved.right, ['graph', 'files', 'web', 'plugins'])
+  assert.deepEqual(moved.right, ['agent', 'graph', 'files', 'web', 'plugins'])
 })
 
 test('extracts headings and aggregates frontmatter and inline tags', () => {
