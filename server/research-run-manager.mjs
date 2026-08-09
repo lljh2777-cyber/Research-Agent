@@ -2,12 +2,12 @@ import { randomUUID } from 'node:crypto'
 
 import {
   applyResearchRunEvent,
+  canApplyResearchRunEvent,
   createResearchRunRecord,
   isTerminalResearchRunStatus,
   RESEARCH_RUN_EVENT,
+  validateResearchRunEvent,
 } from '../src/research/runProtocol.js'
-
-const EVENT_TYPES = new Set(Object.values(RESEARCH_RUN_EVENT))
 const RUN_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/
 
 function jsonClone(value) {
@@ -25,12 +25,8 @@ function requireRunId(value) {
 }
 
 function normalizeEvent(runId, value, maxEventBytes) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw Object.assign(new Error('Research run events must be objects.'), { statusCode: 400 })
-  }
-  if (!EVENT_TYPES.has(value.type)) {
-    throw Object.assign(new Error(`Unsupported research run event: ${String(value.type || 'missing')}.`), { statusCode: 400 })
-  }
+  const validationError = validateResearchRunEvent(value)
+  if (validationError) throw Object.assign(new Error(validationError), { statusCode: 400 })
   if (value.runId && value.runId !== runId) {
     throw Object.assign(new Error('Research run event ID does not match the route.'), { statusCode: 409 })
   }
@@ -98,6 +94,7 @@ export class ResearchRunManager {
       run,
       events: [],
       eventIds: new Set(),
+      pendingToolRequests: new Map(),
       nextCursor: 1,
       bufferedBytes: 0,
       terminalAt: null,
@@ -125,6 +122,16 @@ export class ResearchRunManager {
       if (clientEventId && entry.eventIds.has(clientEventId)) continue
       if (isTerminalResearchRunStatus(entry.run.status)) continue
       const event = normalizeEvent(id, raw, this.#maxEventBytes)
+      if (!canApplyResearchRunEvent(entry.run, event)) {
+        throw Object.assign(new Error(`Research run event ${event.type} is invalid while status is ${entry.run.status}.`), { statusCode: 409 })
+      }
+      const requestId = String(event.requestId || '').trim()
+      if (event.type === RESEARCH_RUN_EVENT.TOOL_EXECUTION_REQUESTED && entry.pendingToolRequests.has(requestId)) {
+        throw Object.assign(new Error('Tool execution requestId has already been recorded.'), { statusCode: 409 })
+      }
+      if (event.type === RESEARCH_RUN_EVENT.TOOL_EXECUTION_COMPLETED && !entry.pendingToolRequests.has(requestId)) {
+        throw Object.assign(new Error('Tool execution request was not found or is already completed.'), { statusCode: 409 })
+      }
       const cursor = entry.nextCursor++
       const envelope = {
         cursor,
@@ -135,9 +142,17 @@ export class ResearchRunManager {
       entry.events.push({ ...envelope, bytes })
       entry.bufferedBytes += bytes
       if (clientEventId) entry.eventIds.add(clientEventId)
-      entry.run = applyResearchRunEvent(entry.run, event, { now: envelope.recordedAt })
+      if (event.type === RESEARCH_RUN_EVENT.TOOL_EXECUTION_REQUESTED) entry.pendingToolRequests.set(requestId, event.call)
+      if (event.type === RESEARCH_RUN_EVENT.TOOL_EXECUTION_COMPLETED) entry.pendingToolRequests.delete(requestId)
+      entry.run = applyResearchRunEvent(entry.run, event, {
+        now: envelope.recordedAt,
+        pendingToolRequests: entry.pendingToolRequests.size,
+      })
       entry.lastActivityAt = Date.parse(envelope.recordedAt)
-      if (isTerminalResearchRunStatus(entry.run.status)) entry.terminalAt = Date.parse(envelope.recordedAt)
+      if (isTerminalResearchRunStatus(entry.run.status)) {
+        entry.terminalAt = Date.parse(envelope.recordedAt)
+        entry.pendingToolRequests.clear()
+      }
       this.#trim(entry)
       accepted += 1
       this.#notify(id, envelope)

@@ -37,6 +37,23 @@ const TERMINAL_STATUSES = new Set([
   RESEARCH_RUN_STATUS.CANCELLED,
 ])
 
+const EVENT_TYPES = new Set(Object.values(RESEARCH_RUN_EVENT))
+
+const ALLOWED_EVENT_STATUSES = Object.freeze({
+  [RESEARCH_RUN_EVENT.RUN_STARTED]: [RESEARCH_RUN_STATUS.CREATED],
+  [RESEARCH_RUN_EVENT.MODEL_STARTED]: [RESEARCH_RUN_STATUS.RUNNING],
+  [RESEARCH_RUN_EVENT.MODEL_TEXT_DELTA]: [RESEARCH_RUN_STATUS.RUNNING],
+  [RESEARCH_RUN_EVENT.MODEL_REASONING_DELTA]: [RESEARCH_RUN_STATUS.RUNNING],
+  [RESEARCH_RUN_EVENT.PROVIDER_EVENT]: [RESEARCH_RUN_STATUS.RUNNING],
+  [RESEARCH_RUN_EVENT.TOOL_ROUND_STARTED]: [RESEARCH_RUN_STATUS.RUNNING],
+  [RESEARCH_RUN_EVENT.TOOL_EXECUTION_REQUESTED]: [RESEARCH_RUN_STATUS.RUNNING, RESEARCH_RUN_STATUS.WAITING_APPROVAL],
+  [RESEARCH_RUN_EVENT.TOOL_EXECUTION_COMPLETED]: [RESEARCH_RUN_STATUS.WAITING_APPROVAL],
+  [RESEARCH_RUN_EVENT.TOOL_ROUND_COMPLETED]: [RESEARCH_RUN_STATUS.RUNNING],
+  [RESEARCH_RUN_EVENT.RUN_COMPLETED]: [RESEARCH_RUN_STATUS.RUNNING],
+  [RESEARCH_RUN_EVENT.RUN_FAILED]: [RESEARCH_RUN_STATUS.CREATED, RESEARCH_RUN_STATUS.RUNNING, RESEARCH_RUN_STATUS.WAITING_APPROVAL],
+  [RESEARCH_RUN_EVENT.RUN_CANCELLED]: [RESEARCH_RUN_STATUS.CREATED, RESEARCH_RUN_STATUS.RUNNING, RESEARCH_RUN_STATUS.WAITING_APPROVAL],
+})
+
 function boundedInteger(value, fallback, minimum, maximum) {
   const parsed = Number(value)
   return Number.isInteger(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback
@@ -53,6 +70,32 @@ export function normalizeResearchRunPolicy(value = {}) {
 
 export function isTerminalResearchRunStatus(status) {
   return TERMINAL_STATUSES.has(status)
+}
+
+export function validateResearchRunEvent(event) {
+  if (!event || typeof event !== 'object' || Array.isArray(event)) return 'Research run events must be objects.'
+  if (!EVENT_TYPES.has(event.type)) return `Unsupported research run event: ${String(event.type || 'missing')}.`
+  if (event.iteration !== undefined && (!Number.isInteger(Number(event.iteration)) || Number(event.iteration) < 1)) {
+    return 'Research run event iteration must be a positive integer.'
+  }
+  if (event.type === RESEARCH_RUN_EVENT.TOOL_EXECUTION_REQUESTED) {
+    if (!String(event.requestId || '').trim()) return 'Tool execution requests require a requestId.'
+    if (!event.call || typeof event.call !== 'object' || Array.isArray(event.call)) return 'Tool execution requests require a call object.'
+    if (!String(event.call.id || '').trim() || !String(event.call.name || '').trim()) {
+      return 'Tool execution requests require a call ID and name.'
+    }
+  }
+  if (event.type === RESEARCH_RUN_EVENT.TOOL_EXECUTION_COMPLETED && !String(event.requestId || '').trim()) {
+    return 'Tool execution completions require a requestId.'
+  }
+  return null
+}
+
+export function canApplyResearchRunEvent(run, event) {
+  if (!run || !event || (event.runId && event.runId !== run.id)) return false
+  const validationError = validateResearchRunEvent(event)
+  if (validationError) return false
+  return (ALLOWED_EVENT_STATUSES[event.type] || []).includes(run.status)
 }
 
 export function createResearchRunRecord({
@@ -93,18 +136,26 @@ export function eventStatus(type) {
   return null
 }
 
-export function applyResearchRunEvent(run, event, { now = new Date().toISOString() } = {}) {
-  if (!run || !event || (event.runId && event.runId !== run.id)) return run
+export function applyResearchRunEvent(run, event, {
+  now = new Date().toISOString(),
+  pendingToolRequests = 0,
+} = {}) {
+  if (!canApplyResearchRunEvent(run, event)) return run
   const status = eventStatus(event.type)
   const terminal = status && isTerminalResearchRunStatus(status)
+  const resolvedStatus = event.type === RESEARCH_RUN_EVENT.TOOL_EXECUTION_COMPLETED && pendingToolRequests > 0
+    ? RESEARCH_RUN_STATUS.WAITING_APPROVAL
+    : status
   return {
     ...run,
-    ...(status ? { status } : {}),
+    ...(resolvedStatus ? { status: resolvedStatus } : {}),
     updatedAt: now,
-    completedAt: terminal ? now : run.completedAt,
+    completedAt: terminal ? run.completedAt || now : run.completedAt,
     iteration: Math.max(run.iteration || 0, Number(event.iteration) || 0),
-    error: event.type === RESEARCH_RUN_EVENT.RUN_FAILED
-      ? event.error || { message: 'Research run failed.' }
-      : run.error,
+    error: event.type === RESEARCH_RUN_EVENT.RUN_COMPLETED
+      ? null
+      : (event.type === RESEARCH_RUN_EVENT.RUN_FAILED || event.type === RESEARCH_RUN_EVENT.RUN_CANCELLED)
+        ? event.error || { message: event.type === RESEARCH_RUN_EVENT.RUN_CANCELLED ? 'Research run cancelled.' : 'Research run failed.' }
+        : run.error,
   }
 }

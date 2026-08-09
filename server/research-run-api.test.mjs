@@ -52,6 +52,14 @@ test('creates, appends, replays, and streams Research Run events', async () => {
     const streamText = await stream.text()
     assert.match(streamText, /id: 1/)
     assert.match(streamText, /event: run\.completed/)
+
+    const resumedStream = await fetch(`${origin}/api/research/runs/run-http/events?follow=1`, {
+      headers: { Accept: 'text/event-stream', 'Last-Event-ID': '1' },
+    })
+    const resumedText = await resumedStream.text()
+    assert.doesNotMatch(resumedText, /id: 1/)
+    assert.match(resumedText, /id: 2/)
+    assert.match(resumedText, /event: run\.completed/)
   })
 })
 
@@ -67,6 +75,15 @@ test('returns bounded API errors instead of falling through to the app shell', a
       body: JSON.stringify({ id: '../invalid' }),
     })
     assert.equal(invalid.status, 400)
+
+    const created = await fetch(`${origin}/api/research/runs`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'run-illegal-transition' }),
+    })
+    assert.equal(created.status, 201)
+    const illegalTransition = await fetch(`${origin}/api/research/runs/run-illegal-transition/events`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events: [{ type: RESEARCH_RUN_EVENT.RUN_COMPLETED }] }),
+    })
+    assert.equal(illegalTransition.status, 409)
   })
 })
 

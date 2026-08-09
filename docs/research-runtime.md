@@ -23,7 +23,7 @@ Provider credentials are sent only to the same-origin loopback start route, reta
 
 ## Delegated browser tools
 
-The loopback executor does not receive browser directory handles or bypass tool permissions. When the model requests a tool, it emits `tool.execution.requested` with a unique request ID and moves the run to `waiting-approval`. The Research client executes the call through the permission-filtered Tool Registry and posts the provider-neutral result to `/tool-results`. `tool.execution.completed` moves the run back to `running`.
+The loopback executor does not receive browser directory handles or bypass tool permissions. When the model requests a tool, it emits `tool.execution.requested` with a unique request ID and moves the run to `waiting-approval`. The Research client executes the call through the permission-filtered Tool Registry and posts the provider-neutral result to `/tool-results`. A run remains `waiting-approval` while any request in its tool round is unresolved, then returns to `running` after the final completion.
 
 On reattachment, the client first loads the complete bounded replay window and builds a set of completed tool request IDs before dispatching unresolved requests. A tool whose completion event is already recorded is never executed again. As with any crash boundary, a side effect that completed locally but crashed before its completion acknowledgement cannot be proven exactly-once; future write tools must therefore use their own idempotency keys and conflict checks.
 

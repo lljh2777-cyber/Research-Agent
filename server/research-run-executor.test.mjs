@@ -83,3 +83,30 @@ test('cancels provider ownership and rejects late tool results', async () => {
   assert.throws(() => executor.submitToolResult('run-provider-cancel', requested.event.requestId, {}), /no longer accepting/i)
   assert.equal(manager.get('run-provider-cancel').run.status, RESEARCH_RUN_STATUS.CANCELLED)
 })
+
+test('does not start terminal or renderer-owned Research Runs', () => {
+  const manager = new ResearchRunManager()
+  const executor = new ResearchRunExecutor({ manager, streamProvider: toolCallingProvider })
+  manager.create({ id: 'run-terminal', executionOwner: 'loopback' })
+  manager.cancel('run-terminal')
+  assert.deepEqual(executor.start('run-terminal', {}), { started: false, terminal: true, runId: 'run-terminal' })
+
+  manager.create({ id: 'run-renderer', executionOwner: 'renderer' })
+  assert.throws(() => executor.start('run-renderer', {}), /not owned by the loopback executor/)
+})
+
+test('keeps accepted delegated tool result retries idempotent', async () => {
+  const manager = new ResearchRunManager()
+  manager.create({ id: 'run-provider-retry', executionOwner: 'loopback' })
+  const executor = new ResearchRunExecutor({ manager, streamProvider: toolCallingProvider })
+  executor.start('run-provider-retry', {
+    kind: 'provider', providerId: 'compatible', endpoint: 'http://127.0.0.1:1234/v1', model: 'test-model',
+    messages: [{ role: 'user', content: 'test' }], tools: [{ type: 'function', function: { name: 'vault_search', parameters: {} } }],
+  })
+  const requested = await waitFor(() => manager.eventsAfter('run-provider-retry').events
+    .find((item) => item.event.type === RESEARCH_RUN_EVENT.TOOL_EXECUTION_REQUESTED))
+  const result = { id: 'call-1', name: 'vault_search', content: '{}', summary: 'ok', isError: false }
+  assert.equal(executor.submitToolResult('run-provider-retry', requested.event.requestId, result).accepted, true)
+  assert.deepEqual(executor.submitToolResult('run-provider-retry', requested.event.requestId, result), { accepted: false, duplicate: true })
+  await waitFor(() => manager.get('run-provider-retry').run.status === RESEARCH_RUN_STATUS.COMPLETED)
+})
