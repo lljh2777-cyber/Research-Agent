@@ -51,10 +51,33 @@ test('creates and advances a durable research run record from normalized events'
 
 test('tracks delegated browser tool approval without treating it as a terminal state', () => {
   const run = createResearchRunRecord({ id: 'run-tool-status' })
-  const waiting = applyResearchRunEvent(run, { type: RESEARCH_RUN_EVENT.TOOL_EXECUTION_REQUESTED, runId: run.id })
-  const resumed = applyResearchRunEvent(waiting, { type: RESEARCH_RUN_EVENT.TOOL_EXECUTION_COMPLETED, runId: run.id })
+  const started = applyResearchRunEvent(run, { type: RESEARCH_RUN_EVENT.RUN_STARTED, runId: run.id })
+  const waiting = applyResearchRunEvent(started, {
+    type: RESEARCH_RUN_EVENT.TOOL_EXECUTION_REQUESTED,
+    runId: run.id,
+    requestId: 'request-1',
+    call: { id: 'call-1', name: 'vault_search' },
+  })
+  const resumed = applyResearchRunEvent(waiting, {
+    type: RESEARCH_RUN_EVENT.TOOL_EXECUTION_COMPLETED,
+    runId: run.id,
+    requestId: 'request-1',
+  })
 
   assert.equal(waiting.status, RESEARCH_RUN_STATUS.WAITING_APPROVAL)
   assert.equal(resumed.status, RESEARCH_RUN_STATUS.RUNNING)
   assert.equal(resumed.completedAt, null)
+})
+
+test('rejects illegal transitions and preserves a terminal record', () => {
+  const created = createResearchRunRecord({ id: 'run-transitions' })
+  const illegalCompletion = applyResearchRunEvent(created, { type: RESEARCH_RUN_EVENT.RUN_COMPLETED, runId: created.id })
+  assert.equal(illegalCompletion, created)
+
+  const started = applyResearchRunEvent(created, { type: RESEARCH_RUN_EVENT.RUN_STARTED, runId: created.id })
+  const completed = applyResearchRunEvent(started, { type: RESEARCH_RUN_EVENT.RUN_COMPLETED, runId: created.id, iteration: 1 })
+  const afterTerminal = applyResearchRunEvent(completed, { type: RESEARCH_RUN_EVENT.RUN_STARTED, runId: created.id })
+
+  assert.equal(completed.status, RESEARCH_RUN_STATUS.COMPLETED)
+  assert.equal(afterTerminal, completed)
 })

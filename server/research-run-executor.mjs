@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { runResearchAgent } from '../src/research/agentEngine.js'
-import { RESEARCH_RUN_EVENT } from '../src/research/runProtocol.js'
+import { isTerminalResearchRunStatus, RESEARCH_RUN_EVENT, RESEARCH_RUN_STATUS } from '../src/research/runProtocol.js'
 import { normalizeProviderError } from './provider-errors.mjs'
 import { streamProviderChat } from './provider-runtime.mjs'
 
@@ -75,8 +75,14 @@ export class ResearchRunExecutor {
 
   start(runId, rawInput) {
     const id = String(runId || '')
-    this.#manager.get(id)
-    if (this.#active.has(id)) return { started: false, runId: id }
+    const snapshot = this.#manager.get(id)
+    if (isTerminalResearchRunStatus(snapshot.run.status)) return { started: false, terminal: true, runId: id }
+    if (snapshot.run.executionOwner !== 'loopback') {
+      throw Object.assign(new Error('This Research Run is not owned by the loopback executor.'), { statusCode: 409 })
+    }
+    if (snapshot.run.status !== RESEARCH_RUN_STATUS.CREATED || this.#active.has(id)) {
+      return { started: false, runId: id, status: snapshot.run.status }
+    }
     if (this.#active.size >= MAX_ACTIVE_RUNS) throw Object.assign(new Error('Too many Research Runs are active.'), { statusCode: 429 })
     const input = validateProviderExecution(rawInput)
     const active = {
@@ -107,6 +113,10 @@ export class ResearchRunExecutor {
     const active = this.#active.get(id)
     if (!active) throw Object.assign(new Error('Research Run is no longer accepting tool results.'), { statusCode: 409 })
     if (active.resolvedTools.has(toolRequestId)) return { accepted: false, duplicate: true }
+    const snapshot = this.#manager.get(id)
+    if (isTerminalResearchRunStatus(snapshot.run.status) || snapshot.run.status !== RESEARCH_RUN_STATUS.WAITING_APPROVAL) {
+      throw Object.assign(new Error('Research Run is no longer accepting tool results.'), { statusCode: 409 })
+    }
     const pending = active.pendingTools.get(toolRequestId)
     if (!pending) throw Object.assign(new Error('Tool execution request was not found.'), { statusCode: 404 })
     const result = cloneJson(rawResult, { maxBytes: MAX_TOOL_RESULT_BYTES, message: 'Tool result is too large.' })

@@ -56,3 +56,27 @@ test('cancels an active run through the same terminal event protocol', () => {
   assert.equal(cancelled.run.status, RESEARCH_RUN_STATUS.CANCELLED)
   assert.equal(manager.cancel('run-cancel').cancelled, false)
 })
+
+test('rejects illegal transitions and keeps waiting until every delegated tool result is recorded', () => {
+  const manager = new ResearchRunManager()
+  manager.create({ id: 'run-tool-round' })
+  assert.throws(() => manager.append('run-tool-round', { type: RESEARCH_RUN_EVENT.RUN_COMPLETED }), /invalid while status is created/)
+
+  manager.append('run-tool-round', { type: RESEARCH_RUN_EVENT.RUN_STARTED, clientEventId: 'start' })
+  manager.append('run-tool-round', {
+    type: RESEARCH_RUN_EVENT.TOOL_EXECUTION_REQUESTED,
+    clientEventId: 'request-1', requestId: 'request-1', call: { id: 'call-1', name: 'vault_search' },
+  })
+  manager.append('run-tool-round', {
+    type: RESEARCH_RUN_EVENT.TOOL_EXECUTION_REQUESTED,
+    clientEventId: 'request-2', requestId: 'request-2', call: { id: 'call-2', name: 'web_search' },
+  })
+  manager.append('run-tool-round', { type: RESEARCH_RUN_EVENT.TOOL_EXECUTION_COMPLETED, clientEventId: 'result-1', requestId: 'request-1' })
+  assert.equal(manager.get('run-tool-round').run.status, RESEARCH_RUN_STATUS.WAITING_APPROVAL)
+
+  manager.append('run-tool-round', { type: RESEARCH_RUN_EVENT.TOOL_EXECUTION_COMPLETED, clientEventId: 'result-2', requestId: 'request-2' })
+  assert.equal(manager.get('run-tool-round').run.status, RESEARCH_RUN_STATUS.RUNNING)
+  assert.throws(() => manager.append('run-tool-round', {
+    type: RESEARCH_RUN_EVENT.TOOL_EXECUTION_COMPLETED, requestId: 'request-2', clientEventId: 'late-result',
+  }), /invalid while status is running/)
+})
