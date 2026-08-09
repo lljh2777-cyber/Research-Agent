@@ -114,10 +114,14 @@ export async function streamProviderResponse({ providerId, endpoint, endpointTyp
   if (runtime.providerRuns.available) {
     return streamDesktopProviderResponse({ providerId, endpoint, endpointType, model, messages, tools, options, signal }, handlers)
   }
-  const response = await runtime.api.fetch('/api/providers/responses/stream', {
-    method: 'POST',
-    headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ providerId, endpoint, endpointType, apiKey, model, messages, options: { ...options, tools } }),
+  const response = await runtime.providers.streamResponse({
+    providerId,
+    endpoint,
+    endpointType,
+    apiKey,
+    model,
+    messages,
+    options: { ...options, tools },
     signal,
   })
   if (!response.ok) {

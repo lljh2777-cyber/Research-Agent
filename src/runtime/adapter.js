@@ -15,6 +15,14 @@ function timeoutSignal(windowRef, timeout) {
   return { controller, timer }
 }
 
+function combineAbortSignals(signal, timeoutController) {
+  if (!signal) return timeoutController.signal
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any([signal, timeoutController.signal])
+  if (signal.aborted) return signal
+  signal.addEventListener('abort', () => timeoutController.abort(), { once: true })
+  return timeoutController.signal
+}
+
 async function normalizeVaultSnapshot(payload) {
   if (!payload || payload.cancelled || payload.unchanged) return payload
   return { ...payload, notes: await parseVaultTextEntries(payload.files || []) }
@@ -42,6 +50,18 @@ export function createWebRuntimeAdapter({
     deleteProviderKey: async () => ({ ok: false }),
   })
 
+  const storage = Object.freeze({
+    readLocal(storageKey, target = windowRef?.localStorage) {
+      return target?.getItem(storageKey) || ''
+    },
+    writeLocal(storageKey, value, target = windowRef?.localStorage) {
+      target?.setItem(storageKey, value)
+    },
+    removeLocal(storageKey, target = windowRef?.localStorage) {
+      target?.removeItem(storageKey)
+    },
+  })
+
   const vault = Object.freeze({
     mode: 'web',
     hasDesktopBridge: false,
@@ -66,14 +86,14 @@ export function createWebRuntimeAdapter({
       const notes = await parseVaultFiles(files || [])
       return { notes, vaultName: getVaultName(notes) }
     },
-    async loadLoopback({ revision = '', timeout = 2200 } = {}) {
+    async loadLoopback({ revision = '', timeout = 2200, signal } = {}) {
       const baseUrl = getVaultServiceBaseUrl(env)
       const query = revision ? `?since=${encodeURIComponent(revision)}` : ''
       const { controller, timer } = timeoutSignal(windowRef, timeout)
       try {
         const response = await api.fetch(`${baseUrl}/api/vault${query}`, {
           headers: { Accept: 'application/json' },
-          signal: controller.signal,
+          signal: combineAbortSignals(signal, controller),
         })
         if (!response.ok) throw new Error(`Local adapter returned ${response.status}`)
         return normalizeVaultSnapshot(await response.json())
@@ -81,13 +101,13 @@ export function createWebRuntimeAdapter({
         windowRef.clearTimeout(timer)
       }
     },
-    async probeLoopback({ timeout = 700 } = {}) {
+    async probeLoopback({ timeout = 700, signal } = {}) {
       const baseUrl = getVaultServiceBaseUrl(env)
       const { controller, timer } = timeoutSignal(windowRef, timeout)
       try {
         const response = await api.fetch(`${baseUrl}/api/health`, {
           headers: { Accept: 'application/json' },
-          signal: controller.signal,
+          signal: combineAbortSignals(signal, controller),
         })
         if (!response.ok) throw new Error(`Local adapter returned ${response.status}`)
         return response.json()
@@ -113,6 +133,46 @@ export function createWebRuntimeAdapter({
     },
     async openBackup() {
       throw new Error('Use the browser file picker to import a backup.')
+    },
+  })
+
+  const providers = Object.freeze({
+    discoverModels({ providerId, endpoint, apiKey, signal }) {
+      return api.fetch('/api/providers/models', {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerId, endpoint, apiKey }),
+        signal,
+      })
+    },
+    streamResponse({ providerId, endpoint, endpointType, apiKey, model, messages, options, signal }) {
+      return api.fetch('/api/providers/responses/stream', {
+        method: 'POST',
+        headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerId, endpoint, endpointType, apiKey, model, messages, options }),
+        signal,
+      })
+    },
+  })
+
+  const mcp = Object.freeze({
+    bootstrap({ signal } = {}) {
+      return api.fetch('/api/mcp/bootstrap', {
+        headers: { Accept: 'application/json' },
+        signal,
+      })
+    },
+    request({ path, body, runtimeToken, signal }) {
+      return api.fetch(path, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'x-bioresearch-runtime-token': runtimeToken,
+        },
+        body: JSON.stringify(body),
+        signal,
+      })
     },
   })
 
@@ -167,8 +227,11 @@ export function createWebRuntimeAdapter({
     kind: 'web',
     api,
     credentials,
+    storage,
     vault,
     dataFiles,
+    providers,
+    mcp,
     researchRuns,
     providerRuns: Object.freeze({ available: false }),
     runtime: Object.freeze({

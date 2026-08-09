@@ -2,45 +2,47 @@ import { getRuntimeAdapter } from './runtime/adapter.js'
 
 let runtimeToken = ''
 
-const runtimeFetch = (...args) => getRuntimeAdapter().api.fetch(...args)
-
 async function parseResponse(response) {
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(payload.error || `MCP runtime request failed (${response.status}).`)
   return payload
 }
 
-export async function bootstrapMcpRuntime(fetchImpl = runtimeFetch) {
-  const response = await fetchImpl('/api/mcp/bootstrap', { headers: { Accept: 'application/json' } })
+export async function bootstrapMcpRuntime(fetchImpl) {
+  const response = fetchImpl
+    ? await fetchImpl('/api/mcp/bootstrap', { headers: { Accept: 'application/json' } })
+    : await getRuntimeAdapter().mcp.bootstrap()
   const payload = await parseResponse(response)
   runtimeToken = payload.runtimeToken || ''
   return { sessions: payload.sessions || [] }
 }
 
-async function runtimeRequest(path, body, fetchImpl = runtimeFetch) {
+async function runtimeRequest(path, body, fetchImpl) {
   if (!runtimeToken) await bootstrapMcpRuntime(fetchImpl)
-  const response = await fetchImpl(path, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      'x-bioresearch-runtime-token': runtimeToken,
-    },
-    body: JSON.stringify(body),
-  })
+  const response = fetchImpl
+    ? await fetchImpl(path, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'x-bioresearch-runtime-token': runtimeToken,
+      },
+      body: JSON.stringify(body),
+    })
+    : await getRuntimeAdapter().mcp.request({ path, body, runtimeToken })
   if (response.status === 403) runtimeToken = ''
   return parseResponse(response)
 }
 
-export function connectMcpServer(server, fetchImpl = runtimeFetch) {
+export function connectMcpServer(server, fetchImpl) {
   return runtimeRequest('/api/mcp/sessions/connect', { server }, fetchImpl)
 }
 
-export function disconnectMcpServer(serverId, fetchImpl = runtimeFetch) {
+export function disconnectMcpServer(serverId, fetchImpl) {
   return runtimeRequest('/api/mcp/sessions/disconnect', { serverId }, fetchImpl)
 }
 
-export async function callMcpTool({ serverId, toolName, arguments: args, confirmWrite }, fetchImpl = runtimeFetch) {
+export async function callMcpTool({ serverId, toolName, arguments: args, confirmWrite }, fetchImpl) {
   const prepared = await runtimeRequest('/api/mcp/calls/prepare', { serverId, toolName, arguments: args }, fetchImpl)
   let approved = !prepared.requiresConfirmation
   if (prepared.requiresConfirmation) approved = Boolean(await confirmWrite?.(prepared))

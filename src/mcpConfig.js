@@ -1,3 +1,5 @@
+import { getRuntimeAdapter } from './runtime/adapter.js'
+
 export const MCP_TRANSPORTS = Object.freeze([
   Object.freeze({ id: 'streamable-http', label: 'Streamable HTTP', detail: 'Remote or local HTTP MCP endpoint' }),
   Object.freeze({ id: 'sse', label: 'SSE (legacy)', detail: 'Legacy HTTP + server-sent events transport' }),
@@ -52,18 +54,23 @@ export function normalizeMcpConfig(value) {
   return { schemaVersion: 2, permissions: normalizePermissions(value.permissions), servers }
 }
 
-export function loadMcpConfig(storage = globalThis.window?.localStorage) {
+export function loadMcpConfig(storage) {
   try {
-    return normalizeMcpConfig(JSON.parse(storage?.getItem(STORAGE_KEY) || 'null'))
+    const serialized = storage
+      ? storage.getItem(STORAGE_KEY)
+      : getRuntimeAdapter().storage.readLocal(STORAGE_KEY)
+    return normalizeMcpConfig(JSON.parse(serialized || 'null'))
   } catch {
     return normalizeMcpConfig(null)
   }
 }
 
-export function saveMcpConfig(config, storage = globalThis.window?.localStorage) {
+export function saveMcpConfig(config, storage) {
   const normalized = normalizeMcpConfig(config)
   try {
-    storage?.setItem(STORAGE_KEY, JSON.stringify(normalized))
+    const serialized = JSON.stringify(normalized)
+    if (storage) storage.setItem(STORAGE_KEY, serialized)
+    else getRuntimeAdapter().storage.writeLocal(STORAGE_KEY, serialized)
   } catch {
     // MCP configuration persistence is optional in restricted browser contexts.
   }
