@@ -56,6 +56,7 @@ import {
   PROVIDER_PRESETS,
   saveProviderSessionKeys,
 } from './providerConfig.js'
+import { getRuntimeAdapter } from './runtime/adapter.js'
 import { createMcpServer, MCP_TRANSPORTS } from './mcpConfig.js'
 
 const SETTINGS_GROUPS = [
@@ -328,7 +329,7 @@ function ProvidersPage({ selectedId, configs, onChange }) {
   const apiKeyStoredByDesktop = apiKey === DESKTOP_STORED_KEY
   const apiKeyInputValue = apiKeyStoredByDesktop ? '' : apiKey
   const hasApiKey = Boolean(apiKey.trim())
-  const isDesktopRuntime = Boolean(globalThis.window?.researchDesktop)
+  const isDesktopRuntime = getRuntimeAdapter().credentials.mode === 'os-keychain'
   const selectedIds = new Set(config.selectedModelIds)
   const filteredModels = useMemo(
     () => config.models.filter((model) => `${model.name} ${model.id} ${model.kind}`.toLowerCase().includes(modelQuery.trim().toLowerCase())),

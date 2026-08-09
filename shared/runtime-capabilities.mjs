@@ -26,6 +26,8 @@ const CAPABILITY_PROFILES = Object.freeze({
     }),
     chatgptSubscriptionOAuth: true,
     providerTransport: 'loopback',
+    researchRuns: 'loopback-event-buffer',
+    researchExecution: 'loopback-provider',
     mcp: 'loopback',
   }),
   [RUNTIME_TARGETS.DESKTOP]: Object.freeze({
@@ -40,6 +42,8 @@ const CAPABILITY_PROFILES = Object.freeze({
     }),
     chatgptSubscriptionOAuth: true,
     providerTransport: 'desktop-ipc',
+    researchRuns: 'loopback-event-buffer',
+    researchExecution: 'renderer-provider-ipc',
     mcp: 'desktop-loopback',
   }),
   [RUNTIME_TARGETS.HOSTED_WEB]: Object.freeze({
@@ -54,6 +58,8 @@ const CAPABILITY_PROFILES = Object.freeze({
     }),
     chatgptSubscriptionOAuth: false,
     providerTransport: 'hosted-backend',
+    researchRuns: false,
+    researchExecution: false,
     mcp: false,
   }),
 })
@@ -97,6 +103,8 @@ export function isRuntimeManifest(value) {
     && capabilities.credentials?.subscriptionOAuth === expected.credentials.subscriptionOAuth
     && capabilities.chatgptSubscriptionOAuth === expected.chatgptSubscriptionOAuth
     && capabilities.providerTransport === expected.providerTransport
+    && capabilities.researchRuns === expected.researchRuns
+    && capabilities.researchExecution === expected.researchExecution
     && capabilities.mcp === expected.mcp
   )
 }

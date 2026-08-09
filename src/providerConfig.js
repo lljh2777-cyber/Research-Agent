@@ -16,6 +16,7 @@ import {
   resolveBailianEndpoint,
   withBailianModelProfile,
 } from '../shared/bailian-provider.mjs'
+import { getRuntimeAdapter } from './runtime/adapter.js'
 
 export const PROVIDER_PRESETS = [
   { id: 'openai', name: 'OpenAI', protocol: 'Responses / Chat Completions', endpoint: 'https://api.openai.com/v1', tone: 'cyan', keyWebsite: 'https://platform.openai.com/api-keys', requiresKey: true },
@@ -35,8 +36,8 @@ export const DESKTOP_STORED_KEY = '__stored_in_os_keychain__'
 let desktopProviderKeys = {}
 let desktopProviderKeysHydration
 
-function desktopCredentialBridge() {
-  return globalThis.window?.researchDesktop?.credentials
+function credentialAdapter() {
+  return getRuntimeAdapter().credentials
 }
 
 function normalizeProviderKeys(value) {
@@ -156,9 +157,10 @@ export function saveProviderConfigs(configs, storage = globalThis.window?.localS
 }
 
 export function loadProviderSessionKeys(storage = globalThis.window?.sessionStorage) {
-  if (desktopCredentialBridge()) return { ...desktopProviderKeys }
+  const credentials = credentialAdapter()
+  if (credentials.mode === 'os-keychain') return { ...desktopProviderKeys }
   try {
-    return normalizeProviderKeys(JSON.parse(storage?.getItem(KEY_STORAGE_KEY) || '{}'))
+    return normalizeProviderKeys(JSON.parse(credentials.read(KEY_STORAGE_KEY, storage) || '{}'))
   } catch {
     return {}
   }
@@ -174,8 +176,8 @@ export function providerCredentialEndpoints(providerId, config) {
 
 export function saveProviderSessionKeys(keys, storage = globalThis.window?.sessionStorage, endpointScopes = {}) {
   const normalized = normalizeProviderKeys(keys)
-  const bridge = desktopCredentialBridge()
-  if (bridge) {
+  const credentials = credentialAdapter()
+  if (credentials.mode === 'os-keychain') {
     const previous = desktopProviderKeys
     desktopProviderKeys = normalized
     const providerIds = new Set([...Object.keys(previous), ...Object.keys(normalized)].filter((providerId) => previous[providerId] !== normalized[providerId]))
@@ -183,8 +185,8 @@ export function saveProviderSessionKeys(keys, storage = globalThis.window?.sessi
       normalized[providerId] === DESKTOP_STORED_KEY
         ? Promise.resolve()
         : normalized[providerId]
-        ? bridge.setProviderKey(providerId, normalized[providerId], endpointScopes[providerId] || [])
-        : bridge.deleteProviderKey(providerId)
+        ? credentials.setProviderKey(providerId, normalized[providerId], endpointScopes[providerId] || [])
+        : credentials.deleteProviderKey(providerId)
     ))).then(() => {
       desktopProviderKeys = Object.fromEntries(Object.entries(desktopProviderKeys).map(([providerId, value]) => [
         providerId,
@@ -193,16 +195,16 @@ export function saveProviderSessionKeys(keys, storage = globalThis.window?.sessi
     })
   }
   try {
-    storage?.setItem(KEY_STORAGE_KEY, JSON.stringify(normalized))
+    credentials.write(KEY_STORAGE_KEY, JSON.stringify(normalized), storage)
   } catch {
     // Session-only credentials can remain in component state if storage is unavailable.
   }
   return Promise.resolve()
 }
 
-export async function hydrateProviderSessionKeys(providerIds = PROVIDER_PRESETS.map((provider) => provider.id), bridge = desktopCredentialBridge()) {
-  if (!bridge) return loadProviderSessionKeys()
-  desktopProviderKeysHydration = Promise.all(providerIds.map(async (providerId) => [providerId, await bridge.hasProviderKey(providerId) ? DESKTOP_STORED_KEY : '']))
+export async function hydrateProviderSessionKeys(providerIds = PROVIDER_PRESETS.map((provider) => provider.id), credentials = credentialAdapter()) {
+  if (!credentials || credentials.mode === 'session') return loadProviderSessionKeys()
+  desktopProviderKeysHydration = Promise.all(providerIds.map(async (providerId) => [providerId, await credentials.hasProviderKey(providerId) ? DESKTOP_STORED_KEY : '']))
     .then((entries) => {
       desktopProviderKeys = normalizeProviderKeys(Object.fromEntries(entries))
       return { ...desktopProviderKeys }
@@ -211,18 +213,18 @@ export async function hydrateProviderSessionKeys(providerIds = PROVIDER_PRESETS.
 }
 
 export async function getProviderSessionKey(providerId) {
-  if (desktopCredentialBridge()) {
+  if (credentialAdapter().mode === 'os-keychain') {
     await (desktopProviderKeysHydration || hydrateProviderSessionKeys())
     return ''
   }
   return loadProviderSessionKeys()[providerId] || ''
 }
 
-export async function fetchProviderModels({ providerId, endpoint, apiKey, signal }, fetchImpl = fetch) {
+export async function fetchProviderModels({ providerId, endpoint, apiKey, signal }, fetchImpl = (...args) => getRuntimeAdapter().api.fetch(...args)) {
   const response = await fetchImpl('/api/providers/models', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ providerId, endpoint, apiKey: desktopCredentialBridge() && apiKey === DESKTOP_STORED_KEY ? '' : apiKey }),
+    body: JSON.stringify({ providerId, endpoint, apiKey: credentialAdapter().mode === 'os-keychain' && apiKey === DESKTOP_STORED_KEY ? '' : apiKey }),
     signal,
   })
   const contentType = response.headers.get('content-type') || ''

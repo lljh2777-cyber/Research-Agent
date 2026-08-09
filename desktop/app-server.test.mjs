@@ -34,6 +34,13 @@ test('serves the desktop bundle, resolves credentials server-side, and rejects c
     assert.equal(runtime.status, 200)
     assert.equal((await runtime.json()).target, RUNTIME_TARGETS.DESKTOP)
 
+    const researchRun = await fetch(`${origin}/api/research/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: origin },
+      body: JSON.stringify({ id: 'desktop-compatible-run' }),
+    })
+    assert.equal(researchRun.status, 201)
+
     const models = await fetch(`${origin}/api/providers/models`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Origin: origin },

@@ -1,4 +1,5 @@
 import { createRuntimeManifest, isRuntimeManifest, RUNTIME_TARGETS } from '../../shared/runtime-capabilities.mjs'
+import { getRuntimeAdapter } from './adapter.js'
 
 let manifestPromise
 
@@ -7,16 +8,9 @@ export function failClosedRuntimeManifest() {
 }
 
 export async function fetchRuntimeManifest(fetchImpl = fetch) {
-  const desktopBridge = globalThis.window?.researchDesktop?.runtime
-  if (desktopBridge?.getManifest) {
-    const payload = await desktopBridge.getManifest()
-    if (!isRuntimeManifest(payload)) throw new Error('Desktop runtime returned an invalid manifest.')
-    return payload
-  }
-  const response = await fetchImpl('/api/runtime', {
-    headers: { Accept: 'application/json' },
-    cache: 'no-store',
-  })
+  const response = await getRuntimeAdapter().runtime.getManifest(fetchImpl)
+  if (!(response instanceof Response) && isRuntimeManifest(response)) return response
+  if (!(response instanceof Response)) throw new Error('Runtime capability discovery returned an invalid response.')
   if (!response.ok) throw new Error(`Runtime capability discovery failed (${response.status}).`)
   const payload = await response.json()
   if (!isRuntimeManifest(payload)) throw new Error('Runtime capability discovery returned an invalid manifest.')

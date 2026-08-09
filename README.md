@@ -79,6 +79,9 @@ Provider API credentials entered in the current Web prototype are intended for a
 ## Current slice
 
 - Research chat workspace with evidence-trail stages
+- Versioned Research Run records, normalized lifecycle events, and bounded loopback event replay behind a replaceable runtime client
+- Policy-driven Agent Engine shared by tool-free and tool-capable model routes, with bounded parallel tool calls
+- Loopback-owned Web API Provider streams with replay-safe browser tool delegation and explicit approval/result messages
 - Linked-note inspector with a query-specific retrieval path and source preview
 - Offline retrieval preview that does not invent an answer when no live model is connected
 - Research / Knowledge Graph / Pipelines / Runs navigation
@@ -86,7 +89,7 @@ Provider API credentials entered in the current Web prototype are intended for a
 - Local Obsidian Vault folder import with Markdown/frontmatter/`[[wikilink]]` parsing
 - Interactive local wikilink graph with search, type filters, backlinks, unresolved-link diagnostics, and note preview without requiring paper2MD
 - Deterministic local Vault pipelines with persisted execution traces for link integrity, retrieval readiness, and knowledge inventory
-- IndexedDB-backed Vault snapshot persistence and in-app Markdown note preview
+- Versioned, normalized IndexedDB Vault snapshots with in-app Markdown preview; legacy unversioned data is ignored and restored snapshots are labeled cached until reconnection
 - Persistent browser directory handle with manual Vault rescan when File System Access API is available
 - Optional loopback-only local Vault adapter with 15-second revision polling and read-only Markdown access
 - Electron-owned Vault picker with opaque session capabilities, bounded Markdown scans, and filesystem change notifications
@@ -121,6 +124,8 @@ This is a local integration with the official Codex client, not the public OpenA
 
 The implementation notes and source comparison are in [`docs/chatgpt-api-integration.md`](docs/chatgpt-api-integration.md).
 The multi-provider protocol boundary is documented in [`docs/provider-api-architecture.md`](docs/provider-api-architecture.md). DeepSeek and Alibaba Cloud Model Studio adapters are implemented; additional providers remain incremental integrations.
+The Web-first API, Vault, credential, streaming, and data-file boundary is documented in [`docs/runtime-adapters.md`](docs/runtime-adapters.md).
+The Research Run lifecycle, Agent Engine, persistence behavior, and loopback migration plan are documented in [`docs/research-runtime.md`](docs/research-runtime.md).
 The Electron process, credential, and loopback boundaries are documented in [`docs/desktop-runtime.md`](docs/desktop-runtime.md).
 
 ## Local Vault adapter
@@ -144,7 +149,7 @@ The `Settings` action opens the knowledge-base profile with Markdown parsing, em
 ## Next integration steps
 
 1. Add optional embedding and reranker adapters behind the existing evidence-packet boundary.
-2. Persist stream state so an interrupted Web view can reattach to an active run.
-3. Add note editing safeguards and explicit change conflict handling.
-4. Move long-running stream ownership and user-approved filesystem operations from loopback adapters into dedicated desktop IPC services.
+2. Move the ChatGPT subscription stream behind the server-owned Research Run contract.
+3. Add provider fallback routing that preserves tool idempotency, then citation validation, attachment ingestion, and user-visible retry controls.
+4. After the Web runtime is stable, replace loopback adapters with dedicated desktop IPC services where native ownership is required.
 5. Add signed desktop release workflows and platform-specific installer smoke tests.

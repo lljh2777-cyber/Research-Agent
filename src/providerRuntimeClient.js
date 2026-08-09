@@ -1,3 +1,5 @@
+import { getRuntimeAdapter } from './runtime/adapter.js'
+
 function parseEventBlock(block) {
   const event = block.split(/\r?\n/).find((line) => line.startsWith('event:'))?.slice(6).trim() || 'message'
   const data = block.split(/\r?\n/).filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trimStart()).join('\n')
@@ -23,10 +25,6 @@ function abortError() {
   return Object.assign(new Error('Generation stopped.'), { name: 'AbortError' })
 }
 
-function providerRunBridge() {
-  return globalThis.window?.researchDesktop?.providerRuns
-}
-
 function dispatchEvent(parsed, handlers, state) {
   if (!parsed) return
   handlers.onEvent?.(parsed.event, parsed.payload)
@@ -39,7 +37,7 @@ function dispatchEvent(parsed, handlers, state) {
 }
 
 async function streamDesktopProviderResponse(input, handlers) {
-  const bridge = providerRunBridge()
+  const bridge = getRuntimeAdapter().providerRuns
   let transportRunId = ''
   let settled = false
   const pendingPayloads = []
@@ -112,10 +110,11 @@ async function streamDesktopProviderResponse(input, handlers) {
 
 export async function streamProviderResponse({ providerId, endpoint, endpointType, apiKey, model, messages, tools, options, signal, onDelta, onReasoningDelta, onToolCallDelta, onEvent }) {
   const handlers = { onDelta, onReasoningDelta, onToolCallDelta, onEvent }
-  if (providerRunBridge()) {
+  const runtime = getRuntimeAdapter()
+  if (runtime.providerRuns.available) {
     return streamDesktopProviderResponse({ providerId, endpoint, endpointType, model, messages, tools, options, signal }, handlers)
   }
-  const response = await fetch('/api/providers/responses/stream', {
+  const response = await runtime.api.fetch('/api/providers/responses/stream', {
     method: 'POST',
     headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
     body: JSON.stringify({ providerId, endpoint, endpointType, apiKey, model, messages, options: { ...options, tools } }),

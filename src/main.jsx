@@ -37,19 +37,23 @@ import {
   ThumbsUp,
   X,
 } from 'lucide-react'
-import { buildVaultIndex, getVaultName, parseVaultDirectory, parseVaultFiles } from './vault.js'
+import { buildVaultIndex, getVaultName } from './vault.js'
 import KnowledgeGraphSection from './KnowledgeGraph.jsx'
 import { PipelinesSection, RunsSection } from './PipelineWorkspace.jsx'
 import SettingsWorkspace from './SettingsWorkspace.jsx'
-import { hasDesktopVaultBridge, onDesktopVaultChanged, selectDesktopVault, syncDesktopVault } from './desktopVault.js'
-import { loadLocalVault } from './localVault.js'
 import { chatgptCatalogToModels, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
 import { getProviderSessionKey, hydrateProviderSessionKeys, loadProviderConfigs, providerConfigsToModels, saveProviderConfigs } from './providerConfig.js'
 import { getDeepSeekRuntimeOptions } from '../shared/deepseek-provider.mjs'
 import { getBailianRuntimeOptions } from '../shared/bailian-provider.mjs'
 import { streamProviderResponse } from './providerRuntimeClient.js'
 import { buildConversationContext, compactTokenCount, providerUsageSummary } from './conversationContext.js'
-import { runProviderAgent } from './providerAgent.js'
+import { cancelResearchRun, executeResearchRun, reattachResearchRun, resumeResearchRun } from './research/client.js'
+import {
+  RESEARCH_RUN_EVENT,
+  applyResearchRunEvent,
+  createResearchRunRecord,
+  isTerminalResearchRunStatus,
+} from './research/runProtocol.js'
 import { loadMcpConfig, saveMcpConfig } from './mcpConfig.js'
 import { createResearchToolEntries, createToolRegistry } from './toolRegistry.js'
 import {
@@ -64,12 +68,14 @@ import {
 import { executePipeline, loadPipelineRuns, savePipelineRuns } from './pipelineEngine.js'
 import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources, retrieveEvidence } from './retrieval.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
+import { describeVaultConnection, VAULT_CONNECTION_STATUS } from './vaultConnection.js'
 import { AUTH_SERVICE_UNAVAILABLE, getAuthStatus, getChatgptModels, logoutChatgpt, startChatgptLogin, streamChatgptResponse, waitForChatgptAuth } from './authClient.js'
 import { loadRuntimeManifest } from './runtime/client.js'
+import { getRuntimeAdapter } from './runtime/adapter.js'
+import VaultFallbackPicker from './runtime/VaultFallbackPicker.jsx'
 import { closeWorkspaceTab, createWorkspaceTab, findReusableTab, MAX_WORKSPACE_TABS, researchTabTitle, titleFromQuestion } from './workspaceTabs.js'
 import { clearWorkspaceSnapshot, createWorkspaceSnapshot, loadWorkspaceSnapshot, saveWorkspaceSnapshot } from './workspacePersistence.js'
 import { createDataBackup, createLocalDataSummary, parseDataBackup, serializeDataBackup } from './dataManagement.js'
-import { hasDesktopDataFilesBridge, openDesktopDataBackup, saveDesktopDataBackup } from './desktopDataFiles.js'
 import {
   AGENT_PRESETS,
   createConversationConfigSnapshot,
@@ -95,6 +101,16 @@ const SIDEBAR_COLLAPSED_KEY = 'bioresearch-os:sidebar-collapsed'
 const INITIAL_RESEARCH_TAB_ID = 'research-initial'
 const DEFAULT_AGENT_PRESET = getAgentPreset('biologist')
 const DEFAULT_RESEARCH_TAB_TITLE = researchTabTitle(DEFAULT_AGENT_PRESET.shortName, 'New research')
+const PERSISTED_RESEARCH_RUN_EVENTS = new Set([
+  RESEARCH_RUN_EVENT.RUN_STARTED,
+  RESEARCH_RUN_EVENT.MODEL_STARTED,
+  RESEARCH_RUN_EVENT.TOOL_EXECUTION_REQUESTED,
+  RESEARCH_RUN_EVENT.TOOL_EXECUTION_COMPLETED,
+  RESEARCH_RUN_EVENT.TOOL_ROUND_COMPLETED,
+  RESEARCH_RUN_EVENT.RUN_COMPLETED,
+  RESEARCH_RUN_EVENT.RUN_FAILED,
+  RESEARCH_RUN_EVENT.RUN_CANCELLED,
+])
 
 const RESEARCH_TOOL_OPTIONS = Object.freeze({
   [TOOL_IDS.VAULT_SEARCH]: { label: 'Vault retrieval', detail: 'Retrieve relevant Markdown evidence before answering.', icon: Search },
@@ -120,6 +136,7 @@ function createResearchSession({ messages = [], modelId = 'smart-default', knowl
     running: false,
     activeStage: messages.length ? 5 : 0,
     pendingQuestion: '',
+    pendingRunId: '',
     runMode: 'mock',
     answerMode: messages.length ? 'sample' : 'idle',
     retrievalPacket: null,
@@ -154,6 +171,7 @@ function responseForQuestion(question, packet) {
   return {
     id: `assistant-${Date.now()}`,
     role: 'assistant',
+    createdAt: new Date().toISOString(),
     text: evidence.length
       ? `Retrieved ${evidence.length} relevant Vault evidence chunk${evidence.length === 1 ? '' : 's'} for “${question}”. This model profile is not connected to a live provider yet, so no unsupported synthesis was generated.`
       : 'Vault 中未找到足够依据。No relevant Markdown evidence matched this question, and this model profile is not connected to a live provider.',
@@ -161,6 +179,12 @@ function responseForQuestion(question, packet) {
     closing: 'Choose a ChatGPT-backed answer model to synthesize the retrieved evidence with inline citations.',
     evidence,
   }
+}
+
+function formatMessageTime(value) {
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return ''
+  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(date)
 }
 
 function LogoMark() {
@@ -223,6 +247,8 @@ function ModelPicker({ selectedModel, models, onSelect, disabled = false, placem
 }
 
 function Sidebar({ activeSection, setActiveSection, collapsed, onToggleCollapsed, onConnectVault, onSyncVault, onOpenSettings, vaultName, vaultNoteCount, syncState, vaultSource, localAdapterState, authStatus, authBusy, onConnectChatgpt, onLogoutChatgpt, authError }) {
+  const vaultPresentation = describeVaultConnection({ vaultName, noteCount: vaultNoteCount, syncState })
+  const hasVault = vaultPresentation.status !== VAULT_CONNECTION_STATUS.DISCONNECTED
   return (
     <aside className={`sidebar ${collapsed ? 'sidebar-collapsed' : ''}`}>
       <div className="brand">
@@ -249,15 +275,15 @@ function Sidebar({ activeSection, setActiveSection, collapsed, onToggleCollapsed
       </nav>
 
       <div className="sidebar-bottom">
-        <button className="workspace-switcher" onClick={onConnectVault} aria-label="Connect Obsidian vault" title="Connect an Obsidian vault folder">
+        <button className={`workspace-switcher ${vaultPresentation.status}`} onClick={onConnectVault} aria-label={vaultPresentation.actionLabel} title={collapsed ? vaultPresentation.actionLabel : undefined}>
           <span className="workspace-icon"><FlaskConical size={17} /></span>
           <span className="workspace-copy">
-            <strong>{vaultName || 'Tumor Niche Workspace'}</strong>
-            <small>{vaultName ? `${vaultNoteCount} Markdown notes` : 'vault: tumor-niche · click to connect'}</small>
+            <strong>{vaultPresentation.title}</strong>
+            <small>{vaultPresentation.detail}</small>
           </span>
           <ChevronDown size={16} />
         </button>
-        {vaultName && <button className="settings-link sync-link" onClick={onSyncVault} disabled={syncState === 'syncing'} title={collapsed ? (syncState === 'needs-permission' ? 'Reconnect vault' : 'Sync vault') : undefined}><RefreshCw className={syncState === 'syncing' ? 'spin' : ''} size={15} /><span>{syncState === 'syncing' ? 'Syncing vault' : syncState === 'needs-permission' ? 'Reconnect vault' : 'Sync vault'}</span></button>}
+        {hasVault && <button className="settings-link sync-link" onClick={onSyncVault} disabled={syncState === 'syncing'} title={collapsed ? vaultPresentation.syncLabel : undefined}><RefreshCw className={syncState === 'syncing' ? 'spin' : ''} size={15} /><span>{vaultPresentation.syncLabel}</span></button>}
         {vaultSource === 'local-adapter' && <div className={`adapter-status ${localAdapterState}`} title={collapsed ? (localAdapterState === 'ready' ? 'Local adapter online' : 'Local adapter offline') : undefined}><Database size={14} /><span>{localAdapterState === 'ready' ? 'Local adapter online' : 'Local adapter offline'}</span>{localAdapterState === 'ready' && <small>auto sync 15s</small>}</div>}
         <div className={`account-status ${authStatus?.connected ? 'connected' : ''}`} title={collapsed ? (authStatus?.connected ? 'ChatGPT connected' : 'ChatGPT not connected') : undefined}>
           <Sparkles size={14} />
@@ -271,14 +297,15 @@ function Sidebar({ activeSection, setActiveSection, collapsed, onToggleCollapsed
   )
 }
 
-function UserMessage({ text }) {
+function UserMessage({ message }) {
+  const time = formatMessageTime(message.createdAt)
   return (
     <div className="user-message">
       <div className="message-meta">
         <span>Research question</span>
-        <span>10:24 AM <Check size={13} /></span>
+        {time && <span>{time} <Check size={13} /></span>}
       </div>
-      <p>{text}</p>
+      <p>{message.text}</p>
     </div>
   )
 }
@@ -290,8 +317,9 @@ function AssistantMessage({ message, running, onOpenNote }) {
   const reasoning = message.reasoning || ''
   const toolTrace = message.toolTrace || []
   const toolCallCount = toolTrace.reduce((total, round) => total + round.results.length, 0)
+  const time = formatMessageTime(message.createdAt)
   return (
-    <article className="assistant-message">
+    <article className="assistant-message" data-run-id={message.runId || undefined}>
       <div className="assistant-avatar"><Sparkles size={17} /></div>
       <div className="assistant-content">
         <div className="assistant-title-row">
@@ -330,7 +358,7 @@ function AssistantMessage({ message, running, onOpenNote }) {
           <button aria-label="Not helpful"><ThumbsDown size={15} /></button>
           <button aria-label="Copy"><FileText size={15} /></button>
           <button aria-label="Bookmark"><Bookmark size={15} /></button>
-          <span className="message-time">10:24 AM <span>·</span> {sourceCount || 6} sources <ChevronDown size={14} /></span>
+          <span className="message-time">{time ? <>{time} <span>·</span> </> : null}{sourceCount} source{sourceCount === 1 ? '' : 's'} <ChevronDown size={14} /></span>
         </div>
       </div>
     </article>
@@ -483,6 +511,7 @@ function ResearchSetup({
   models,
   vaultName,
   vaultNoteCount,
+  vaultSyncState,
   mcpConnected,
   authStatus,
   authBusy,
@@ -505,6 +534,7 @@ function ResearchSetup({
   const identity = config.identity || { name: selectedAgent.name, shortName: selectedAgent.shortName || selectedAgent.name }
   const enabledTools = new Set(config.enabledTools || [])
   const hasVaultScope = Boolean(vaultName && config.knowledgeScopes?.some((scope) => scope.vaultId === vaultName))
+  const vaultPresentation = describeVaultConnection({ vaultName, noteCount: vaultNoteCount, syncState: vaultSyncState })
 
   const toolAvailability = (toolId) => {
     if (toolId.startsWith('vault.') && !hasVaultScope) return vaultName ? 'Select the current Vault first' : 'Connect a Vault first'
@@ -557,7 +587,7 @@ function ResearchSetup({
           <div className="research-config-heading"><span><Database size={16} />Knowledge base</span><small>Evidence boundary</small></div>
           <div className="knowledge-scope-options">
             <button type="button" className={!hasVaultScope ? 'selected' : ''} aria-pressed={!hasVaultScope} onClick={() => onSelectVault(false)}><span><strong>No Vault</strong><small>Use model knowledge and enabled external tools only.</small></span>{!hasVaultScope && <Check size={15} />}</button>
-            {vaultName ? <button type="button" className={hasVaultScope ? 'selected' : ''} aria-pressed={hasVaultScope} onClick={() => onSelectVault(true)}><Database size={18} /><span><strong>{vaultName}</strong><small>{vaultNoteCount} Markdown notes · read-only evidence</small></span>{hasVaultScope && <Check size={15} />}</button>
+            {vaultName ? <button type="button" className={hasVaultScope ? 'selected' : ''} aria-pressed={hasVaultScope} onClick={() => onSelectVault(true)}><Database size={18} /><span><strong>{vaultPresentation.title}</strong><small>{vaultPresentation.status === VAULT_CONNECTION_STATUS.CACHED ? vaultPresentation.detail : `${vaultPresentation.detail} · read-only evidence`}</small></span>{hasVaultScope && <Check size={15} />}</button>
               : <button type="button" className="connect-vault-option" onClick={onConnectVault}><Database size={18} /><span><strong>Connect an Obsidian Vault</strong><small>Select a local knowledge-base folder.</small></span><ArrowRight size={15} /></button>}
           </div>
         </section>
@@ -813,6 +843,7 @@ function WorkspaceLauncher({ onOpen }) {
 }
 
 function App() {
+  const runtimeAdapter = useMemo(() => getRuntimeAdapter(), [])
   const [workspaceTabs, setWorkspaceTabs] = useState(() => [createWorkspaceTab('research', { id: INITIAL_RESEARCH_TAB_ID, title: DEFAULT_RESEARCH_TAB_TITLE })])
   const [activeTabId, setActiveTabId] = useState(INITIAL_RESEARCH_TAB_ID)
   const [researchSessions, setResearchSessions] = useState(() => {
@@ -825,7 +856,7 @@ function App() {
   const [vaultName, setVaultName] = useState('')
   const [vaultHandle, setVaultHandle] = useState(null)
   const [vaultCapabilityId, setVaultCapabilityId] = useState('')
-  const [vaultSource, setVaultSource] = useState('sample')
+  const [vaultSource, setVaultSource] = useState('none')
   const [localAdapterState, setLocalAdapterState] = useState('checking')
   const [localRevision, setLocalRevision] = useState('')
   const [syncState, setSyncState] = useState('idle')
@@ -852,6 +883,8 @@ function App() {
   const pipelineRunTimerRef = useRef(null)
   const mockRunTimersRef = useRef(new Map())
   const toolApprovalResolverRef = useRef(null)
+  const reattachedResearchRunsRef = useRef(new Set())
+  const researchToolRegistryRef = useRef(null)
 
   useEffect(() => {
     let cancelled = false
@@ -883,12 +916,14 @@ function App() {
   const supportsDesktopVault = runtimeCapabilities?.localVault.preferred === 'desktop-ipc'
   const supportsBrowserPickerVault = runtimeCapabilities?.localVault.adapters.includes('browser-picker') === true
   const supportsLoopbackVault = runtimeCapabilities?.localVault.adapters.includes('loopback-adapter') === true
+  const supportsResearchRunReattach = runtimeCapabilities?.researchRuns === 'loopback-event-buffer'
+  const supportsLoopbackResearchExecution = runtimeCapabilities?.researchExecution === 'loopback-provider'
   const activeResearchSession = researchSessions[activeTabId] || createResearchSession({ modelId: modelConfig.chatModelId, knowledgeBaseId: vaultName })
   const { phase, input, messages, running, activeStage, answerMode, retrievalPacket } = activeResearchSession
   const activeHasVaultScope = Boolean(vaultName && activeResearchSession.configSnapshot?.knowledgeScopes?.some((scope) => scope.vaultId === vaultName))
   const anyResearchRunning = Object.values(researchSessions).some((session) => session.running)
   const dataActionBlocked = anyResearchRunning || Boolean(pipelineRunningId)
-  const supportsDesktopDataFiles = hasDesktopDataFilesBridge()
+  const supportsDesktopDataFiles = runtimeAdapter.dataFiles.native
   const localDataSummary = useMemo(() => createLocalDataSummary({
     workspace: { tabs: workspaceTabs, activeTabId, sessions: researchSessions },
     pipelineRuns,
@@ -911,6 +946,86 @@ function App() {
   }, [activeTabId, updateResearchSession])
 
   const setInput = useCallback((value) => setActiveResearchField('input', value), [setActiveResearchField])
+
+  useEffect(() => {
+    if (!workspaceHydrated || !supportsResearchRunReattach) return undefined
+    const candidates = []
+    for (const [tabId, session] of Object.entries(researchSessions)) {
+      for (const snapshot of session.runSnapshots || []) {
+        if (snapshot.error?.code !== 'run_interrupted' || reattachedResearchRunsRef.current.has(snapshot.id)) continue
+        reattachedResearchRunsRef.current.add(snapshot.id)
+        candidates.push({ tabId, runId: snapshot.id })
+      }
+    }
+    if (!candidates.length) return undefined
+    let cancelled = false
+    Promise.all(candidates.map(async ({ tabId, runId }) => {
+      try {
+        let attachment = await reattachResearchRun(runId)
+        if (!isTerminalResearchRunStatus(attachment.run.status)) {
+          if (attachment.run.executionOwner === 'loopback' && tabId === activeTabId) {
+            try {
+              await resumeResearchRun({
+                runId,
+                executeTool: (call, context) => {
+                  if (!researchToolRegistryRef.current) throw new Error('Research tools are not ready after workspace restoration.')
+                  return researchToolRegistryRef.current.execute(call, context)
+                },
+              })
+            } catch { /* terminal state is recovered from the event log below */ }
+            attachment = await reattachResearchRun(runId)
+          }
+          if (!isTerminalResearchRunStatus(attachment.run.status)) {
+            const stopped = await cancelResearchRun(runId)
+            attachment = { ...attachment, run: stopped.run || attachment.run }
+          }
+        }
+        return { tabId, runId, attachment }
+      } catch {
+        return null
+      }
+    })).then((recoveries) => {
+      if (cancelled) return
+      setResearchSessions((current) => {
+        let next = current
+        for (const recovery of recoveries.filter(Boolean)) {
+          const session = next[recovery.tabId]
+          if (!session) continue
+          let replayedText = ''
+          let replayedReasoning = ''
+          let replayedToolTrace = []
+          let completedResult = null
+          for (const envelope of recovery.attachment.events || []) {
+            const event = envelope.event || envelope
+            if (event.type === RESEARCH_RUN_EVENT.MODEL_TEXT_DELTA) replayedText += event.delta || ''
+            if (event.type === RESEARCH_RUN_EVENT.MODEL_REASONING_DELTA) replayedReasoning += event.delta || ''
+            if (event.type === RESEARCH_RUN_EVENT.TOOL_ROUND_COMPLETED) {
+              replayedText = ''
+              replayedToolTrace = event.toolTrace || replayedToolTrace
+            }
+            if (event.type === RESEARCH_RUN_EVENT.RUN_COMPLETED) completedResult = event.result || completedResult
+          }
+          const updated = {
+            ...session,
+            messages: session.messages.map((message) => message.runId === recovery.runId ? {
+              ...message,
+              text: completedResult?.text || replayedText || message.text || (recovery.attachment.run.status === 'cancelled'
+                ? 'This research run was interrupted before completion. You can retry the question.'
+                : ''),
+              reasoning: completedResult?.reasoning || replayedReasoning || message.reasoning,
+              toolTrace: replayedToolTrace.length ? replayedToolTrace : message.toolTrace,
+            } : message),
+            runSnapshots: (session.runSnapshots || []).map((snapshot) => snapshot.id === recovery.runId
+              ? { ...snapshot, ...recovery.attachment.run }
+              : snapshot),
+          }
+          next = { ...next, [recovery.tabId]: updated }
+        }
+        return next
+      })
+    })
+    return () => { cancelled = true }
+  }, [activeTabId, researchSessions, supportsResearchRunReattach, workspaceHydrated])
 
   useEffect(() => {
     let cancelled = false
@@ -986,6 +1101,7 @@ function App() {
     const external = enabledTools.has(TOOL_IDS.MCP) ? externalMcpEntries : []
     return createToolRegistry([...builtins, ...external], mcpConfig.permissions, { requestApproval: requestToolApproval })
   }, [activeHasVaultScope, activeResearchSession.configSnapshot?.enabledTools, externalMcpEntries, mcpConfig.permissions, requestToolApproval, retrievalIndex])
+  researchToolRegistryRef.current = researchToolRegistry
   const staticChatModels = useMemo(() => getModelsByRole('chat'), [])
   const chatModels = useMemo(() => {
     const smartModel = staticChatModels.find((model) => model.id === 'smart-default')
@@ -1035,7 +1151,7 @@ function App() {
     if (!vaultCapabilityId) return false
     if (!silent) setSyncState('syncing')
     try {
-      const payload = await syncDesktopVault({ vaultId: vaultCapabilityId, revision: localRevision })
+      const payload = await runtimeAdapter.vault.syncDesktop({ vaultId: vaultCapabilityId, revision: localRevision })
       if (payload.unchanged) {
         setSyncState('ready')
         return true
@@ -1054,19 +1170,14 @@ function App() {
 
   const syncFromHandle = async (handle, requestPermission = false) => {
     if (!handle) return false
-    let permission = 'granted'
-    if (handle.queryPermission) permission = await handle.queryPermission({ mode: 'read' })
-    if (permission !== 'granted' && requestPermission && handle.requestPermission) {
-      permission = await handle.requestPermission({ mode: 'read' })
-    }
-    if (permission !== 'granted') {
-      setSyncState('needs-permission')
-      return false
-    }
     setSyncState('syncing')
     try {
-      const notes = await parseVaultDirectory(handle)
-      return applyVault(notes, handle.name || getVaultName(notes), { handle, source: 'browser-handle' })
+      const payload = await runtimeAdapter.vault.syncDirectory(handle, { requestPermission })
+      if (payload.permission !== 'granted') {
+        setSyncState('needs-permission')
+        return false
+      }
+      return applyVault(payload.notes, payload.vaultName, { handle: payload.handle, source: 'browser-handle' })
     } catch {
       setSyncState('error')
       return false
@@ -1076,7 +1187,7 @@ function App() {
   const syncFromLocalAdapter = async (silent = false) => {
     if (!silent) setSyncState('syncing')
     try {
-      const payload = await loadLocalVault({ revision: localRevision, timeout: silent ? 1800 : 2200 })
+      const payload = await runtimeAdapter.vault.loadLoopback({ revision: localRevision, timeout: silent ? 1800 : 2200 })
       setLocalAdapterState('ready')
       if (payload.unchanged) {
         setSyncState('ready')
@@ -1104,13 +1215,13 @@ function App() {
 
   const handleConnectVault = async () => {
     if (supportsDesktopVault) {
-      if (!hasDesktopVaultBridge()) {
+      if (!runtimeAdapter.vault.hasDesktopBridge) {
         setSyncState('error')
         return
       }
       setSyncState('syncing')
       try {
-        const payload = await selectDesktopVault()
+        const payload = await runtimeAdapter.vault.selectDesktop()
         if (payload?.cancelled) {
           setSyncState(vaultNotes.length ? 'needs-permission' : 'manual')
           return
@@ -1126,16 +1237,16 @@ function App() {
       return
     }
     if (supportsLoopbackVault && await syncFromLocalAdapter()) return
-    if (supportsBrowserPickerVault && typeof window.showDirectoryPicker === 'function') {
+    if (supportsBrowserPickerVault && runtimeAdapter.vault.canSelectDirectory) {
       try {
-        const handle = await window.showDirectoryPicker({ mode: 'read' })
-        await syncFromHandle(handle, true)
+        const selection = await runtimeAdapter.vault.selectDirectory()
+        if (selection.handle) await syncFromHandle(selection.handle, true)
         return
       } catch (error) {
         if (error?.name === 'AbortError') return
       }
     }
-    vaultInputRef.current?.click()
+    vaultInputRef.current?.open()
   }
 
   const handleSyncVault = async () => {
@@ -1150,17 +1261,13 @@ function App() {
     }
   }
 
-  const handleVaultSelection = async (event) => {
-    try {
-      const notes = await parseVaultFiles(event.target.files || [])
-      if (!notes.length) {
-        setSyncState('empty')
-        return
-      }
-      await applyVault(notes, getVaultName(notes), { source: 'manual' })
-    } finally {
-      event.target.value = ''
+  const handleVaultSelection = async (files) => {
+    const { notes, vaultName: selectedVaultName } = await runtimeAdapter.vault.parseSelectedFiles(files)
+    if (!notes.length) {
+      setSyncState('empty')
+      return
     }
+    await applyVault(notes, selectedVaultName, { source: 'manual' })
   }
 
   const refreshChatgptModels = useCallback(async (force = false) => {
@@ -1222,7 +1329,7 @@ function App() {
         setVaultName(snapshot.vaultName || getVaultName(snapshot.notes))
         setVaultSource(snapshot.source || (handle ? 'browser-handle' : 'manual'))
         setLocalRevision(snapshot.revision || '')
-        setSyncState(supportsDesktopVault || handle ? 'needs-permission' : 'manual')
+        setSyncState('needs-permission')
       }
     })
     return () => { cancelled = true }
@@ -1230,7 +1337,7 @@ function App() {
 
   useEffect(() => {
     if (!supportsDesktopVault || !vaultCapabilityId) return undefined
-    return onDesktopVaultChanged(({ vaultId }) => {
+    return runtimeAdapter.vault.onDesktopChanged(({ vaultId }) => {
       if (vaultId === vaultCapabilityId) void syncFromDesktopVault(true)
     })
   }, [supportsDesktopVault, vaultCapabilityId, localRevision])
@@ -1248,17 +1355,56 @@ function App() {
       const timers = stages.map((_, index) => window.setTimeout(() => {
         updateResearchSession(tabId, { activeStage: index })
       }, (index + 1) * 620))
-      const finish = window.setTimeout(() => {
+      const response = { ...responseForQuestion(session.pendingQuestion, session.retrievalPacket), runId: session.pendingRunId }
+      const runSnapshot = (session.runSnapshots || []).find((snapshot) => snapshot.id === session.pendingRunId)
+      const execution = executeResearchRun({
+        runId: session.pendingRunId,
+        sessionId: tabId,
+        model: runSnapshot?.model,
+        policy: runSnapshot?.policy || session.configSnapshot?.loopPolicy,
+        evidenceCount: runSnapshot?.evidenceCount || 0,
+        messages: [{ role: 'user', content: session.pendingQuestion }],
+        request: () => new Promise((resolve) => {
+          const finish = window.setTimeout(() => resolve({ text: response.text, model: 'offline-retrieval' }), 3900)
+          mockRunTimersRef.current.set(tabId, [...(mockRunTimersRef.current.get(tabId) || timers), finish])
+        }),
+      })
+      mockRunTimersRef.current.set(tabId, timers)
+      void execution.then(() => {
         updateResearchSession(tabId, (current) => ({
           ...current,
           activeStage: 5,
-          messages: [...current.messages, responseForQuestion(current.pendingQuestion, current.retrievalPacket)],
+          messages: current.messages.map((message) => message.runId === session.pendingRunId
+            ? { ...response, id: message.id, createdAt: message.createdAt }
+            : message),
+          runSnapshots: (current.runSnapshots || []).map((snapshot) => snapshot.id === current.pendingRunId
+            ? applyResearchRunEvent(snapshot, {
+              type: RESEARCH_RUN_EVENT.RUN_COMPLETED,
+              runId: snapshot.id,
+              iteration: 1,
+            })
+            : snapshot),
           pendingQuestion: '',
+          pendingRunId: '',
           running: false,
         }))
         mockRunTimersRef.current.delete(tabId)
-      }, 3900)
-      mockRunTimersRef.current.set(tabId, [...timers, finish])
+      }).catch((error) => {
+        updateResearchSession(tabId, (current) => ({
+          ...current,
+          activeStage: 5,
+          messages: current.messages.map((message) => message.runId === session.pendingRunId
+            ? { ...response, id: message.id, createdAt: message.createdAt, text: `The offline research run could not complete: ${error.message}` }
+            : message),
+          runSnapshots: (current.runSnapshots || []).map((snapshot) => snapshot.id === current.pendingRunId
+            ? applyResearchRunEvent(snapshot, { type: RESEARCH_RUN_EVENT.RUN_FAILED, runId: snapshot.id, error: { message: error.message } })
+            : snapshot),
+          pendingQuestion: '',
+          pendingRunId: '',
+          running: false,
+        }))
+        mockRunTimersRef.current.delete(tabId)
+      })
     })
   }, [researchSessions, updateResearchSession])
 
@@ -1452,12 +1598,23 @@ function App() {
     }
     const apiProvider = selectedModel.authProvider === 'api'
     const live = apiProvider || ((selectedModel.authProvider === 'chatgpt' || selectedModel.id === 'smart-default') && chatgptConnected)
-    const runSnapshot = createRunSnapshot(session.configSnapshot, {
+    const configRunSnapshot = createRunSnapshot(session.configSnapshot, {
       resolvedModel: {
         ...modelReference(selectedModel),
         requestedModelId: session.configSnapshot?.model?.modelId || selectedModel.id,
       },
     })
+    const runSnapshot = {
+      ...configRunSnapshot,
+      ...createResearchRunRecord({
+        id: configRunSnapshot.id,
+        sessionId,
+        createdAt: configRunSnapshot.createdAt,
+        model: configRunSnapshot.model,
+        policy: configRunSnapshot.loopPolicy,
+        evidenceCount: packet.evidence.length,
+      }),
+    }
     const conversationTitle = titleFromQuestion(question)
     setWorkspaceTabs((current) => current.map((tab) => tab.id === sessionId
       ? { ...tab, title: researchTabTitle(session.configSnapshot?.identity?.shortName || session.configSnapshot?.identity?.name, conversationTitle) }
@@ -1466,9 +1623,11 @@ function App() {
       ...current,
       conversationTitle,
       answerMode: live ? 'chatgpt' : 'retrieval-only',
-      messages: [...current.messages, { id: `user-${Date.now()}`, role: 'user', text: question, evidenceContext }],
+      messages: [...current.messages, { id: `user-${Date.now()}`, role: 'user', text: question, evidenceContext, createdAt: new Date().toISOString() }],
       input: '',
-      runSnapshots: [...(current.runSnapshots || []), runSnapshot],
+      runSnapshots: [...(current.runSnapshots || []), live
+        ? runSnapshot
+        : applyResearchRunEvent(runSnapshot, { type: RESEARCH_RUN_EVENT.RUN_STARTED, runId: runSnapshot.id, iteration: 1 })],
     }))
     if (live) {
       const assistantId = `assistant-${Date.now()}`
@@ -1479,7 +1638,7 @@ function App() {
         runMode: 'live',
         activeStage: 3,
         running: true,
-        messages: [...current.messages, { id: assistantId, role: 'assistant', text: '', reasoning: '', toolTrace: [], bullets: [], closing: '', evidence: packet.evidence }],
+        messages: [...current.messages, { id: assistantId, runId: runSnapshot.id, role: 'assistant', text: '', reasoning: '', toolTrace: [], bullets: [], closing: '', evidence: packet.evidence, createdAt: new Date().toISOString() }],
       }))
       let streamedText = ''
       let streamedReasoning = ''
@@ -1499,21 +1658,48 @@ function App() {
           maxOutputTokens: 4_096,
         })
         const messages = contextPlan.messages
-        const onDelta = (delta) => {
-          streamedText += delta
-          updateResearchSession(sessionId, { activeStage: 4 })
-          if (!renderFrame) renderFrame = window.requestAnimationFrame(flushStreamedText)
-        }
-        const onReasoningDelta = (delta) => {
-          streamedReasoning += delta
-          updateResearchSession(sessionId, { activeStage: 3 })
-          if (!renderFrame) renderFrame = window.requestAnimationFrame(flushStreamedText)
+        const handleRunEvent = (event) => {
+          if (event.type === RESEARCH_RUN_EVENT.MODEL_TEXT_DELTA) {
+            streamedText += event.delta
+            updateResearchSession(sessionId, { activeStage: 4 })
+            if (!renderFrame) renderFrame = window.requestAnimationFrame(flushStreamedText)
+          } else if (event.type === RESEARCH_RUN_EVENT.MODEL_REASONING_DELTA) {
+            streamedReasoning += event.delta
+            updateResearchSession(sessionId, { activeStage: 3 })
+            if (!renderFrame) renderFrame = window.requestAnimationFrame(flushStreamedText)
+          } else if (event.type === RESEARCH_RUN_EVENT.PROVIDER_EVENT && event.event === 'web_search.status') {
+            updateResearchSession(sessionId, { activeStage: 2 })
+          } else if (event.type === RESEARCH_RUN_EVENT.TOOL_EXECUTION_REQUESTED) {
+            updateResearchSession(sessionId, { activeStage: 2 })
+          } else if (event.type === RESEARCH_RUN_EVENT.TOOL_EXECUTION_COMPLETED) {
+            updateResearchSession(sessionId, { activeStage: 3 })
+          } else if (event.type === RESEARCH_RUN_EVENT.TOOL_ROUND_COMPLETED) {
+            toolTrace.splice(0, toolTrace.length, ...(event.toolTrace || []))
+            streamedText = ''
+            updateResearchSession(sessionId, (current) => ({
+              ...current,
+              activeStage: 3,
+              messages: current.messages.map((message) => message.id === assistantId ? { ...message, text: '', reasoning: streamedReasoning, toolTrace: [...toolTrace] } : message),
+            }))
+          }
+          if (PERSISTED_RESEARCH_RUN_EVENTS.has(event.type)) {
+            updateResearchSession(sessionId, (current) => ({
+              ...current,
+              runSnapshots: (current.runSnapshots || []).map((snapshot) => snapshot.id === runSnapshot.id
+                ? applyResearchRunEvent(snapshot, event)
+                : snapshot),
+            }))
+          }
         }
         let result
+        let agentOutput
+        let tools = []
+        let request
+        let execution
         if (apiProvider) {
           const providerConfig = providerConfigs[selectedModel.providerId]
           if (!providerConfig) throw new Error(`Provider configuration is missing for ${selectedModel.provider}.`)
-          const tools = selectedModel.capabilities?.tools ? researchToolRegistry.definitions : []
+          tools = selectedModel.capabilities?.tools ? researchToolRegistry.definitions : []
           const baseProviderOptions = selectedModel.providerId === 'deepseek'
             ? getDeepSeekRuntimeOptions(providerConfig)
             : selectedModel.providerId === 'bailian' ? getBailianRuntimeOptions(providerConfig) : null
@@ -1523,49 +1709,55 @@ function App() {
             maxOutputTokens: 4_096,
           } : undefined
           const providerApiKey = await getProviderSessionKey(selectedModel.providerId)
-          const agentOutput = await runProviderAgent({
-            messages,
-            tools,
-            request: (agentMessages) => streamProviderResponse({
+          const providerRequest = {
               providerId: selectedModel.providerId,
               endpoint: selectedModel.endpoint || providerConfig.endpoint,
               endpointType: selectedModel.endpointType,
               apiKey: providerApiKey,
               model: selectedModel.apiModelId,
-              messages: agentMessages,
               tools,
               options: providerOptions,
+          }
+          if (supportsLoopbackResearchExecution) {
+            execution = { kind: 'provider', ...providerRequest, messages }
+          } else {
+            request = (agentMessages, runtimeContext) => streamProviderResponse({
+              ...providerRequest,
+              messages: agentMessages,
               signal: controller.signal,
-              onDelta,
-              onReasoningDelta,
-              onEvent: (event) => {
-                if (event === 'web_search.status') updateResearchSession(sessionId, { activeStage: 2 })
-              },
-            }),
-            executeTool: (call) => researchToolRegistry.execute(call),
-            onToolRound: (_round, trace) => {
-              toolTrace.splice(0, toolTrace.length, ...trace)
-              streamedText = ''
-              updateResearchSession(sessionId, (current) => ({
-                ...current,
-                activeStage: 3,
-                messages: current.messages.map((message) => message.id === assistantId ? { ...message, text: '', reasoning: streamedReasoning, toolTrace: [...toolTrace] } : message),
-              }))
-            },
-          })
-          result = agentOutput.result
+              onDelta: (delta) => runtimeContext.onEvent(RESEARCH_RUN_EVENT.MODEL_TEXT_DELTA, { delta }),
+              onReasoningDelta: (delta) => runtimeContext.onEvent(RESEARCH_RUN_EVENT.MODEL_REASONING_DELTA, { delta }),
+              onEvent: (event, payload) => runtimeContext.onEvent(RESEARCH_RUN_EVENT.PROVIDER_EVENT, { event, payload }),
+            })
+          }
         } else {
           let activeCatalog = modelCatalog
           if (selectedModel.id === 'smart-default' && !activeCatalog.defaultModelId) {
             activeCatalog = await refreshChatgptModels(false) || activeCatalog
           }
-          result = await streamChatgptResponse({
-            model: selectedModel.id === 'smart-default' ? activeCatalog.defaultModelId : selectedModel.id,
-            messages,
+          const chatgptModel = selectedModel.id === 'smart-default' ? activeCatalog.defaultModelId : selectedModel.id
+          request = (agentMessages, runtimeContext) => streamChatgptResponse({
+            model: chatgptModel,
+            messages: agentMessages,
             signal: controller.signal,
-            onDelta,
+            onDelta: (delta) => runtimeContext.onEvent(RESEARCH_RUN_EVENT.MODEL_TEXT_DELTA, { delta }),
           })
         }
+        agentOutput = await executeResearchRun({
+          runId: runSnapshot.id,
+          sessionId,
+          model: runSnapshot.model,
+          messages,
+          tools,
+          request,
+          executeTool: tools.length ? (call) => researchToolRegistry.execute(call) : undefined,
+          policy: session.configSnapshot?.loopPolicy,
+          evidenceCount: packet.evidence.length,
+          signal: controller.signal,
+          onEvent: handleRunEvent,
+          execution,
+        })
+        result = agentOutput.result
         if (renderFrame) window.cancelAnimationFrame(renderFrame)
         const usage = providerUsageSummary(result.usage)
         const contextLabel = `Context ${compactTokenCount(contextPlan.estimatedInputTokens)}/${compactTokenCount(contextPlan.inputBudgetTokens)}`
@@ -1586,7 +1778,7 @@ function App() {
             toolTrace: [...toolTrace],
             usage: result.usage || null,
             contextPlan: { estimatedInputTokens: contextPlan.estimatedInputTokens, inputBudgetTokens: contextPlan.inputBudgetTokens, retainedTurns: contextPlan.retainedTurns, omittedTurns: contextPlan.omittedTurns },
-            closing: `Generated with ${result.model} through ${apiProvider ? selectedModel.provider : 'the connected ChatGPT subscription'} · ${packet.evidence.length} Vault evidence chunk${packet.evidence.length === 1 ? '' : 's'}${result.webSearchEvents?.length ? ' · hosted web search used' : ''}. ${contextLabel}${omittedLabel}${cacheLabel}.`,
+            closing: `Generated with ${result.model} through ${apiProvider ? selectedModel.provider : 'the connected ChatGPT subscription'} · ${agentOutput.iterations} model pass${agentOutput.iterations === 1 ? '' : 'es'} · ${packet.evidence.length} Vault evidence chunk${packet.evidence.length === 1 ? '' : 's'}${result.webSearchEvents?.length ? ' · hosted web search used' : ''}. ${contextLabel}${omittedLabel}${cacheLabel}.`,
           } : message),
         }))
       } catch (error) {
@@ -1594,6 +1786,13 @@ function App() {
         updateResearchSession(sessionId, (current) => ({
           ...current,
           activeStage: 5,
+          runSnapshots: (current.runSnapshots || []).map((snapshot) => snapshot.id === runSnapshot.id
+            ? applyResearchRunEvent(snapshot, {
+              type: error.name === 'AbortError' ? RESEARCH_RUN_EVENT.RUN_CANCELLED : RESEARCH_RUN_EVENT.RUN_FAILED,
+              runId: runSnapshot.id,
+              error: { name: error.name || 'Error', message: error.message || 'Research run failed.' },
+            })
+            : snapshot),
           messages: current.messages.map((message) => message.id === assistantId ? {
             ...message,
             text: streamedText || message.text || (error.name === 'AbortError' ? 'Generation stopped.' : `The connected model could not complete this request: ${error.message}`),
@@ -1608,7 +1807,25 @@ function App() {
       }
       return
     }
-    updateResearchSession(sessionId, { runMode: 'mock', pendingQuestion: question, running: true })
+    updateResearchSession(sessionId, (current) => ({
+      ...current,
+      runMode: 'mock',
+      pendingQuestion: question,
+      pendingRunId: runSnapshot.id,
+      running: true,
+      messages: [...current.messages, {
+        id: `assistant-${Date.now()}`,
+        runId: runSnapshot.id,
+        role: 'assistant',
+        text: '',
+        reasoning: '',
+        toolTrace: [],
+        bullets: [],
+        closing: '',
+        evidence: packet.evidence,
+        createdAt: new Date().toISOString(),
+      }],
+    }))
   }
 
   const handleModelSelect = async (chatModelId) => {
@@ -1661,14 +1878,7 @@ function App() {
     const serialized = serializeDataBackup(backup)
     const date = backup.createdAt.slice(0, 10) || new Date().toISOString().slice(0, 10)
     const fileName = `bioresearch-os-backup-${date}.json`
-    if (supportsDesktopDataFiles) return saveDesktopDataBackup({ fileName, content: serialized })
-    const url = URL.createObjectURL(new Blob([serialized], { type: 'application/json' }))
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = fileName
-    anchor.click()
-    window.setTimeout(() => URL.revokeObjectURL(url), 0)
-    return { fileName, bytes: new TextEncoder().encode(serialized).length }
+    return runtimeAdapter.dataFiles.saveBackup({ fileName, content: serialized })
   }
 
   const handleImportLocalData = async (serialized) => {
@@ -1692,7 +1902,7 @@ function App() {
   }
 
   const handleImportLocalDataFromDesktop = async () => {
-    const selection = await openDesktopDataBackup()
+    const selection = await runtimeAdapter.dataFiles.openBackup()
     if (selection.cancelled) return selection
     const summary = await handleImportLocalData(selection.content)
     return { ...summary, cancelled: false, fileName: selection.fileName }
@@ -1791,7 +2001,7 @@ function App() {
         onLogoutChatgpt={handleLogoutChatgpt}
         authError={authError}
       />
-      {supportsBrowserPickerVault && <input ref={vaultInputRef} className="visually-hidden" type="file" webkitdirectory="true" directory="true" multiple onChange={handleVaultSelection} />}
+      <VaultFallbackPicker ref={vaultInputRef} enabled={supportsBrowserPickerVault} onSelect={handleVaultSelection} />
       <main className="main-shell">
         <header className="topbar workspace-topbar">
           <WorkspaceTabs tabs={workspaceTabs} activeTabId={activeTabId} onSelect={handleSelectTab} onClose={handleCloseTab} onCreate={(kind) => openWorkspaceTab(kind, { forceNew: kind === 'research' || kind === 'graph' })} />
@@ -1809,6 +2019,7 @@ function App() {
             models={chatModels}
             vaultName={vaultName}
             vaultNoteCount={vaultNotes.length}
+            vaultSyncState={syncState}
             mcpConnected={mcpRuntime.sessions.length > 0}
             authStatus={authStatus}
             authBusy={authBusy}
@@ -1833,7 +2044,7 @@ function App() {
               <ResearchContextBar config={activeResearchSession.configSnapshot} selectedModel={selectedModel} vaultName={vaultName} mcpConnected={mcpRuntime.sessions.length > 0} canEdit={messages.length === 0} onEdit={handleEditResearchSetup} />
               <div className="conversation">
                 {messages.length === 0 && <div className="conversation-empty"><Sparkles size={22} /><strong>Start a research conversation</strong><span>Ask a question or add Vault context below.</span></div>}
-                {messages.map((message) => message.role === 'user' ? <UserMessage text={message.text} key={message.id} /> : <AssistantMessage message={message} running={running} onOpenNote={setSelectedNote} key={message.id} />)}
+                {messages.map((message) => message.role === 'user' ? <UserMessage message={message} key={message.id} /> : <AssistantMessage message={message} running={running} onOpenNote={setSelectedNote} key={message.id} />)}
               </div>
               <EvidenceTrail activeStage={activeStage} running={running} hasActivity={messages.length > 0 || Boolean(retrievalPacket)} />
               <Composer value={input} setValue={setInput} onSubmit={submitQuestion} disabled={anyResearchRunning} selectedModel={selectedModel} models={chatModels} onSelectModel={handleModelSelect} authStatus={authStatus} authBusy={authBusy} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} />

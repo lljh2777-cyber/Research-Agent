@@ -1,4 +1,5 @@
 import { createConversationConfigSnapshot } from './agentPresets.js'
+import { RESEARCH_RUN_STATUS, isTerminalResearchRunStatus } from './research/runProtocol.js'
 import { MAX_WORKSPACE_TABS, WORKSPACE_TAB_KINDS } from './workspaceTabs.js'
 
 const DB_NAME = 'bioresearch-os-workspace'
@@ -47,11 +48,14 @@ function normalizeMessage(message) {
     role: message.role,
     text: boundedString(message.text, MAX_TEXT_LENGTH),
   }
+  const createdAt = boundedString(message.createdAt, 40)
+  if (createdAt && Number.isFinite(Date.parse(createdAt))) normalized.createdAt = createdAt
   if (message.role === 'user') {
     normalized.evidenceContext = boundedString(message.evidenceContext, MAX_TEXT_LENGTH)
     return normalized
   }
   normalized.reasoning = boundedString(message.reasoning, MAX_TEXT_LENGTH)
+  normalized.runId = boundedString(message.runId, 128)
   normalized.closing = boundedString(message.closing, 20_000)
   normalized.bullets = cloneBounded(message.bullets || [], 250_000, [])
   normalized.evidence = cloneBounded(message.evidence || [], 2_000_000, [])
@@ -81,6 +85,25 @@ function normalizeConfig(config) {
   })
 }
 
+function normalizeRunSnapshots(value) {
+  return cloneBounded((Array.isArray(value) ? value : []).slice(-MAX_RUN_SNAPSHOTS), 2_000_000, [])
+    .filter((run) => run && typeof run === 'object' && typeof run.id === 'string' && run.id)
+    .map((run) => {
+      if (!run.status) return { ...run, status: RESEARCH_RUN_STATUS.COMPLETED }
+      if (isTerminalResearchRunStatus(run.status)) return run
+      return {
+        ...run,
+        status: RESEARCH_RUN_STATUS.CANCELLED,
+        completedAt: run.completedAt || run.updatedAt || run.createdAt || null,
+        error: {
+          code: 'run_interrupted',
+          message: 'This run was interrupted before the workspace was restored.',
+          retryable: true,
+        },
+      }
+    })
+}
+
 function normalizeSession(session) {
   if (!session || typeof session !== 'object') return null
   const messages = (Array.isArray(session.messages) ? session.messages : [])
@@ -95,11 +118,12 @@ function normalizeSession(session) {
     running: false,
     activeStage: messages.length ? 5 : 0,
     pendingQuestion: '',
+    pendingRunId: '',
     runMode: 'mock',
     answerMode: messages.length ? 'restored' : 'idle',
     retrievalPacket: null,
     configSnapshot: normalizeConfig(session.configSnapshot),
-    runSnapshots: cloneBounded((Array.isArray(session.runSnapshots) ? session.runSnapshots : []).slice(-MAX_RUN_SNAPSHOTS), 2_000_000, []),
+    runSnapshots: normalizeRunSnapshots(session.runSnapshots),
   }
 }
 

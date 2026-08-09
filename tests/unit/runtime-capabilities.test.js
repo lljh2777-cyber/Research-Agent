@@ -20,6 +20,8 @@ describe('runtime capability matrix', () => {
     expect(manifest.capabilities.credentials.subscriptionOAuth).toBe('os-keychain')
     expect(manifest.capabilities.chatgptSubscriptionOAuth).toBe(true)
     expect(manifest.capabilities.providerTransport).toBe('loopback')
+    expect(manifest.capabilities.researchRuns).toBe('loopback-event-buffer')
+    expect(manifest.capabilities.researchExecution).toBe('loopback-provider')
     expect(manifest.capabilities.mcp).toBe('loopback')
     expect(isRuntimeManifest(manifest)).toBe(true)
   })
@@ -31,6 +33,8 @@ describe('runtime capability matrix', () => {
     expect(manifest.capabilities.localVault.available).toBe(false)
     expect(manifest.capabilities.chatgptSubscriptionOAuth).toBe(false)
     expect(manifest.capabilities.mcp).toBe(false)
+    expect(manifest.capabilities.researchRuns).toBe(false)
+    expect(manifest.capabilities.researchExecution).toBe(false)
   })
 
   it('describes the desktop security boundary independently from build mode', () => {
@@ -42,6 +46,8 @@ describe('runtime capability matrix', () => {
     expect(manifest.buildMode).toBe(BUILD_MODES.DEVELOPMENT)
     expect(manifest.capabilities.credentials.providerApiKeys).toBe('os-keychain')
     expect(manifest.capabilities.providerTransport).toBe('desktop-ipc')
+    expect(manifest.capabilities.researchRuns).toBe('loopback-event-buffer')
+    expect(manifest.capabilities.researchExecution).toBe('renderer-provider-ipc')
     expect(manifest.capabilities.localVault.adapters).toEqual(['desktop-ipc'])
     expect(manifest.capabilities.localVault.preferred).toBe('desktop-ipc')
     expect(manifest.capabilities.mcp).toBe('desktop-loopback')

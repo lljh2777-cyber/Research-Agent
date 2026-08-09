@@ -1,16 +1,13 @@
-function dataFilesBridge() {
-  return globalThis.window?.researchDesktop?.dataFiles || null
-}
+import { getRuntimeAdapter } from './runtime/adapter.js'
 
 export function hasDesktopDataFilesBridge() {
-  const bridge = dataFilesBridge()
-  return Boolean(bridge?.saveBackup && bridge?.openBackup)
+  return getRuntimeAdapter().dataFiles.native
 }
 
 export async function saveDesktopDataBackup({ fileName, content }) {
-  const bridge = dataFilesBridge()
-  if (!bridge?.saveBackup) throw new Error('Desktop backup export is unavailable.')
-  const result = await bridge.saveBackup({ fileName, content })
+  const adapter = getRuntimeAdapter().dataFiles
+  if (!adapter.native) throw new Error('Desktop backup export is unavailable.')
+  const result = await adapter.saveBackup({ fileName, content })
   if (result?.cancelled) return { cancelled: true }
   return {
     cancelled: false,
@@ -20,9 +17,9 @@ export async function saveDesktopDataBackup({ fileName, content }) {
 }
 
 export async function openDesktopDataBackup() {
-  const bridge = dataFilesBridge()
-  if (!bridge?.openBackup) throw new Error('Desktop backup import is unavailable.')
-  const result = await bridge.openBackup()
+  const adapter = getRuntimeAdapter().dataFiles
+  if (!adapter.native) throw new Error('Desktop backup import is unavailable.')
+  const result = await adapter.openBackup()
   if (result?.cancelled) return { cancelled: true }
   if (typeof result?.content !== 'string') throw new Error('The desktop backup service returned invalid content.')
   return {

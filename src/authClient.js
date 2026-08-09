@@ -1,4 +1,5 @@
 import { getAuthServiceBaseUrl } from './runtime/services.js'
+import { getRuntimeAdapter } from './runtime/adapter.js'
 
 const AUTH_SERVER_URL = getAuthServiceBaseUrl()
 const AUTH_SERVICE_CONNECT_TIMEOUT_MS = 3000
@@ -14,18 +15,19 @@ export function createAuthServiceUnavailableError(cause) {
 }
 
 async function fetchAuthService(path, options = {}, timeoutMs = AUTH_SERVICE_CONNECT_TIMEOUT_MS) {
+  const runtime = getRuntimeAdapter()
   const timeoutController = new AbortController()
-  const timeout = window.setTimeout(() => timeoutController.abort(), timeoutMs)
+  const timeout = runtime.browser.setTimeout(() => timeoutController.abort(), timeoutMs)
   const signal = options.signal
     ? AbortSignal.any([options.signal, timeoutController.signal])
     : timeoutController.signal
   try {
-    return await fetch(`${AUTH_SERVER_URL}${path}`, { ...options, signal })
+    return await runtime.api.fetch(`${AUTH_SERVER_URL}${path}`, { ...options, signal })
   } catch (error) {
     if (options.signal?.aborted) throw error
     throw createAuthServiceUnavailableError(error)
   } finally {
-    window.clearTimeout(timeout)
+    runtime.browser.clearTimeout(timeout)
   }
 }
 
@@ -59,7 +61,7 @@ export function getChatgptModels({ force = false } = {}) {
 export async function startChatgptLogin() {
   // Open synchronously from the click so browsers do not classify the OAuth
   // window as a popup created later by an asynchronous fetch.
-  const popup = window.open('about:blank', 'bioresearch-chatgpt-auth', 'popup,width=620,height=760')
+  const popup = getRuntimeAdapter().browser.openPopup('about:blank', 'bioresearch-chatgpt-auth', 'popup,width=620,height=760')
   if (!popup) throw new Error('Allow pop-ups for this local app, then try connecting again.')
   try {
     const payload = await requestJson('/api/auth/chatgpt/start', { method: 'POST' })
@@ -77,7 +79,7 @@ export async function waitForChatgptAuth({ timeout = 5 * 60 * 1000, interval = 1
     const status = await getAuthStatus()
     if (status.provider === 'chatgpt' && status.connected) return status
     if (status.loginState === 'failed') throw new Error(status.loginError || 'ChatGPT login failed. Try connecting again.')
-    await new Promise((resolve) => window.setTimeout(resolve, interval))
+    await getRuntimeAdapter().browser.delay(interval)
   }
   throw new Error('Authentication timed out. You can try connecting again.')
 }

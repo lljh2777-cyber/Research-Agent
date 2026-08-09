@@ -9,6 +9,9 @@ test('opens the local research workspace and launcher without runtime errors', a
   await expect(page).toHaveTitle(/BioResearch OS/i)
   await expect(page.getByRole('heading', { name: 'Configure your research workspace' })).toBeVisible()
   await expect(page.getByRole('tab', { name: /New research/i })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Connect Obsidian vault' })).toContainText('Connect a Vault')
+  await expect(page.getByRole('button', { name: 'Connect Obsidian vault' })).toContainText('Choose a local Obsidian folder')
+  await expect(page.getByText('Tumor Niche Workspace')).toHaveCount(0)
 
   await page.getByRole('button', { name: 'Open launcher' }).click()
 
@@ -33,6 +36,72 @@ test('exposes a validated local Web runtime manifest', async ({ request }) => {
   })
 })
 
+test('does not present an unversioned legacy Vault snapshot as a current connection', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('bioresearch-os', 2)
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains('snapshots')) request.result.createObjectStore('snapshots')
+        if (!request.result.objectStoreNames.contains('handles')) request.result.createObjectStore('handles')
+      }
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    await new Promise((resolve, reject) => {
+      const request = db.transaction('snapshots', 'readwrite').objectStore('snapshots').put({
+        vaultName: 'legacy-knowledge-base',
+        notes: [{ id: 'legacy-note', title: 'Legacy', path: 'legacy.md', body: '# Legacy' }],
+        source: 'manual',
+      }, 'current-vault')
+      request.onsuccess = resolve
+      request.onerror = () => reject(request.error)
+    })
+    db.close()
+  })
+
+  await page.reload()
+
+  const vaultButton = page.getByRole('button', { name: 'Connect Obsidian vault' })
+  await expect(vaultButton).toContainText('Connect a Vault')
+  await expect(vaultButton).not.toContainText('legacy-knowledge-base')
+})
+
+test('labels a valid restored Vault snapshot as cached until it is reconnected', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate(async () => {
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('bioresearch-os', 2)
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains('snapshots')) request.result.createObjectStore('snapshots')
+        if (!request.result.objectStoreNames.contains('handles')) request.result.createObjectStore('handles')
+      }
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    await new Promise((resolve, reject) => {
+      const request = db.transaction('snapshots', 'readwrite').objectStore('snapshots').put({
+        schemaVersion: 1,
+        vaultName: 'saved-vault',
+        notes: [{ id: 'saved-note', title: 'Saved', path: 'saved.md', body: '# Saved' }],
+        source: 'manual',
+        revision: '',
+        savedAt: '2026-08-09T00:00:00.000Z',
+      }, 'current-vault')
+      request.onsuccess = resolve
+      request.onerror = () => reject(request.error)
+    })
+    db.close()
+  })
+
+  await page.reload()
+
+  const vaultButton = page.getByRole('button', { name: 'Reconnect saved-vault Vault' })
+  await expect(vaultButton).toContainText('saved-vault')
+  await expect(vaultButton).toContainText('1 cached Markdown note · reconnect to refresh')
+  await expect(page.getByRole('button', { name: /saved-vault.*cached Markdown note/i })).toBeVisible()
+})
+
 test('restores workspace tabs and conversation configuration after reload', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: 'Open launcher' }).click()
@@ -45,6 +114,36 @@ test('restores workspace tabs and conversation configuration after reload', asyn
 
   await expect(page.getByRole('textbox', { name: 'Agent name' })).toHaveValue('Persistent Biologist')
   await expect(page.getByRole('tab')).toHaveCount(tabCount)
+})
+
+test('records a terminal Research Run for the offline evidence-only path', async ({ page }) => {
+  await page.route('http://127.0.0.1:4318/**', (route) => route.abort())
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Start conversation' }).click()
+  await page.getByRole('textbox', { name: 'Ask a follow-up about your research...' }).fill('What evidence is available?')
+  await page.getByRole('button', { name: 'Send question' }).click()
+
+  await expect(page.getByText(/No relevant Markdown evidence matched this question/i)).toBeVisible({ timeout: 7_000 })
+  await expect(page.locator('.message-time')).toContainText('0 sources')
+  await expect(page.locator('.message-time')).not.toContainText('10:24 AM')
+  await page.waitForTimeout(400)
+  const latestRun = await page.evaluate(async () => {
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('bioresearch-os-workspace', 1)
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    const workspace = await new Promise((resolve, reject) => {
+      const request = db.transaction('snapshots', 'readonly').objectStore('snapshots').get('current-workspace')
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    db.close()
+    const session = workspace.sessions[workspace.activeTabId]
+    return session.runSnapshots.at(-1)
+  })
+
+  expect(latestRun).toMatchObject({ schemaVersion: 1, status: 'completed', iteration: 1, evidenceCount: 0 })
 })
 
 test('exports, clears, and restores portable local data', async ({ page }) => {

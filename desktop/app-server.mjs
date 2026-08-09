@@ -6,6 +6,7 @@ import { extname, join, normalize, resolve, sep } from 'node:path'
 import { createMcpApiMiddleware } from '../server/mcp-api.mjs'
 import { createProviderApiMiddleware } from '../server/provider-api.mjs'
 import { createRuntimeApiMiddleware } from '../server/runtime-api.mjs'
+import { createResearchRunApiMiddleware } from '../server/research-run-api.mjs'
 
 const MIME_TYPES = Object.freeze({
   '.css': 'text/css; charset=utf-8',
@@ -61,6 +62,7 @@ export function createDesktopAppServer({ rootDir, runtimeManifest, fetchImpl = f
   const mcpApi = createMcpApiMiddleware()
   const middlewares = [
     createRuntimeApiMiddleware({ manifest: runtimeManifest }),
+    createResearchRunApiMiddleware(),
     mcpApi,
     createProviderApiMiddleware({ fetchImpl, credentialResolver, allowStreaming: false }),
   ]

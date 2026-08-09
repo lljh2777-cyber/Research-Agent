@@ -28,7 +28,10 @@ test('persists restorable workspace tabs and conversations without transient run
         running: true,
         pendingQuestion: 'must not resume',
         retrievalPacket: { evidence: ['transient'] },
-        messages: [{ id: 'user-1', role: 'user', text: 'Compare CellChat methods', evidenceContext: 'local evidence' }],
+        messages: [
+          { id: 'user-1', role: 'user', text: 'Compare CellChat methods', evidenceContext: 'local evidence', createdAt: '2026-08-09T09:30:00.000Z' },
+          { id: 'assistant-1', runId: 'run-2', role: 'assistant', text: 'Partial answer', createdAt: '2026-08-09T09:31:00.000Z' },
+        ],
         configSnapshot: {
           source: { agentId: 'biologist' },
           identity: { name: 'My Biologist', shortName: 'Bio' },
@@ -37,7 +40,10 @@ test('persists restorable workspace tabs and conversations without transient run
           enabledTools: ['vault.search', 'vault.write', 'unknown.tool'],
           permissions: { writeVault: true, executeCode: true, networkAccess: 'allow' },
         },
-        runSnapshots: [{ id: 'run-1', model: { modelId: 'deepseek-chat' } }],
+        runSnapshots: [
+          { id: 'run-1', model: { modelId: 'deepseek-chat' } },
+          { id: 'run-2', status: 'running', createdAt: '2026-08-09T00:00:00.000Z' },
+        ],
       },
     },
   }
@@ -51,9 +57,14 @@ test('persists restorable workspace tabs and conversations without transient run
   assert.equal(session.pendingQuestion, '')
   assert.equal(session.retrievalPacket, null)
   assert.equal(session.input, 'draft question')
+  assert.equal(session.messages[0].createdAt, '2026-08-09T09:30:00.000Z')
+  assert.equal(session.messages[1].runId, 'run-2')
   assert.equal(session.configSnapshot.identity.name, 'My Biologist')
   assert.deepEqual(session.configSnapshot.enabledTools, ['vault.search'])
   assert.equal(session.configSnapshot.permissions.writeVault, false)
+  assert.equal(session.runSnapshots[0].status, 'completed')
+  assert.equal(session.runSnapshots[1].status, 'cancelled')
+  assert.equal(session.runSnapshots[1].error.code, 'run_interrupted')
 })
 
 test('rejects malformed tabs, duplicate ids, orphan sessions, and unknown schema versions', () => {

@@ -1,4 +1,8 @@
+import { getRuntimeAdapter } from './runtime/adapter.js'
+
 let runtimeToken = ''
+
+const runtimeFetch = (...args) => getRuntimeAdapter().api.fetch(...args)
 
 async function parseResponse(response) {
   const payload = await response.json().catch(() => ({}))
@@ -6,14 +10,14 @@ async function parseResponse(response) {
   return payload
 }
 
-export async function bootstrapMcpRuntime(fetchImpl = fetch) {
+export async function bootstrapMcpRuntime(fetchImpl = runtimeFetch) {
   const response = await fetchImpl('/api/mcp/bootstrap', { headers: { Accept: 'application/json' } })
   const payload = await parseResponse(response)
   runtimeToken = payload.runtimeToken || ''
   return { sessions: payload.sessions || [] }
 }
 
-async function runtimeRequest(path, body, fetchImpl = fetch) {
+async function runtimeRequest(path, body, fetchImpl = runtimeFetch) {
   if (!runtimeToken) await bootstrapMcpRuntime(fetchImpl)
   const response = await fetchImpl(path, {
     method: 'POST',
@@ -28,15 +32,15 @@ async function runtimeRequest(path, body, fetchImpl = fetch) {
   return parseResponse(response)
 }
 
-export function connectMcpServer(server, fetchImpl = fetch) {
+export function connectMcpServer(server, fetchImpl = runtimeFetch) {
   return runtimeRequest('/api/mcp/sessions/connect', { server }, fetchImpl)
 }
 
-export function disconnectMcpServer(serverId, fetchImpl = fetch) {
+export function disconnectMcpServer(serverId, fetchImpl = runtimeFetch) {
   return runtimeRequest('/api/mcp/sessions/disconnect', { serverId }, fetchImpl)
 }
 
-export async function callMcpTool({ serverId, toolName, arguments: args, confirmWrite }, fetchImpl = fetch) {
+export async function callMcpTool({ serverId, toolName, arguments: args, confirmWrite }, fetchImpl = runtimeFetch) {
   const prepared = await runtimeRequest('/api/mcp/calls/prepare', { serverId, toolName, arguments: args }, fetchImpl)
   let approved = !prepared.requiresConfirmation
   if (prepared.requiresConfirmation) approved = Boolean(await confirmWrite?.(prepared))
