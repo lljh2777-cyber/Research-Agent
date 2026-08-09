@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bell,
   BookOpen,
@@ -9,14 +9,17 @@ import {
   Code2,
   Cpu,
   Database,
+  Download,
   Eye,
   EyeOff,
+  FileJson,
   FileText,
   HardDrive,
   Info,
   Keyboard,
   KeyRound,
   ListFilter,
+  MessageSquare,
   Network,
   Palette,
   Plug,
@@ -27,6 +30,8 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
+  Trash2,
+  Upload,
   Wrench,
 } from 'lucide-react'
 
@@ -603,7 +608,92 @@ function FeaturePreviewPage({ pageId }) {
   </div>
 }
 
-export default function SettingsWorkspace({ authStatus, authBusy, authError, modelCatalog, modelsBusy, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, chatModels, modelConfig, onSaveModelConfig, providerConfigs, onSaveProviderConfigs, mcpConfig, onSaveMcpConfig, mcpRuntime, mcpRuntimeBusy, mcpRuntimeError, onConnectMcpServer, onDisconnectMcpServer, vaultNoteCount }) {
+function formatStorageBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`
+}
+
+function DataManagementPage({ summary, runtimeTarget, actionBlocked, onExport, onImport, onClearHistory }) {
+  const importInputRef = useRef(null)
+  const [busyAction, setBusyAction] = useState('')
+  const [feedback, setFeedback] = useState(null)
+  const busy = Boolean(busyAction)
+
+  const runAction = async (action, callback) => {
+    setBusyAction(action)
+    setFeedback(null)
+    try {
+      const result = await callback()
+      setFeedback({ tone: 'success', text: result.message })
+    } catch (error) {
+      setFeedback({ tone: 'error', text: error.message || 'The local data action could not be completed.' })
+    } finally {
+      setBusyAction('')
+    }
+  }
+
+  const handleImport = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    await runAction('import', async () => {
+      const result = await onImport(await file.text())
+      return { message: `Restored ${result.conversations} conversation${result.conversations === 1 ? '' : 's'} and ${result.pipelineRuns} pipeline run${result.pipelineRuns === 1 ? '' : 's'} from ${file.name}.` }
+    })
+  }
+
+  const handleClear = async () => {
+    const confirmed = window.confirm('Clear all saved conversations and Pipeline run history? Provider settings, credentials, and the connected Vault will be kept.')
+    if (!confirmed) return
+    await runAction('clear', async () => {
+      await onClearHistory()
+      return { message: 'Conversation and Pipeline history were cleared. Provider settings, credentials, and Vault data were kept.' }
+    })
+  }
+
+  return <div className="settings-page settings-page-wide">
+    <SettingsPageHeader eyebrow="Local-first storage" title="数据管理" description="Inspect portable local state, create a credential-free backup, or clear research history without touching the connected Vault." />
+
+    <section className="data-summary-strip" aria-label="Local data summary">
+      <div><span><HardDrive size={16} /></span><small>Workspace estimate</small><strong>{formatStorageBytes(summary.estimatedBytes)}</strong></div>
+      <div><span><MessageSquare size={16} /></span><small>Conversations</small><strong>{summary.conversations}</strong></div>
+      <div><span><FileText size={16} /></span><small>Messages</small><strong>{summary.messages}</strong></div>
+      <div><span><Network size={16} /></span><small>Pipeline runs</small><strong>{summary.pipelineRuns}</strong></div>
+    </section>
+
+    {feedback && <div className={`data-action-feedback ${feedback.tone}`} role={feedback.tone === 'error' ? 'alert' : 'status'} aria-live="polite">{feedback.text}</div>}
+    {actionBlocked && <div className="data-action-feedback warning" role="status">Finish or stop the active research or Pipeline run before importing or clearing local history.</div>}
+
+    <section className="settings-section-block data-management-section">
+      <div className="data-management-row">
+        <span className="data-management-icon"><FileJson size={19} /></span>
+        <div><h3>Portable backup</h3><p>Export conversations, tabs, model settings, Provider metadata, MCP configuration, and Pipeline history as versioned JSON.</p><small>API keys, OAuth tokens, OS credentials, Vault content, and filesystem handles are always excluded.</small></div>
+        <div className="data-management-actions">
+          <button className="settings-primary-button" onClick={() => runAction('export', async () => { const result = await onExport(); return { message: `Downloaded ${result.fileName} (${formatStorageBytes(result.bytes)}).` } })} disabled={busy}><Download size={14} />{busyAction === 'export' ? 'Exporting…' : 'Export backup'}</button>
+          <button className="settings-secondary-button" onClick={() => importInputRef.current?.click()} disabled={busy || actionBlocked}><Upload size={14} />{busyAction === 'import' ? 'Importing…' : 'Import backup'}</button>
+          <input ref={importInputRef} className="visually-hidden" type="file" accept="application/json,.json" aria-label="Select BioResearch OS backup" onChange={handleImport} />
+        </div>
+      </div>
+    </section>
+
+    <section className="settings-section-block data-management-section">
+      <div className="data-management-row danger">
+        <span className="data-management-icon"><Trash2 size={19} /></span>
+        <div><h3>Conversation and run history</h3><p>Remove {summary.conversations} saved conversation{summary.conversations === 1 ? '' : 's'}, {summary.messages} message{summary.messages === 1 ? '' : 's'}, and {summary.pipelineRuns} Pipeline run{summary.pipelineRuns === 1 ? '' : 's'}.</p><small>The current Provider configuration, credentials, MCP settings, and connected Vault remain unchanged.</small></div>
+        <div className="data-management-actions"><button className="settings-danger-button" onClick={handleClear} disabled={busy || actionBlocked || (!summary.conversations && !summary.pipelineRuns)}><Trash2 size={14} />{busyAction === 'clear' ? 'Clearing…' : 'Clear history'}</button></div>
+      </div>
+    </section>
+
+    <section className="data-boundary-note">
+      <ShieldCheck size={17} />
+      <div><strong>{runtimeTarget === 'desktop' ? 'Desktop local boundary' : 'Local Web boundary'}</strong><p>{summary.vaultNotes} connected Vault note{summary.vaultNotes === 1 ? '' : 's'} stay outside portable backups. Runtime: <code>{runtimeTarget || 'detecting'}</code>.</p></div>
+    </section>
+  </div>
+}
+
+export default function SettingsWorkspace({ authStatus, authBusy, authError, modelCatalog, modelsBusy, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, chatModels, modelConfig, onSaveModelConfig, providerConfigs, onSaveProviderConfigs, mcpConfig, onSaveMcpConfig, mcpRuntime, mcpRuntimeBusy, mcpRuntimeError, onConnectMcpServer, onDisconnectMcpServer, vaultNoteCount, dataSummary, dataActionBlocked, runtimeTarget, onExportData, onImportData, onClearHistory }) {
   const [activePage, setActivePage] = useState('providers')
   const [providerQuery, setProviderQuery] = useState('')
   const [selectedProviderId, setSelectedProviderId] = useState(API_PROVIDERS[0].id)
@@ -614,6 +704,7 @@ export default function SettingsWorkspace({ authStatus, authBusy, authError, mod
   else if (activePage === 'local-models') content = <LocalModelsPage />
   else if (activePage === 'mcp') content = <McpSettingsPage config={mcpConfig} onChange={onSaveMcpConfig} runtime={mcpRuntime} runtimeBusy={mcpRuntimeBusy} runtimeError={mcpRuntimeError} onConnectServer={onConnectMcpServer} onDisconnectServer={onDisconnectMcpServer} vaultNoteCount={vaultNoteCount} />
   else if (activePage === 'retrieval') content = <RetrievalSettingsPage config={modelConfig} onSave={onSaveModelConfig} />
+  else if (activePage === 'data') content = <DataManagementPage summary={dataSummary} runtimeTarget={runtimeTarget} actionBlocked={dataActionBlocked} onExport={onExportData} onImport={onImportData} onClearHistory={onClearHistory} />
   else content = <FeaturePreviewPage pageId={activePage} />
 
   const hasSecondaryNavigation = activePage === 'providers'

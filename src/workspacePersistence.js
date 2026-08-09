@@ -202,6 +202,29 @@ export async function saveWorkspaceSnapshot(value, { indexedDb = globalThis.wind
   }
 }
 
+export async function clearWorkspaceSnapshot({ indexedDb = globalThis.window?.indexedDB, storage = globalThis.window?.localStorage } = {}) {
+  let cleared = true
+  if (indexedDb) {
+    try {
+      const db = await openWorkspaceDb(indexedDb)
+      await new Promise((resolve, reject) => {
+        const request = db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME).delete(SNAPSHOT_KEY)
+        request.onsuccess = resolve
+        request.onerror = () => reject(request.error)
+      })
+      db.close()
+    } catch {
+      cleared = false
+    }
+  }
+  try {
+    storage?.removeItem(FALLBACK_KEY)
+  } catch {
+    cleared = false
+  }
+  return cleared
+}
+
 export const WORKSPACE_PERSISTENCE_LIMITS = Object.freeze({
   maxMessagesPerSession: MAX_MESSAGES_PER_SESSION,
   maxRunSnapshots: MAX_RUN_SNAPSHOTS,

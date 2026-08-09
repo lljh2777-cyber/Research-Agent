@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { createWorkspaceSnapshot, loadWorkspaceSnapshot, normalizeWorkspaceSnapshot, saveWorkspaceSnapshot, WORKSPACE_PERSISTENCE_LIMITS } from './workspacePersistence.js'
+import { clearWorkspaceSnapshot, createWorkspaceSnapshot, loadWorkspaceSnapshot, normalizeWorkspaceSnapshot, saveWorkspaceSnapshot, WORKSPACE_PERSISTENCE_LIMITS } from './workspacePersistence.js'
 
 function memoryStorage() {
   const values = new Map()
@@ -84,4 +84,14 @@ test('bounds retained message history and keeps empty workspaces valid', () => {
   assert.equal(normalized.sessions['research-1'].messages.length, WORKSPACE_PERSISTENCE_LIMITS.maxMessagesPerSession)
   assert.equal(normalized.sessions['research-1'].messages[0].text, '5')
   assert.deepEqual(createWorkspaceSnapshot({ tabs: [], activeTabId: null, sessions: {} }).tabs, [])
+})
+
+test('clears the fallback workspace snapshot without touching unrelated storage', async () => {
+  const storage = memoryStorage()
+  storage.setItem('unrelated', 'keep')
+  await saveWorkspaceSnapshot({ tabs: [], activeTabId: null, sessions: {} }, { indexedDb: null, storage })
+  assert.ok(await loadWorkspaceSnapshot({ indexedDb: null, storage }))
+  assert.equal(await clearWorkspaceSnapshot({ indexedDb: null, storage }), true)
+  assert.equal(await loadWorkspaceSnapshot({ indexedDb: null, storage }), null)
+  assert.equal(storage.getItem('unrelated'), 'keep')
 })

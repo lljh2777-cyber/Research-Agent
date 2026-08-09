@@ -67,7 +67,8 @@ import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot 
 import { AUTH_SERVICE_UNAVAILABLE, getAuthStatus, getChatgptModels, logoutChatgpt, startChatgptLogin, streamChatgptResponse, waitForChatgptAuth } from './authClient.js'
 import { loadRuntimeManifest } from './runtime/client.js'
 import { closeWorkspaceTab, createWorkspaceTab, findReusableTab, MAX_WORKSPACE_TABS, researchTabTitle, titleFromQuestion } from './workspaceTabs.js'
-import { loadWorkspaceSnapshot, saveWorkspaceSnapshot } from './workspacePersistence.js'
+import { clearWorkspaceSnapshot, createWorkspaceSnapshot, loadWorkspaceSnapshot, saveWorkspaceSnapshot } from './workspacePersistence.js'
+import { createDataBackup, createLocalDataSummary, parseDataBackup, serializeDataBackup } from './dataManagement.js'
 import {
   AGENT_PRESETS,
   createConversationConfigSnapshot,
@@ -885,6 +886,12 @@ function App() {
   const { phase, input, messages, running, activeStage, answerMode, retrievalPacket } = activeResearchSession
   const activeHasVaultScope = Boolean(vaultName && activeResearchSession.configSnapshot?.knowledgeScopes?.some((scope) => scope.vaultId === vaultName))
   const anyResearchRunning = Object.values(researchSessions).some((session) => session.running)
+  const dataActionBlocked = anyResearchRunning || Boolean(pipelineRunningId)
+  const localDataSummary = useMemo(() => createLocalDataSummary({
+    workspace: { tabs: workspaceTabs, activeTabId, sessions: researchSessions },
+    pipelineRuns,
+    vaultNoteCount: vaultNotes.length,
+  }), [activeTabId, pipelineRuns, researchSessions, vaultNotes.length, workspaceTabs])
 
   const updateResearchSession = useCallback((tabId, updater) => {
     setResearchSessions((current) => {
@@ -1641,6 +1648,61 @@ function App() {
     setMcpConfig(normalized)
   }
 
+  const handleExportLocalData = async () => {
+    const backup = createDataBackup({
+      workspace: { tabs: workspaceTabs, activeTabId, sessions: researchSessions },
+      modelConfig,
+      providerConfigs,
+      mcpConfig,
+      pipelineRuns,
+    }, { appVersion: runtimeManifest?.appVersion || '0.1.0' })
+    const serialized = serializeDataBackup(backup)
+    const date = backup.createdAt.slice(0, 10) || new Date().toISOString().slice(0, 10)
+    const fileName = `bioresearch-os-backup-${date}.json`
+    const url = URL.createObjectURL(new Blob([serialized], { type: 'application/json' }))
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = fileName
+    anchor.click()
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+    return { fileName, bytes: new TextEncoder().encode(serialized).length }
+  }
+
+  const handleImportLocalData = async (serialized) => {
+    if (dataActionBlocked) throw new Error('Stop the active research or Pipeline run before importing local data.')
+    const backup = parseDataBackup(serialized)
+    const { workspace, modelConfig: nextModelConfig, providerConfigs: nextProviderConfigs, mcpConfig: nextMcpConfig, pipelineRuns: nextPipelineRuns } = backup.data
+    await saveWorkspaceSnapshot(workspace)
+    saveModelConfig(nextModelConfig)
+    saveProviderConfigs(nextProviderConfigs)
+    const savedMcpConfig = saveMcpConfig(nextMcpConfig)
+    savePipelineRuns(nextPipelineRuns)
+    setWorkspaceTabs(workspace.tabs)
+    setActiveTabId(workspace.activeTabId)
+    setResearchSessions(workspace.sessions)
+    setModelConfig(nextModelConfig)
+    setProviderConfigs(nextProviderConfigs)
+    setMcpConfig(savedMcpConfig)
+    setPipelineRuns(nextPipelineRuns)
+    setSelectedPipelineRunId(null)
+    return createLocalDataSummary({ workspace, pipelineRuns: nextPipelineRuns, vaultNoteCount: vaultNotes.length })
+  }
+
+  const handleClearLocalHistory = async () => {
+    if (dataActionBlocked) throw new Error('Stop the active research or Pipeline run before clearing local history.')
+    const remainingTabs = workspaceTabs.filter((tab) => tab.kind !== 'research')
+    const nextActiveTabId = remainingTabs.some((tab) => tab.id === activeTabId) ? activeTabId : remainingTabs[0]?.id || null
+    const cleanWorkspace = createWorkspaceSnapshot({ tabs: remainingTabs, activeTabId: nextActiveTabId, sessions: {} })
+    await clearWorkspaceSnapshot()
+    await saveWorkspaceSnapshot(cleanWorkspace)
+    savePipelineRuns([])
+    setWorkspaceTabs(cleanWorkspace.tabs)
+    setActiveTabId(cleanWorkspace.activeTabId)
+    setResearchSessions({})
+    setPipelineRuns([])
+    setSelectedPipelineRunId(null)
+  }
+
   const handleConnectMcpServer = async (server) => {
     if (server.transport === 'stdio' && !window.confirm(`Launch the local MCP executable once?\n\n${server.command}\n${(server.args || []).join(' ')}`)) return
     setMcpRuntimeBusy(server.id)
@@ -1726,7 +1788,7 @@ function App() {
           <div className="topbar-actions"><button className="icon-button mobile-settings-button" onClick={() => handleOpenSection('settings')} aria-label="Open settings"><Settings2 size={18} /></button></div>
         </header>
 
-        {activeSection === 'launcher' ? <WorkspaceLauncher onOpen={openWorkspaceTab} /> : activeSection === 'settings' ? <SettingsWorkspace key={`settings-${providerCredentialsRevision}`} authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} mcpConfig={mcpConfig} onSaveMcpConfig={handleMcpConfigSave} mcpRuntime={mcpRuntime} mcpRuntimeBusy={mcpRuntimeBusy} mcpRuntimeError={mcpRuntimeError} onConnectMcpServer={handleConnectMcpServer} onDisconnectMcpServer={handleDisconnectMcpServer} vaultNoteCount={vaultNotes.length} /> : activeSection === 'graph' ? <KnowledgeGraphSection key={activeTabId} index={vaultIndex} onConnectVault={handleConnectVault} /> : activeSection === 'pipelines' ? (
+        {activeSection === 'launcher' ? <WorkspaceLauncher onOpen={openWorkspaceTab} /> : activeSection === 'settings' ? <SettingsWorkspace key={`settings-${providerCredentialsRevision}`} authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} mcpConfig={mcpConfig} onSaveMcpConfig={handleMcpConfigSave} mcpRuntime={mcpRuntime} mcpRuntimeBusy={mcpRuntimeBusy} mcpRuntimeError={mcpRuntimeError} onConnectMcpServer={handleConnectMcpServer} onDisconnectMcpServer={handleDisconnectMcpServer} vaultNoteCount={vaultNotes.length} dataSummary={localDataSummary} dataActionBlocked={dataActionBlocked} runtimeTarget={runtimeManifest?.target} onExportData={handleExportLocalData} onImportData={handleImportLocalData} onClearHistory={handleClearLocalHistory} /> : activeSection === 'graph' ? <KnowledgeGraphSection key={activeTabId} index={vaultIndex} onConnectVault={handleConnectVault} /> : activeSection === 'pipelines' ? (
           <PipelinesSection vaultName={vaultName} noteCount={vaultNotes.length} runs={pipelineRuns} runningPipelineId={pipelineRunningId} onRun={handleRunPipeline} onViewRun={handleViewPipelineRun} onConnectVault={handleConnectVault} />
         ) : activeSection === 'runs' ? (
           <RunsSection runs={pipelineRuns} selectedRunId={selectedPipelineRunId} onSelectRun={setSelectedPipelineRunId} />

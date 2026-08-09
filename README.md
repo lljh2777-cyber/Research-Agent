@@ -57,6 +57,12 @@ npm run test:all         # all of the above
 
 Playwright uses an installed Chrome locally and an isolated Chromium build in CI. GitHub Actions runs tests, production build, production dependency audit, and browser smoke tests on pushes and pull requests.
 
+## Local data backup
+
+`Settings → 数据管理` exports a versioned JSON backup of workspace tabs, conversation snapshots, model and Provider metadata, MCP configuration, and completed Pipeline history. Import validates and normalizes the file before replacing portable local state. Conversation and Pipeline history can also be cleared without changing Provider configuration or the connected Vault.
+
+Portable backups intentionally exclude API keys, OAuth tokens, operating-system credentials, Vault note content, filesystem handles, active requests, and transient tool approvals. MCP commands and endpoints remain part of the exported configuration, so treat every backup as user data even though the file contains no credentials.
+
 ## Security and deployment scope
 
 This repository is currently a local-first Web prototype, not a hardened multi-user hosted service. Making the source repository public does not make the running development services safe to expose to the Internet.
@@ -83,6 +89,7 @@ Provider API credentials entered in the current Web prototype are intended for a
 - Optional loopback-only local Vault adapter with 15-second revision polling and read-only Markdown access
 - Electron-owned Vault picker with opaque session capabilities, bounded Markdown scans, and filesystem change notifications
 - Versioned local workspace snapshots that restore tabs, conversation history, drafts, agent configuration, and run metadata without persisting credentials or active runtime capabilities
+- Credential-free, versioned JSON export/import plus scoped conversation and Pipeline history clearing
 - Account-aware ChatGPT model discovery through the official Codex app-server, with a six-hour metadata-only cache and manual refresh
 - Markdown-aware chunking, multilingual BM25 ranking, one-hop `[[wikilink]]` expansion, and per-note evidence diversification
 - Provider-neutral evidence packets injected into the user-selected ChatGPT answer model with numbered source citations

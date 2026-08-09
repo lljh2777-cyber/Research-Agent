@@ -46,3 +46,29 @@ test('restores workspace tabs and conversation configuration after reload', asyn
   await expect(page.getByRole('textbox', { name: 'Agent name' })).toHaveValue('Persistent Biologist')
   await expect(page.getByRole('tab')).toHaveCount(tabCount)
 })
+
+test('exports, clears, and restores portable local data', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('button', { name: '数据管理', exact: true }).click()
+
+  await expect(page.getByRole('heading', { name: '数据管理' })).toBeVisible()
+  const conversationSummary = page.locator('.data-summary-strip > div').filter({ hasText: 'Conversations' })
+  await expect(conversationSummary.locator('strong')).toHaveText('1')
+
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByRole('button', { name: 'Export backup', exact: true }).click()
+  const download = await downloadPromise
+  const backupPath = await download.path()
+  expect(backupPath).toBeTruthy()
+  await expect(page.locator('.data-action-feedback')).toContainText('Downloaded')
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByRole('button', { name: 'Clear history', exact: true }).click()
+  await expect(conversationSummary.locator('strong')).toHaveText('0')
+  await expect(page.locator('.data-action-feedback')).toContainText(/cleared/i)
+
+  await page.getByLabel('Select BioResearch OS backup').setInputFiles(backupPath)
+  await expect(conversationSummary.locator('strong')).toHaveText('1')
+  await expect(page.locator('.data-action-feedback')).toContainText(/restored/i)
+})
