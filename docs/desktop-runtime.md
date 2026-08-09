@@ -44,7 +44,7 @@ Provider model discovery and MCP transport remain loopback-backed. Long-running 
 
 ## Current release limits
 
-- Development artifacts are unsigned and use Electron's default icon.
+- Development artifacts are unsigned and use the project-owned BioResearch OS icon across Windows, macOS, and Linux packages.
 - Desktop builds reuse the host platform and architecture from `node_modules/electron/dist`; cross-platform and cross-architecture packages must be built on matching CI runners.
 - The manual Windows packaging workflow uploads review artifacts for seven days but does not publish a GitHub Release.
 - ChatGPT subscription login requires an installed official `codex` executable.
