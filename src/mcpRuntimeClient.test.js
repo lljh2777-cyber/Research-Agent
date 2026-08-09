@@ -30,3 +30,44 @@ test('parses arguments and marks external MCP results as untrusted data', () => 
   assert.match(result.content, /untrusted external data/)
   assert.equal(result.isError, false)
 })
+
+test('preserves a complete Knowledge Evidence Packet v1 when the surrounding MCP result exceeds 64KB', () => {
+  const packet = {
+    schemaVersion: 1,
+    question: 'Which ligand-receptor evidence is available?',
+    retrieval: { strategy: 'hybrid', topK: 1, candidateCount: 1, directCount: 1, graphExpanded: 0 },
+    evidence: [{
+      id: 'notes/cellchat.md::0',
+      noteId: 'notes/cellchat.md',
+      source: { chunkId: 'notes/cellchat.md::0', noteId: 'notes/cellchat.md', path: 'notes/cellchat.md', heading: 'CellChat' },
+      title: 'CellChat', path: 'notes/cellchat.md', type: 'method', heading: 'CellChat', excerpt: 'Ligand receptor evidence.', score: 0.91,
+    }],
+    sources: [{ noteId: 'notes/cellchat.md', path: 'notes/cellchat.md', chunkIds: ['notes/cellchat.md::0'] }],
+    error: null,
+  }
+  const result = formatMcpToolResult({ id: 'packet-1', name: 'search_vault', arguments: '{}' }, {
+    serverId: 'knowledge',
+    toolName: 'search_vault',
+    result: { content: [{ type: 'text', text: JSON.stringify({ ...packet, padding: 'x'.repeat(70_000) }) }] },
+  })
+  const envelope = JSON.parse(result.content)
+  const preserved = JSON.parse(envelope.result.content[0].text)
+
+  assert.ok(result.content.length > 64_000)
+  assert.equal(envelope.truncated, undefined)
+  assert.deepEqual(preserved.error, packet.error)
+  assert.deepEqual(preserved.evidence, packet.evidence)
+  assert.deepEqual(preserved.sources, packet.sources)
+})
+
+test('retains the generic MCP output limit for non-Evidence Packet results', () => {
+  const result = formatMcpToolResult({ id: 'large-1', name: 'tool', arguments: '{}' }, {
+    serverId: 'server',
+    toolName: 'tool',
+    result: { padding: 'x'.repeat(70_000) },
+  })
+  const envelope = JSON.parse(result.content)
+
+  assert.equal(envelope.truncated, true)
+  assert.equal(envelope.result, undefined)
+})
