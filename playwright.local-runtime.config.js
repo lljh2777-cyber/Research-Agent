@@ -8,7 +8,7 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? 'github' : 'list',
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: 'http://localhost:5183',
     trace: 'on-first-retry',
   },
   projects: [
@@ -22,7 +22,8 @@ export default defineConfig({
   ],
   webServer: {
     command: 'npm run dev',
-    url: 'http://localhost:5173',
+    env: { ...process.env, BIORESEARCH_VAULT_ROOT: './tests/fixtures/runtime-vault', BIORESEARCH_VITE_PORT: '5183' },
+    url: 'http://localhost:5183',
     reuseExistingServer: false,
     timeout: 120_000,
   },

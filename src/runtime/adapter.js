@@ -28,6 +28,16 @@ async function normalizeVaultSnapshot(payload) {
   return { ...payload, notes: await parseVaultTextEntries(payload.files || []) }
 }
 
+function unavailableResult(surface, reason = 'Runtime capability has not been discovered.') {
+  return {
+    ok: false,
+    unavailable: true,
+    code: 'runtime_unavailable',
+    surface,
+    reason,
+  }
+}
+
 export function createWebRuntimeAdapter({
   windowRef = browserWindow(),
   fetchImpl = defaultFetch,
@@ -36,6 +46,35 @@ export function createWebRuntimeAdapter({
   const api = Object.freeze({
     fetch: (input, init) => fetchImpl(input, init),
   })
+
+  let discoveredManifest = null
+
+  function optionalCapability(surface) {
+    return discoveredManifest?.capabilities?.[surface] || null
+  }
+
+  async function optionalJsonRequest(surface, path, init = {}) {
+    const capability = optionalCapability(surface)
+    if (capability?.available !== true) return unavailableResult(surface, capability?.reason)
+    try {
+      const response = await api.fetch(path, {
+        ...init,
+        headers: {
+          Accept: 'application/json',
+          ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+          ...(init.headers || {}),
+        },
+        cache: 'no-store',
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        return { ok: false, code: payload.code || 'runtime_request_failed', error: payload.error || payload.reason || 'Runtime request failed.', ...payload }
+      }
+      return payload
+    } catch (error) {
+      return { ok: false, code: 'runtime_transport_error', error: error?.message || 'Runtime request failed.' }
+    }
+  }
 
   const credentials = Object.freeze({
     mode: 'session',
@@ -223,6 +262,79 @@ export function createWebRuntimeAdapter({
     cancel: (runId) => requestResearchRun(`/${encodeURIComponent(runId)}`, { method: 'DELETE' }),
   })
 
+  const annotations = Object.freeze({
+    get available() {
+      return optionalCapability('annotations')?.available === true
+    },
+    get reason() {
+      return optionalCapability('annotations')?.reason || 'Runtime capability has not been discovered.'
+    },
+    list({ signal } = {}) {
+      return optionalJsonRequest('annotations', '/api/runtime/annotations', { signal })
+    },
+    read({ path, signal } = {}) {
+      return optionalJsonRequest('annotations', '/api/runtime/annotations?path=' + encodeURIComponent(path || ''), { signal })
+    },
+    write({ signal, ...input } = {}) {
+      return optionalJsonRequest('annotations', '/api/runtime/annotations', {
+        method: 'PUT',
+        body: JSON.stringify(input),
+        signal,
+      })
+    },
+  })
+
+  const actions = Object.freeze({
+    get available() {
+      return optionalCapability('actions')?.available === true
+    },
+    get reason() {
+      return optionalCapability('actions')?.reason || 'Runtime capability has not been discovered.'
+    },
+    list({ signal } = {}) {
+      return optionalJsonRequest('actions', '/api/runtime/actions', { signal })
+    },
+    start({ signal, ...input } = {}) {
+      return optionalJsonRequest('actions', '/api/runtime/actions', {
+        method: 'POST',
+        body: JSON.stringify(input),
+        signal,
+      })
+    },
+    async follow(runId, { after = 0, signal } = {}) {
+      const capability = optionalCapability('actions')
+      if (capability?.available !== true) return unavailableResult('actions', capability?.reason)
+      try {
+        const response = await api.fetch(
+          '/api/runtime/actions/' + encodeURIComponent(runId) + '/events?after=' + encodeURIComponent(after),
+          { headers: { Accept: 'text/event-stream' }, cache: 'no-store', signal },
+        )
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}))
+          return { ok: false, code: payload.code || 'runtime_request_failed', error: payload.error || 'Action follow failed.' }
+        }
+        return { ok: true, response }
+      } catch (error) {
+        return { ok: false, code: 'runtime_transport_error', error: error?.message || 'Action follow failed.' }
+      }
+    },
+    cancel(runId, { signal } = {}) {
+      return optionalJsonRequest('actions', '/api/runtime/actions/' + encodeURIComponent(runId), { method: 'DELETE', signal })
+    },
+  })
+
+  const runtime = Object.freeze({
+    setManifest(manifest) {
+      discoveredManifest = manifest?.capabilities ? manifest : null
+    },
+    async getManifest(fetchOverride = api.fetch) {
+      return fetchOverride('/api/runtime', {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+      })
+    },
+  })
+
   return Object.freeze({
     kind: 'web',
     api,
@@ -233,16 +345,10 @@ export function createWebRuntimeAdapter({
     providers,
     mcp,
     researchRuns,
+    annotations,
+    actions,
     providerRuns: Object.freeze({ available: false }),
-    runtime: Object.freeze({
-      async getManifest(fetchOverride = api.fetch) {
-        const response = await fetchOverride('/api/runtime', {
-          headers: { Accept: 'application/json' },
-          cache: 'no-store',
-        })
-        return response
-      },
-    }),
+    runtime,
     browser: Object.freeze({
       openPopup: (...args) => windowRef?.open(...args),
       delay: (milliseconds) => new Promise((resolve) => windowRef.setTimeout(resolve, milliseconds)),
@@ -268,6 +374,7 @@ export function createDesktopRuntimeAdapter({
     ...web,
     kind: 'desktop',
     runtime: Object.freeze({
+      setManifest: (manifest) => web.runtime.setManifest(manifest),
       async getManifest(fetchOverride = web.api.fetch) {
         if (bridge?.runtime?.getManifest) return bridge.runtime.getManifest()
         return web.runtime.getManifest(fetchOverride)

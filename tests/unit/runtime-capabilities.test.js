@@ -23,6 +23,42 @@ describe('runtime capability matrix', () => {
     expect(manifest.capabilities.researchRuns).toBe('loopback-event-buffer')
     expect(manifest.capabilities.researchExecution).toBe('loopback-provider')
     expect(manifest.capabilities.mcp).toBe('loopback')
+    expect(manifest.capabilities.annotations.available).toBe(false)
+    expect(manifest.capabilities.actions.available).toBe(false)
+    expect(isRuntimeManifest(manifest)).toBe(true)
+  })
+
+  it('publishes configured annotation and Action services only for full local Web', () => {
+    const manifest = createRuntimeManifest({
+      buildMode: BUILD_MODES.DEVELOPMENT,
+      target: RUNTIME_TARGETS.LOCAL_WEB,
+      services: { annotations: true, actions: true },
+    })
+
+    expect(manifest.capabilities.annotations).toMatchObject({
+      available: true,
+      transport: 'same-origin',
+      capability: 'annotations.write',
+      maxContentBytes: 65_536,
+      maxRequestBytes: 131_072,
+      reason: null,
+    })
+    expect(manifest.capabilities.actions).toMatchObject({
+      available: true,
+      transport: 'same-origin',
+      maxInputBytes: 131_072,
+      maxOutputBytes: 65_536,
+      maxContextBytes: 65_536,
+      maxSessionHandoffBytes: 131_072,
+      reason: null,
+      capabilities: {
+        'knowledge.lint': true,
+        'actions.paperIngest': true,
+        'actions.xray': true,
+        'actions.codeAnalysis': true,
+        'actions.synthesis': true,
+      },
+    })
     expect(isRuntimeManifest(manifest)).toBe(true)
   })
 
@@ -35,6 +71,8 @@ describe('runtime capability matrix', () => {
     expect(manifest.capabilities.mcp).toBe(false)
     expect(manifest.capabilities.researchRuns).toBe(false)
     expect(manifest.capabilities.researchExecution).toBe(false)
+    expect(manifest.capabilities.annotations.available).toBe(false)
+    expect(manifest.capabilities.actions.available).toBe(false)
   })
 
   it('describes the desktop security boundary independently from build mode', () => {
@@ -51,6 +89,8 @@ describe('runtime capability matrix', () => {
     expect(manifest.capabilities.localVault.adapters).toEqual(['desktop-ipc'])
     expect(manifest.capabilities.localVault.preferred).toBe('desktop-ipc')
     expect(manifest.capabilities.mcp).toBe('desktop-loopback')
+    expect(manifest.capabilities.annotations.reason).toMatch(/not implemented/i)
+    expect(manifest.capabilities.actions.reason).toMatch(/not implemented/i)
   })
 
   it('rejects a manifest with injected local adapters', () => {
@@ -67,7 +107,7 @@ describe('runtime capability matrix', () => {
   })
 
   it('creates the current Vite runtime as local Web', () => {
-    const manifest = createLocalWebRuntimeManifest({ nodeEnv: 'test', version: '1.2.3' })
+    const manifest = createLocalWebRuntimeManifest({ nodeEnv: 'test', version: '1.2.3', vaultRoot: 'Z:/definitely-missing-runtime-vault' })
 
     expect(manifest).toMatchObject({
       schemaVersion: 1,
@@ -88,6 +128,8 @@ describe('runtime capability matrix', () => {
       capabilities: {
         chatgptSubscriptionOAuth: false,
         credentials: { subscriptionOAuth: false },
+        annotations: { available: false, transport: false },
+        actions: { available: false, transport: false },
         localVault: { adapters: ['browser-picker'] },
       },
     })
