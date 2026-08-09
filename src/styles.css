@@ -211,6 +211,8 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .assistant-title-row strong { font-weight: 600; }
 .live-label { color: var(--mint); font-family: var(--mono); font-size: 10px; display: flex; align-items: center; gap: 5px; }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 10px rgba(126, 226, 195, .8); display: inline-block; }
+.live-dot.failed { background: #f87171; box-shadow: 0 0 10px rgba(248, 113, 113, .75); }
+.live-dot.cancelled { background: #fbbf24; box-shadow: 0 0 10px rgba(251, 191, 36, .75); }
 .assistant-content p, .assistant-content li { color: #c7d2e3; font-size: 14px; line-height: 1.55; }
 .assistant-content p { margin: 0 0 13px; }
 .assistant-content ul { margin: 0 0 13px; padding-left: 20px; display: grid; gap: 5px; }
@@ -328,6 +330,8 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .path-icon { width: 17px; height: 17px; border-radius: 50%; border: 1px solid #607794; display: grid; place-items: center; z-index: 1; background: #14233d; color: #8092aa; }
 .path-icon.done { color: var(--mint); border-color: var(--mint); background: rgba(126, 226, 195, .12); }
 .path-icon.current { color: var(--blue); border-color: var(--blue); }
+.path-icon.failed { color: #f87171; border-color: #f87171; background: rgba(248, 113, 113, .12); }
+.path-icon.cancelled { color: #fbbf24; border-color: #fbbf24; background: rgba(251, 191, 36, .12); }
 .path-row > div:nth-child(2) { display: grid; gap: 2px; }
 .path-row strong { font-size: 11px; color: #d8e1ee; font-weight: 500; }
 .path-row small { color: #7e8ca2; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }

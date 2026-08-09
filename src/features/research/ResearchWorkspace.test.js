@@ -4,7 +4,9 @@ import { readFile } from 'node:fs/promises'
 
 test('ResearchWorkspace keeps readable UI text and exposes EvidencePacket errors accessibly', async () => {
   const source = await readFile(new URL('./ResearchWorkspace.jsx', import.meta.url), 'utf8')
+  const mainSource = await readFile(new URL('../../main.jsx', import.meta.url), 'utf8')
   assert.doesNotMatch(source, /[\u95BB\u95C1\u9225\uFFFD]/)
+  assert.doesNotMatch(mainSource, /[\u95BB\u95C1\u9225\uFFFD]/)
   assert.match(source, /retrievalPacket\?\.error/)
   assert.match(source, /role="alert"/)
   assert.match(source, /aria-live="assertive"/)
@@ -14,4 +16,5 @@ test('ResearchWorkspace keeps readable UI text and exposes EvidencePacket errors
   assert.match(source, /selectedModel\.provider\} - \{selectedModel\.detail/)
   assert.match(source, / - read-only evidence/)
   assert.match(source, / - rerank:/)
+  assert.match(mainSource, /Generated with \$\{result\.model\} through .* - \$\{agentOutput\.iterations\} model pass/)
 })
