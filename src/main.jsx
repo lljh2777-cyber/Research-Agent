@@ -89,6 +89,7 @@ import {
   updateConversationTools,
 } from './agentPresets.js'
 import { ResearchWorkspace } from './features/research/ResearchWorkspace.jsx'
+import { createKnowledgeAgentSessionFixture, createKnowledgeToolFixtures } from './features/knowledge/fixtures.js'
 import './styles.css'
 
 const navItems = [
@@ -346,6 +347,9 @@ function App() {
   const [mcpRuntimeBusy, setMcpRuntimeBusy] = useState('')
   const [mcpRuntimeError, setMcpRuntimeError] = useState('')
   const [pendingToolApproval, setPendingToolApproval] = useState(null)
+  const [knowledgeAgentSession, setKnowledgeAgentSession] = useState(() => createKnowledgeAgentSessionFixture())
+  const [knowledgeAgentInput, setKnowledgeAgentInput] = useState('')
+  const [knowledgeApproval, setKnowledgeApproval] = useState(null)
   const [runtimeManifest, setRuntimeManifest] = useState(null)
   const [authStatus, setAuthStatus] = useState({ provider: 'chatgpt', connected: false, pending: false })
   const [authBusy, setAuthBusy] = useState(false)
@@ -360,6 +364,7 @@ function App() {
   const pipelineRunTimerRef = useRef(null)
   const mockRunTimersRef = useRef(new Map())
   const toolApprovalResolverRef = useRef(null)
+  const knowledgeApprovalCallbackRef = useRef(null)
   const reattachedResearchRunsRef = useRef(new Set())
   const researchToolRegistryRef = useRef(null)
 
@@ -396,6 +401,13 @@ function App() {
   const supportsResearchRunReattach = runtimeCapabilities?.researchRuns === 'loopback-event-buffer'
   const supportsLoopbackResearchExecution = runtimeCapabilities?.researchExecution === 'loopback-provider'
   const activeResearchSession = researchSessions[activeTabId] || createResearchSession({ modelId: modelConfig.chatModelId, knowledgeBaseId: vaultName })
+  const availableKnowledgeCapabilities = Array.isArray(runtimeCapabilities?.knowledgeActions)
+    ? runtimeCapabilities.knowledgeActions
+    : runtimeCapabilities?.knowledgeActions?.availableCapabilities || []
+  const knowledgeToolDescriptors = useMemo(() => createKnowledgeToolFixtures({
+    context: knowledgeAgentSession.context,
+    availableCapabilities: availableKnowledgeCapabilities,
+  }), [knowledgeAgentSession.context, runtimeCapabilities])
   const { phase, input, messages, running, activeStage, answerMode, retrievalPacket } = activeResearchSession
   const runStatus = activeResearchSession.runSnapshots?.at(-1)?.status
   const activeHasVaultScope = Boolean(vaultName && activeResearchSession.configSnapshot?.knowledgeScopes?.some((scope) => scope.vaultId === vaultName))
@@ -947,6 +959,82 @@ function App() {
     openWorkspaceTab(kind)
   }, [openWorkspaceTab])
 
+  const handleKnowledgeContextChange = useCallback((context) => {
+    setKnowledgeAgentSession((current) => current.context === context ? current : { ...current, context })
+  }, [])
+
+  const completeKnowledgeRead = useCallback((descriptor, prompt) => {
+    setKnowledgeAgentSession((current) => {
+      const cursor = current.cursor + 1
+      return {
+        ...current,
+        runId: current.runId || `knowledge-run-${cursor}`,
+        cursor,
+        runStatus: 'completed',
+        messages: [
+          ...current.messages,
+          { id: `knowledge-user-${cursor}`, role: 'user', text: prompt },
+          { id: `knowledge-assistant-${cursor}`, role: 'assistant', text: `${descriptor.title} completed as a read-only fixture. The shared Runtime action surface will provide the final result without mutating the Vault.` },
+        ],
+      }
+    })
+  }, [])
+
+  const handleKnowledgeAction = useCallback((descriptor, options = {}) => {
+    if (!descriptor?.available) return
+    const prompt = options.prompt || `${descriptor.title} the current note.`
+    if (descriptor.effect === 'read') {
+      completeKnowledgeRead(descriptor, prompt)
+      return
+    }
+    const currentContext = knowledgeAgentSession.context
+    if (!currentContext?.activeNote) return
+    const targetScope = options.targetScope || `${currentContext.vault.name} / ${currentContext.activeNote.path}`
+    const idempotencyKey = options.idempotencyKey || `${knowledgeAgentSession.sessionId}:${descriptor.toolId}:${knowledgeAgentSession.cursor + 1}`
+    knowledgeApprovalCallbackRef.current = options.onApproved || null
+    setKnowledgeApproval({
+      toolId: descriptor.toolId,
+      actionTitle: descriptor.title,
+      targetScope,
+      idempotencyKey,
+      prompt,
+      payload: options.payload || null,
+    })
+    setKnowledgeAgentSession((current) => ({ ...current, runId: current.runId || `knowledge-run-${current.cursor + 1}`, runStatus: 'waiting-approval' }))
+  }, [completeKnowledgeRead, knowledgeAgentSession])
+
+  const resolveKnowledgeApproval = useCallback((approved) => {
+    if (!knowledgeApproval) return
+    const callback = knowledgeApprovalCallbackRef.current
+    knowledgeApprovalCallbackRef.current = null
+    if (approved) callback?.()
+    setKnowledgeAgentSession((current) => {
+      const cursor = current.cursor + 1
+      return {
+        ...current,
+        cursor,
+        runStatus: approved ? 'completed' : 'cancelled',
+        messages: [
+          ...current.messages,
+          { id: `knowledge-user-${cursor}`, role: 'user', text: knowledgeApproval.prompt },
+          { id: `knowledge-assistant-${cursor}`, role: 'assistant', text: approved ? `${knowledgeApproval.actionTitle} completed for ${knowledgeApproval.targetScope}.` : `${knowledgeApproval.actionTitle} was cancelled. No Vault changes were made.` },
+        ],
+      }
+    })
+    setKnowledgeApproval(null)
+  }, [knowledgeApproval])
+
+  const submitKnowledgeQuestion = useCallback((question) => {
+    const query = knowledgeToolDescriptors.find((descriptor) => descriptor.id === 'query')
+    if (query?.available) completeKnowledgeRead(query, question)
+    setKnowledgeAgentInput('')
+  }, [completeKnowledgeRead, knowledgeToolDescriptors])
+
+  const continueKnowledgeInResearch = useCallback(() => {
+    const researchTabId = openWorkspaceTab('research')
+    updateResearchSession(researchTabId, (session) => ({ ...session, phase: 'conversation', knowledgeCurator: true }))
+  }, [openWorkspaceTab, updateResearchSession])
+
   const handleConnectChatgpt = async () => {
     if (authBusy || authStatus.connected) return authStatus
     setAuthBusy(true)
@@ -1485,13 +1573,31 @@ function App() {
           <div className="topbar-actions"><button className="icon-button mobile-settings-button" onClick={() => handleOpenSection('settings')} aria-label="Open settings"><Settings2 size={18} /></button></div>
         </header>
 
-        {activeSection === 'launcher' ? <WorkspaceLauncher onOpen={openWorkspaceTab} /> : activeSection === 'settings' ? <SettingsWorkspace key={`settings-${providerCredentialsRevision}`} authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} mcpConfig={mcpConfig} onSaveMcpConfig={handleMcpConfigSave} mcpRuntime={mcpRuntime} mcpRuntimeBusy={mcpRuntimeBusy} mcpRuntimeError={mcpRuntimeError} onConnectMcpServer={handleConnectMcpServer} onDisconnectMcpServer={handleDisconnectMcpServer} vaultNoteCount={vaultNotes.length} dataSummary={localDataSummary} dataActionBlocked={dataActionBlocked} runtimeTarget={runtimeManifest?.target} useNativeDataFiles={supportsDesktopDataFiles} onExportData={handleExportLocalData} onImportData={handleImportLocalData} onImportDataFromDesktop={handleImportLocalDataFromDesktop} onClearHistory={handleClearLocalHistory} /> : activeSection === 'graph' ? <KnowledgeGraphSection key={activeTabId} index={vaultIndex} onConnectVault={handleConnectVault} /> : activeSection === 'pipelines' ? (
+        {activeSection === 'launcher' ? <WorkspaceLauncher onOpen={openWorkspaceTab} /> : activeSection === 'settings' ? <SettingsWorkspace key={`settings-${providerCredentialsRevision}`} authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} mcpConfig={mcpConfig} onSaveMcpConfig={handleMcpConfigSave} mcpRuntime={mcpRuntime} mcpRuntimeBusy={mcpRuntimeBusy} mcpRuntimeError={mcpRuntimeError} onConnectMcpServer={handleConnectMcpServer} onDisconnectMcpServer={handleDisconnectMcpServer} vaultNoteCount={vaultNotes.length} dataSummary={localDataSummary} dataActionBlocked={dataActionBlocked} runtimeTarget={runtimeManifest?.target} useNativeDataFiles={supportsDesktopDataFiles} onExportData={handleExportLocalData} onImportData={handleImportLocalData} onImportDataFromDesktop={handleImportLocalDataFromDesktop} onClearHistory={handleClearLocalHistory} /> : activeSection === 'graph' ? <KnowledgeGraphSection
+          key={activeTabId}
+          index={vaultIndex}
+          onConnectVault={handleConnectVault}
+          vaultId={vaultCapabilityId || vaultName}
+          vaultName={vaultName}
+          vaultRevision={localRevision}
+          knowledgeSession={knowledgeAgentSession}
+          knowledgeInput={knowledgeAgentInput}
+          onKnowledgeInput={setKnowledgeAgentInput}
+          knowledgeToolDescriptors={knowledgeToolDescriptors}
+          knowledgeApproval={knowledgeApproval}
+          onKnowledgeAction={handleKnowledgeAction}
+          onKnowledgeSubmit={submitKnowledgeQuestion}
+          onResolveKnowledgeApproval={resolveKnowledgeApproval}
+          onContinueInResearch={continueKnowledgeInResearch}
+          onKnowledgeContextChange={handleKnowledgeContextChange}
+        /> : activeSection === 'pipelines' ? (
           <PipelinesSection vaultName={vaultName} noteCount={vaultNotes.length} runs={pipelineRuns} runningPipelineId={pipelineRunningId} onRun={handleRunPipeline} onViewRun={handleViewPipelineRun} onConnectVault={handleConnectVault} />
         ) : activeSection === 'runs' ? (
           <RunsSection runs={pipelineRuns} selectedRunId={selectedPipelineRunId} onSelectRun={setSelectedPipelineRunId} />
         ) : (
           <ResearchWorkspace
             phase={phase}
+            knowledgePanelProps={activeResearchSession.knowledgeCurator ? { session: knowledgeAgentSession, contextSummary: knowledgeAgentSession.context, descriptors: knowledgeToolDescriptors, input: knowledgeAgentInput, onInput: setKnowledgeAgentInput, onSubmit: submitKnowledgeQuestion, onAction: handleKnowledgeAction, approval: knowledgeApproval, onResolveApproval: resolveKnowledgeApproval, disabled: !knowledgeAgentSession.context } : null}
             setupProps={{ config: activeResearchSession.configSnapshot, selectedModel, models: chatModels, vaultName, vaultNoteCount: vaultNotes.length, vaultSyncState: syncState, mcpConnected: mcpRuntime.sessions.length > 0, authStatus, authBusy, modelCatalog, modelsBusy, onSelectAgent: handleSelectAgent, onUpdateIdentity: handleUpdateAgentIdentity, onUpdateSystemPrompt: handleUpdateAgentSystemPrompt, onResetSystemPrompt: handleResetAgentSystemPrompt, onSelectModel: handleModelSelect, onSelectVault: handleSelectResearchVault, onToggleTool: handleToggleResearchTool, onConnectVault: handleConnectVault, onConnectChatgpt: handleConnectChatgpt, onLogoutChatgpt: handleLogoutChatgpt, onRefreshModels: refreshChatgptModels, onStart: handleStartResearch }}
             conversationProps={{ config: activeResearchSession.configSnapshot, selectedModel, vaultName: activeHasVaultScope ? vaultName : '', mcpConnected: mcpRuntime.sessions.length > 0, canEdit: messages.length === 0, onEdit: handleEditResearchSetup, messages, running, activeStage, retrievalPacket, input, setInput, onSubmit: submitQuestion, disabled: anyResearchRunning, models: chatModels, authStatus, authBusy, modelCatalog, modelsBusy, onSelectModel: handleModelSelect, onConnectChatgpt: handleConnectChatgpt, onLogoutChatgpt: handleLogoutChatgpt, onRefreshModels: refreshChatgptModels, onOpenNote: setSelectedNote, linkedNotes: inspectorNotes, sources: inspectorSources, topK: modelConfig.topK, rerankLabel: rerankModel?.name || 'Disabled by profile', answerMode, runStatus, wikilinksEnabled: activeHasVaultScope && activeResearchSession.configSnapshot?.enabledTools?.includes(TOOL_IDS.VAULT_WIKILINKS), onPause: handlePause }}
             note={selectedNote}

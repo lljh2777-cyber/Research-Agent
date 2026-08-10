@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   BookOpen,
+  Bot,
   Boxes,
   ChevronDown,
   ChevronRight,
@@ -28,6 +29,9 @@ import {
 
 import { createKnowledgeGraph } from './knowledgeGraph.js'
 import { buildVaultFileTree, collectVaultTags, DEFAULT_DOCK_LAYOUT, extractMarkdownOutline, filterVaultFileTree, moveDockPanel, normalizeDockLayout, parseWikilinks, resolveWikilink } from './knowledgeWorkspace.js'
+import { AgentConversationPanel } from './features/knowledge/AgentConversationPanel.jsx'
+import { AnnotationEditor, SelectionActionBar } from './features/knowledge/KnowledgeRoundTwo.jsx'
+import { createAnnotationFixture, createKnowledgeContextFixture, createTextAnchorFixture } from './features/knowledge/fixtures.js'
 
 const LAYOUT_KEY = 'bioresearch-os:knowledge-dock-layout'
 
@@ -38,6 +42,7 @@ const PANEL_META = {
   graph: { title: 'Local graph', icon: Network },
   web: { title: 'Web browser', icon: Globe2 },
   plugins: { title: 'Research tools', icon: Boxes },
+  agent: { title: 'Curator', icon: Bot },
 }
 
 function loadDockLayout() {
@@ -84,18 +89,37 @@ function metadataText(value) {
   return value
 }
 
-function MarkdownDocument({ note, notes, onNavigate }) {
+function MarkdownDocument({ note, notes, selection, onNavigate, onSelectPassage, onSelectionAction, onClearSelection }) {
   const blocks = useMemo(() => {
     if (!note?.body) return []
     const lines = note.body.split(/\r?\n/)
+    let sourceCursor = 0
+    const lineOffsets = lines.map((line) => { const offset = note.body.indexOf(line, sourceCursor); sourceCursor = offset + line.length + (note.body.slice(offset + line.length).startsWith('\r\n') ? 2 : 1); return offset })
     const output = []
     let paragraph = []
+    let paragraphStart = null
+    let paragraphEnd = null
+    let paragraphHeading = null
     let code = []
+    let codeStart = null
     let inCode = false
     let inComment = false
+    let currentHeading = null
     const flushParagraph = () => {
-      if (paragraph.length) output.push({ type: 'paragraph', value: paragraph.join(' ') })
+      if (paragraph.length) output.push({
+        type: 'paragraph',
+        value: paragraph.join(' '),
+        anchorExact: note.body.slice(lineOffsets[paragraphStart], lineOffsets[paragraphEnd] + lines[paragraphEnd].length),
+        start: lineOffsets[paragraphStart],
+        end: lineOffsets[paragraphEnd] + lines[paragraphEnd].length,
+        heading: paragraphHeading,
+        lineStart: paragraphStart + 1,
+        lineEnd: paragraphEnd + 1,
+      })
       paragraph = []
+      paragraphStart = null
+      paragraphEnd = null
+      paragraphHeading = null
     }
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index]
@@ -110,8 +134,11 @@ function MarkdownDocument({ note, notes, onNavigate }) {
       if (line.trim().startsWith('```')) {
         flushParagraph()
         if (inCode) {
-          output.push({ type: 'code', value: code.join('\n') })
+          output.push({ type: 'code', value: code.join('\n'), lineStart: codeStart + 1, lineEnd: index })
           code = []
+          codeStart = null
+        } else {
+          codeStart = index + 1
         }
         inCode = !inCode
         continue
@@ -123,17 +150,27 @@ function MarkdownDocument({ note, notes, onNavigate }) {
       const heading = line.match(/^(#{1,6})\s+(.+)$/)
       if (heading) {
         flushParagraph()
+        currentHeading = { text: heading[2], level: heading[1].length, line: index + 1 }
         const isRepeatedTitle = heading[1].length === 1 && heading[2].trim() === note.title.trim() && output.length === 0
-        if (!isRepeatedTitle) output.push({ type: 'heading', level: heading[1].length, value: heading[2], id: `heading-${index}` })
+        if (!isRepeatedTitle) output.push({ type: 'heading', level: heading[1].length, value: heading[2], anchorExact: heading[2], start: lineOffsets[index] + heading[1].length + 1, end: lineOffsets[index] + line.length, id: `heading-${index}`, lineStart: index + 1, lineEnd: index + 1, heading: currentHeading })
       } else if (/^[-*]\s+/.test(line)) {
         flushParagraph()
-        output.push({ type: 'list', value: line.replace(/^[-*]\s+/, '') })
+        const value = line.replace(/^[-*]\s+/, '')
+        const start = lineOffsets[index] + line.indexOf(value)
+        output.push({ type: 'list', value, anchorExact: value, start, end: start + value.length, heading: currentHeading, lineStart: index + 1, lineEnd: index + 1 })
       } else if (/^>\s?/.test(line)) {
         flushParagraph()
-        output.push({ type: 'quote', value: line.replace(/^>\s?/, '') })
+        const value = line.replace(/^>\s?/, '')
+        const start = lineOffsets[index] + line.indexOf(value)
+        output.push({ type: 'quote', value, anchorExact: value, start, end: start + value.length, heading: currentHeading, lineStart: index + 1, lineEnd: index + 1 })
       } else if (!line.trim()) {
         flushParagraph()
       } else {
+        if (paragraphStart == null) {
+          paragraphStart = index
+          paragraphHeading = currentHeading
+        }
+        paragraphEnd = index
         paragraph.push(line.trim())
       }
     }
@@ -152,14 +189,44 @@ function MarkdownDocument({ note, notes, onNavigate }) {
       </dl>}
       <div className="document-markdown">
         {blocks.map((block, index) => {
+          const selectionId = `${note.id}:${index}`
+          const isSelected = selection?.selectionId === selectionId
+          const heading = [...blocks.slice(0, index + 1)].reverse().find((candidate) => candidate.heading)?.heading || null
+          const selectBlock = () => block.type !== 'code' && onSelectPassage({
+            selectionId,
+            anchor: createTextAnchorFixture({
+              markdown: note.body,
+              exact: block.anchorExact || block.value,
+              start: block.start,
+              end: block.end,
+              heading,
+              lineStart: block.lineStart,
+              lineEnd: block.lineEnd,
+            }),
+          })
+          const content = (() => {
           if (block.type === 'heading') {
             const Heading = `h${Math.min(6, block.level + 1)}`
-            return <Heading id={block.id} key={`${block.id}-${index}`}><InlineMarkdown value={block.value} note={note} notes={notes} onNavigate={onNavigate} /></Heading>
+            return <Heading id={block.id}><InlineMarkdown value={block.value} note={note} notes={notes} onNavigate={onNavigate} /></Heading>
           }
-          if (block.type === 'list') return <div className="document-list-item" key={index}><CircleDot size={9} /> <span><InlineMarkdown value={block.value} note={note} notes={notes} onNavigate={onNavigate} /></span></div>
-          if (block.type === 'quote') return <blockquote key={index}><InlineMarkdown value={block.value} note={note} notes={notes} onNavigate={onNavigate} /></blockquote>
-          if (block.type === 'code') return <pre key={index}><code>{block.value}</code></pre>
-          return <p key={index}><InlineMarkdown value={block.value} note={note} notes={notes} onNavigate={onNavigate} /></p>
+          if (block.type === 'list') return <div className="document-list-item"><CircleDot size={9} /> <span><InlineMarkdown value={block.value} note={note} notes={notes} onNavigate={onNavigate} /></span></div>
+          if (block.type === 'quote') return <blockquote><InlineMarkdown value={block.value} note={note} notes={notes} onNavigate={onNavigate} /></blockquote>
+          if (block.type === 'code') return <pre><code>{block.value}</code></pre>
+          return <p><InlineMarkdown value={block.value} note={note} notes={notes} onNavigate={onNavigate} /></p>
+          })()
+          return <div
+            className={`selectable-markdown-block ${block.type === 'code' ? 'not-selectable' : ''} ${isSelected ? 'selected' : ''}`}
+            role={block.type === 'code' ? undefined : 'button'}
+            tabIndex={block.type === 'code' ? undefined : 0}
+            aria-pressed={isSelected}
+            aria-label={`Select passage: ${block.value.slice(0, 80)}`}
+            onClick={(event) => { if (!event.target.closest('button')) selectBlock() }}
+            onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectBlock() } }}
+            key={`${block.id || block.type}-${index}`}
+          >
+            {content}
+            {isSelected && <SelectionActionBar selection={selection} onAction={onSelectionAction} onClear={onClearSelection} />}
+          </div>
         })}
       </div>
     </article>
@@ -301,17 +368,37 @@ function Dock({ side, panelIds, activePanelId, draggingId, onActivate, onDragSta
   </aside>
 }
 
-export default function KnowledgeGraphSection({ index, onConnectVault }) {
+export default function KnowledgeGraphSection({
+  index,
+  onConnectVault,
+  vaultId = '',
+  vaultName = '',
+  vaultRevision = '',
+  knowledgeSession,
+  knowledgeInput = '',
+  onKnowledgeInput,
+  knowledgeToolDescriptors = [],
+  knowledgeApproval,
+  onKnowledgeAction,
+  onKnowledgeSubmit,
+  onResolveKnowledgeApproval,
+  onContinueInResearch,
+  onKnowledgeContextChange,
+}) {
   const graph = useMemo(() => createKnowledgeGraph(index), [index])
   const notes = index?.notes || []
   const [selectedNote, setSelectedNote] = useState(() => notes[0] || null)
   const [openNoteIds, setOpenNoteIds] = useState(() => notes[0] ? [notes[0].id] : [])
   const [dockLayout, setDockLayout] = useState(loadDockLayout)
-  const [activePanels, setActivePanels] = useState({ left: 'files', right: 'graph' })
+  const [activePanels, setActivePanels] = useState({ left: 'files', right: 'agent' })
   const [draggingId, setDraggingId] = useState(null)
   const [leftOpen, setLeftOpen] = useState(true)
   const [rightOpen, setRightOpen] = useState(true)
   const [pendingAnchor, setPendingAnchor] = useState(null)
+  const [selection, setSelection] = useState(null)
+  const [annotations, setAnnotations] = useState([])
+  const [activeAnnotation, setActiveAnnotation] = useState(null)
+  const [annotationDraft, setAnnotationDraft] = useState({ manual: '', ai: '' })
 
   useEffect(() => {
     const mobileWorkspace = window.matchMedia('(max-width: 900px)')
@@ -339,6 +426,19 @@ export default function KnowledgeGraphSection({ index, onConnectVault }) {
 
   const outline = useMemo(() => extractMarkdownOutline(selectedNote?.body), [selectedNote])
   const tags = useMemo(() => collectVaultTags(notes), [notes])
+  const knowledgeContext = useMemo(() => createKnowledgeContextFixture({
+    surface: 'knowledge-sidebar',
+    vaultId: notes.length ? vaultId || vaultName : '',
+    vaultName,
+    vaultRevision,
+    activeNote: selectedNote ? { ...selectedNote, revision: selectedNote.revision || vaultRevision } : null,
+    selection,
+    contextRevision: `ui-${vaultRevision || '0'}-${selectedNote?.id || 'none'}-${selection?.selectionId || 'none'}`,
+  }), [notes.length, vaultId, vaultName, vaultRevision, selectedNote, selection])
+
+  useEffect(() => {
+    onKnowledgeContextChange?.(knowledgeContext)
+  }, [knowledgeContext, onKnowledgeContextChange])
 
   useEffect(() => {
     setActivePanels((current) => ({
@@ -353,6 +453,8 @@ export default function KnowledgeGraphSection({ index, onConnectVault }) {
   const handleSelectNote = (note, anchorId = null) => {
     if (!note) return
     setSelectedNote(note)
+    setSelection(null)
+    setActiveAnnotation(null)
     setOpenNoteIds((current) => current.includes(note.id) ? current : [...current, note.id])
     setPendingAnchor(anchorId ? { noteId: note.id, anchorId } : null)
   }
@@ -373,6 +475,8 @@ export default function KnowledgeGraphSection({ index, onConnectVault }) {
       if (selectedNote?.id === noteId) {
         const nextId = next[Math.min(closingIndex, next.length - 1)]
         setSelectedNote(nextId ? notesById.get(nextId) || null : null)
+        setSelection(null)
+        setActiveAnnotation(null)
       }
       return next
     })
@@ -395,7 +499,7 @@ export default function KnowledgeGraphSection({ index, onConnectVault }) {
   }
   const resetLayout = () => {
     setDockLayout(normalizeDockLayout(DEFAULT_DOCK_LAYOUT))
-    setActivePanels({ left: 'files', right: 'graph' })
+    setActivePanels({ left: 'files', right: 'agent' })
     setLeftOpen(true)
     setRightOpen(true)
   }
@@ -404,22 +508,93 @@ export default function KnowledgeGraphSection({ index, onConnectVault }) {
     if (node.note) handleSelectNote(node.note)
   }
 
+  const openAnnotationEditor = () => {
+    if (!knowledgeContext?.selection) return
+    const existing = annotations.find((item) => item.source.noteId === selectedNote?.id && item.anchor.position.start === knowledgeContext.selection.anchor.position.start)
+    const next = existing || createAnnotationFixture({
+      id: `annotation-${selectedNote.id}-${knowledgeContext.selection.anchor.position.start}-${knowledgeContext.selection.anchor.position.end}`,
+      context: knowledgeContext,
+    })
+    setActiveAnnotation(next)
+    setAnnotationDraft({ ...next.sections })
+  }
+
+  const requestAnnotationWrite = (nextAnnotation, verb) => {
+    const descriptor = knowledgeToolDescriptors.find((item) => item.id === 'annotation')
+    if (!descriptor?.available) return
+    const targetScope = `${knowledgeContext.vault.name} / ${knowledgeContext.activeNote.path}`
+    onKnowledgeAction(descriptor, {
+      prompt: `${verb} annotation for ${knowledgeContext.activeNote.title}`,
+      targetScope,
+      idempotencyKey: `${nextAnnotation.id}:${nextAnnotation.timestamps.updatedAt}:${verb.toLocaleLowerCase()}`,
+      payload: nextAnnotation,
+      onApproved: () => {
+        setAnnotations((current) => [...current.filter((item) => item.id !== nextAnnotation.id), nextAnnotation])
+        setActiveAnnotation(nextAnnotation)
+        setAnnotationDraft({ ...nextAnnotation.sections })
+      },
+    })
+  }
+
+  const handleRequestSave = (annotation, draft) => {
+    const next = createAnnotationFixture({
+      id: annotation.id,
+      context: knowledgeContext,
+      manual: draft.manual,
+      ai: draft.ai,
+      archived: annotation.archived,
+      createdAt: annotation.timestamps.createdAt,
+      updatedAt: new Date().toISOString(),
+      archivedAt: annotation.timestamps.archivedAt,
+      relocation: annotation.relocation,
+    })
+    requestAnnotationWrite(next, 'Save')
+  }
+
+  const handleArchive = (annotation) => {
+    const next = createAnnotationFixture({
+      id: annotation.id,
+      context: knowledgeContext,
+      manual: annotation.sections.manual,
+      ai: annotation.sections.ai,
+      archived: !annotation.archived,
+      createdAt: annotation.timestamps.createdAt,
+      updatedAt: new Date().toISOString(),
+      relocation: annotation.relocation,
+    })
+    requestAnnotationWrite(next, next.archived ? 'Archive' : 'Restore')
+  }
+
+  const handleSelectionAction = (toolId) => {
+    setRightOpen(true)
+    setActivePanels((current) => ({ ...current, right: 'agent' }))
+    if (toolId === 'annotation') {
+      openAnnotationEditor()
+      return
+    }
+    const descriptor = knowledgeToolDescriptors.find((item) => item.id === toolId)
+    if (descriptor?.available) onKnowledgeAction(descriptor, { prompt: `${descriptor.title} selected passage: ${selection?.anchor?.quote?.exact || ''}` })
+  }
+
   const renderPanel = (panelId) => {
     if (panelId === 'files') return <FilesPanel notes={notes} selectedId={selectedNote?.id} onSelect={handleSelectNote} />
     if (panelId === 'outline') return <OutlinePanel note={selectedNote} />
     if (panelId === 'tags') return <TagsPanel tags={tags} />
     if (panelId === 'graph') return <MiniGraph graph={graph} selectedId={selectedNote?.id} onSelect={selectGraphNode} />
     if (panelId === 'web') return <WebPanel />
+    if (panelId === 'agent') return <AgentConversationPanel variant="compact" session={knowledgeSession} contextSummary={knowledgeContext} descriptors={knowledgeToolDescriptors} input={knowledgeInput} onInput={onKnowledgeInput} onSubmit={onKnowledgeSubmit} onAction={onKnowledgeAction} onContinueInResearch={onContinueInResearch} approval={knowledgeApproval} onResolveApproval={onResolveKnowledgeApproval} disabled={!knowledgeContext} />
     return <PluginsPanel />
   }
 
-  return <div className={`knowledge-workspace ${leftOpen ? '' : 'left-closed'} ${rightOpen ? '' : 'right-closed'}`}>
+  return <div className={`knowledge-workspace ${leftOpen ? '' : 'left-closed'} ${rightOpen ? '' : 'right-closed'} ${activeAnnotation ? 'annotation-open' : ''}`}>
     <div className="knowledge-workspace-toolbar">
       <div className="workspace-toolbar-group">
         <button onClick={() => setLeftOpen(!leftOpen)} aria-label={`${leftOpen ? 'Hide' : 'Show'} left sidebar`}>{leftOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}</button>
         <div className="workspace-breadcrumb"><span>{notes.length ? 'Vault' : 'Knowledge workspace'}</span><ChevronRight size={12} /><strong>{selectedNote?.title || 'No note open'}</strong></div>
       </div>
       <div className="workspace-toolbar-group">
+        {knowledgeContext?.activeNote && <span className="workspace-context-chip"><FileText size={11} />Current note: {knowledgeContext.activeNote.title}</span>}
+        {knowledgeContext?.selection && <span className="workspace-context-chip selection"><Bot size={11} />Selection ready</span>}
         <span className="workspace-local-badge"><CircleDot size={10} /> Local-first</span>
         <button onClick={resetLayout} title="Reset panel layout"><RotateCcw size={14} /><span>Reset layout</span></button>
         <button onClick={() => setRightOpen(!rightOpen)} aria-label={`${rightOpen ? 'Hide' : 'Show'} right sidebar`}>{rightOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}</button>
@@ -432,13 +607,13 @@ export default function KnowledgeGraphSection({ index, onConnectVault }) {
       <main className="knowledge-center">
         <div className="knowledge-tabs" role="tablist" aria-label="Open documents">
           {openNotes.map((note) => <div className={note.id === selectedNote?.id ? 'active' : ''} role="tab" aria-selected={note.id === selectedNote?.id} key={note.id}>
-            <button className="document-tab-main" onClick={() => setSelectedNote(note)}><FileText size={13} /><span>{note.title}</span><small>Markdown</small></button>
+            <button className="document-tab-main" onClick={() => handleSelectNote(note)}><FileText size={13} /><span>{note.title}</span><small>Markdown</small></button>
             <button className="document-tab-close" onClick={() => handleCloseNote(note.id)} aria-label={`Close ${note.title}`}><X size={12} /></button>
           </div>)}
           <button className="document-tab-add" onClick={() => { setLeftOpen(true); setActivePanels((current) => ({ ...current, left: 'files' })) }} aria-label="Browse Vault files"><Plus size={14} /></button>
         </div>
         <div className="knowledge-editor">
-          {selectedNote ? <MarkdownDocument note={selectedNote} notes={notes} onNavigate={handleSelectNote} /> : <div className="knowledge-welcome">
+          {selectedNote ? <MarkdownDocument note={selectedNote} notes={notes} selection={selection} onSelectPassage={setSelection} onSelectionAction={handleSelectionAction} onClearSelection={() => setSelection(null)} onNavigate={handleSelectNote} /> : <div className="knowledge-welcome">
             <span><BookOpen size={25} /></span>
             <h2>{notes.length ? 'Choose a document from the Files panel' : 'Your research knowledge, in one workspace'}</h2>
             <p>{notes.length ? 'Open Markdown notes as tabs and keep multiple sources ready while you research.' : 'Connect an Obsidian Vault to browse files, inspect backlinks, read Markdown, and arrange research tools around your document.'}</p>
@@ -447,11 +622,12 @@ export default function KnowledgeGraphSection({ index, onConnectVault }) {
         </div>
       </main>
 
+      {(activeAnnotation || annotations.some((item) => item.source.noteId === selectedNote?.id)) && <AnnotationEditor annotation={activeAnnotation} draft={annotationDraft} annotations={annotations.filter((item) => item.source.noteId === selectedNote?.id)} onDraftChange={setAnnotationDraft} onRequestSave={handleRequestSave} onArchive={handleArchive} onClose={() => setActiveAnnotation(null)} onReopen={(annotation) => { setActiveAnnotation(annotation); setAnnotationDraft({ ...annotation.sections }) }} />}
       {rightOpen && <Dock side="right" panelIds={dockLayout.right} activePanelId={activePanels.right} draggingId={draggingId} onActivate={(side, panelId) => setActivePanels((current) => ({ ...current, [side]: panelId }))} onDragStart={handleDragStart} onDragEnd={() => setDraggingId(null)} onDrop={handleDrop} renderPanel={renderPanel} />}
     </div>
 
     <footer className="knowledge-statusbar">
-      <span>{graph.stats.resolvedLinks} links</span><span>{notes.length} notes</span><span>{outline.length} headings</span><span>{tags.length} tags</span><span className="statusbar-spacer" /><span><Network size={11} /> Graph index ready</span>
+      <span>{graph.stats.resolvedLinks} links</span><span>{notes.length} notes</span><span>{outline.length} headings</span><span>{tags.length} tags</span><span className="statusbar-spacer" /><span><Network size={11} /> {notes.length ? 'Graph index ready' : 'No Vault connected'}</span>
     </footer>
   </div>
 }
