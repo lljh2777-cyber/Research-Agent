@@ -1,11 +1,14 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createVaultFallbackSelectionController,
   processVaultFallbackSelection,
   snapshotSelectedFiles,
   VAULT_PICKER_ERROR_CODE,
+  VAULT_PICKER_WATCHDOG_MS,
 } from '../../src/runtime/VaultFallbackPicker.jsx'
+
+afterEach(() => vi.useRealTimers())
 
 describe('browser Vault fallback selection', () => {
   it('snapshots the live FileList before async processing and resets only after it settles', async () => {
@@ -98,22 +101,88 @@ describe('browser Vault fallback selection', () => {
     expect(stopRecovery).toHaveBeenCalledOnce()
   })
 
-  it('ignores late change and cancel events after the no-event outcome settles', async () => {
+  it('settles total host silence only when the independent watchdog deadline expires', () => {
+    vi.useFakeTimers()
+    const input = { files: [], value: 'folder', click: vi.fn() }
+    const onError = vi.fn()
+    const controller = createVaultFallbackSelectionController({
+      input,
+      callbacks: () => ({ onError }),
+      schedule: setTimeout,
+      cancelSchedule: clearTimeout,
+    })
+
+    controller.open()
+    vi.advanceTimersByTime(VAULT_PICKER_WATCHDOG_MS - 1)
+    expect(onError).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(1)
+    expect(onError).toHaveBeenCalledOnce()
+    expect(onError.mock.calls[0][0]).toMatchObject({ code: VAULT_PICKER_ERROR_CODE, outcome: 'picker-unavailable' })
+    expect(controller.getState()).toBe('settled')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('allows a slow standard selection just before the watchdog deadline', async () => {
+    vi.useFakeTimers()
+    const readme = { name: 'README.md' }
+    const input = { files: [], value: '', click: vi.fn() }
+    const onSelect = vi.fn(async (files) => ({ status: 'selected', files }))
+    const onError = vi.fn()
+    const controller = createVaultFallbackSelectionController({
+      input,
+      callbacks: () => ({ onSelect, onError }),
+      schedule: setTimeout,
+      cancelSchedule: clearTimeout,
+    })
+
+    controller.open()
+    vi.advanceTimersByTime(VAULT_PICKER_WATCHDOG_MS - 1)
+    input.files = [readme]
+    await controller.change()
+    vi.advanceTimersByTime(1)
+
+    expect(onSelect).toHaveBeenCalledWith([readme])
+    expect(onError).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('lets standard cancellation win before the watchdog deadline', () => {
+    vi.useFakeTimers()
+    const input = { files: [], value: '', click: vi.fn() }
+    const onCancel = vi.fn()
+    const onError = vi.fn()
+    const controller = createVaultFallbackSelectionController({
+      input,
+      callbacks: () => ({ onCancel, onError }),
+      schedule: setTimeout,
+      cancelSchedule: clearTimeout,
+    })
+
+    controller.open()
+    controller.cancel()
+    vi.advanceTimersByTime(VAULT_PICKER_WATCHDOG_MS)
+
+    expect(onCancel).toHaveBeenCalledOnce()
+    expect(onError).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('ignores late change and cancel events after the watchdog outcome settles', async () => {
+    vi.useFakeTimers()
     const input = { files: [], value: '', click: vi.fn() }
     const onSelect = vi.fn()
     const onCancel = vi.fn()
     const onError = vi.fn()
-    let recover
     const controller = createVaultFallbackSelectionController({
       input,
       callbacks: () => ({ onSelect, onCancel, onError }),
-      schedule: (callback) => { recover = callback; return 1 },
-      cancelSchedule: vi.fn(),
+      schedule: setTimeout,
+      cancelSchedule: clearTimeout,
     })
 
     controller.open()
-    controller.resume()
-    recover()
+    vi.advanceTimersByTime(VAULT_PICKER_WATCHDOG_MS)
     input.files = [{ name: 'late.md' }]
     await controller.change()
     controller.cancel()
@@ -124,27 +193,30 @@ describe('browser Vault fallback selection', () => {
   })
 
   it('starts a fresh pending cycle on retry and accepts a delivered FileList', async () => {
+    vi.useFakeTimers()
     const readme = { name: 'README.md' }
     const input = { files: [], value: '', click: vi.fn() }
     const onSelect = vi.fn(async (files) => ({ status: 'selected', files }))
-    let recover
+    const onError = vi.fn()
     const controller = createVaultFallbackSelectionController({
       input,
-      callbacks: () => ({ onSelect, onError: vi.fn() }),
-      schedule: (callback) => { recover = callback; return 1 },
-      cancelSchedule: vi.fn(),
+      callbacks: () => ({ onSelect, onError }),
+      schedule: setTimeout,
+      cancelSchedule: clearTimeout,
     })
 
     controller.open()
-    controller.resume()
-    recover()
+    vi.advanceTimersByTime(VAULT_PICKER_WATCHDOG_MS)
     controller.open()
     input.files = [readme]
     await controller.change()
+    vi.advanceTimersByTime(VAULT_PICKER_WATCHDOG_MS)
 
     expect(input.click).toHaveBeenCalledTimes(2)
     expect(onSelect).toHaveBeenCalledWith([readme])
+    expect(onError).toHaveBeenCalledOnce()
     expect(controller.getState()).toBe('settled')
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('cancels pending recovery work when disposed', () => {
