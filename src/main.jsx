@@ -198,7 +198,7 @@ function LogoMark() {
 }
 
 
-function Sidebar({ activeSection, setActiveSection, collapsed, onToggleCollapsed, onConnectVault, onSyncVault, onOpenSettings, vaultName, vaultNoteCount, syncState, vaultSource, localAdapterState, authStatus, authBusy, onConnectChatgpt, onLogoutChatgpt, authError }) {
+function Sidebar({ activeSection, setActiveSection, collapsed, onToggleCollapsed, onConnectVault, onSyncVault, onOpenSettings, vaultName, vaultNoteCount, syncState, vaultFeedback, vaultSource, localAdapterState, authStatus, authBusy, onConnectChatgpt, onLogoutChatgpt, authError }) {
   const vaultPresentation = describeVaultConnection({ vaultName, noteCount: vaultNoteCount, syncState })
   const hasVault = vaultPresentation.status !== VAULT_CONNECTION_STATUS.DISCONNECTED
   return (
@@ -236,6 +236,10 @@ function Sidebar({ activeSection, setActiveSection, collapsed, onToggleCollapsed
           <ChevronDown size={16} />
         </button>
         {hasVault && <button className="settings-link sync-link" onClick={onSyncVault} disabled={syncState === 'syncing'} title={collapsed ? vaultPresentation.syncLabel : undefined}><RefreshCw className={syncState === 'syncing' ? 'spin' : ''} size={15} /><span>{vaultPresentation.syncLabel}</span></button>}
+        {vaultFeedback && <div className={`vault-feedback ${vaultFeedback.kind}`} role={vaultFeedback.kind === 'error' ? 'alert' : 'status'}>
+          <span>{vaultFeedback.message}</span>
+          {vaultFeedback.retry && <button type="button" onClick={onConnectVault}>Retry</button>}
+        </div>}
         {vaultSource === 'local-adapter' && <div className={`adapter-status ${localAdapterState}`} title={collapsed ? (localAdapterState === 'ready' ? 'Local adapter online' : 'Local adapter offline') : undefined}><Database size={14} /><span>{localAdapterState === 'ready' ? 'Local adapter online' : 'Local adapter offline'}</span>{localAdapterState === 'ready' && <small>auto sync 15s</small>}</div>}
         <div className={`account-status ${authStatus?.connected ? 'connected' : ''}`} title={collapsed ? (authStatus?.connected ? 'ChatGPT connected' : 'ChatGPT not connected') : undefined}>
           <Sparkles size={14} />
@@ -338,6 +342,7 @@ function App() {
   const [localAdapterState, setLocalAdapterState] = useState('checking')
   const [localRevision, setLocalRevision] = useState('')
   const [syncState, setSyncState] = useState('idle')
+  const [vaultFeedback, setVaultFeedback] = useState(null)
   const [selectedNote, setSelectedNote] = useState(null)
   const [modelConfig, setModelConfig] = useState(loadModelConfig)
   const [providerConfigs, setProviderConfigs] = useState(loadProviderConfigs)
@@ -704,6 +709,7 @@ function App() {
   }
 
   const handleConnectVault = async () => {
+    setVaultFeedback(null)
     if (supportsDesktopVault) {
       if (!runtimeAdapter.vault.hasDesktopBridge) {
         setSyncState('error')
@@ -752,12 +758,48 @@ function App() {
   }
 
   const handleVaultSelection = async (files) => {
-    const { notes, vaultName: selectedVaultName } = await runtimeAdapter.vault.parseSelectedFiles(files)
-    if (!notes.length) {
-      setSyncState('empty')
-      return
+    const previousSyncState = syncState
+    setVaultFeedback(null)
+    setSyncState('syncing')
+    try {
+      const { notes, vaultName: selectedVaultName } = await runtimeAdapter.vault.parseSelectedFiles(files)
+      if (!notes.length) {
+        setSyncState(vaultNotes.length ? previousSyncState : 'empty')
+        setVaultFeedback({
+          kind: 'empty',
+          message: vaultNotes.length
+            ? 'No Markdown files were found. The current Vault was kept.'
+            : 'No Markdown files were found in that folder.',
+          retry: true,
+        })
+        return { status: 'empty' }
+      }
+      await applyVault(notes, selectedVaultName, { source: 'manual' })
+      setVaultFeedback({ kind: 'success', message: `Connected ${selectedVaultName} with ${notes.length} Markdown note${notes.length === 1 ? '' : 's'}.` })
+      return { status: 'selected', notes, vaultName: selectedVaultName }
+    } catch (error) {
+      setSyncState(vaultNotes.length ? previousSyncState : 'error')
+      setVaultFeedback({
+        kind: 'error',
+        message: vaultNotes.length
+          ? 'The folder could not be read. The current Vault was kept.'
+          : 'The folder could not be read. Try selecting it again.',
+        retry: true,
+      })
+      return { status: 'failed', error }
     }
-    await applyVault(notes, selectedVaultName, { source: 'manual' })
+  }
+
+  const handleVaultSelectionCancelled = () => {
+    setVaultFeedback({
+      kind: 'cancelled',
+      message: vaultNotes.length ? 'Folder selection cancelled. The current Vault was kept.' : 'Folder selection cancelled.',
+      retry: true,
+    })
+  }
+
+  const handleVaultSelectionError = () => {
+    setVaultFeedback({ kind: 'error', message: 'The folder could not be processed. Try selecting it again.', retry: true })
   }
 
   const refreshChatgptModels = useCallback(async (force = false) => {
@@ -1558,6 +1600,7 @@ function App() {
         vaultName={vaultName}
         vaultNoteCount={vaultIndex.notes.length}
         syncState={syncState}
+        vaultFeedback={vaultFeedback}
         vaultSource={vaultSource}
         localAdapterState={localAdapterState}
         authStatus={authStatus}
@@ -1566,7 +1609,7 @@ function App() {
         onLogoutChatgpt={handleLogoutChatgpt}
         authError={authError}
       />
-      <VaultFallbackPicker ref={vaultInputRef} enabled={supportsBrowserPickerVault} onSelect={handleVaultSelection} />
+      <VaultFallbackPicker ref={vaultInputRef} enabled={supportsBrowserPickerVault} onSelect={handleVaultSelection} onCancel={handleVaultSelectionCancelled} onError={handleVaultSelectionError} />
       <main className="main-shell">
         <header className="topbar workspace-topbar">
           <WorkspaceTabs tabs={workspaceTabs} activeTabId={activeTabId} onSelect={handleSelectTab} onClose={handleCloseTab} onCreate={(kind) => openWorkspaceTab(kind, { forceNew: kind === 'research' || kind === 'graph' })} />

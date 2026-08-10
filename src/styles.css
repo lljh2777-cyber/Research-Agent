@@ -54,6 +54,11 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .settings-link { border: 0; background: transparent; color: var(--muted); display: flex; align-items: center; gap: 9px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
 .settings-link:hover:not(:disabled) { color: var(--text); }
 .settings-link:disabled { cursor: wait; opacity: .7; }
+.vault-feedback { display: grid; gap: 6px; margin: 2px 8px; padding: 8px 9px; border: 1px solid rgba(110, 168, 254, .2); border-radius: 5px; background: rgba(48, 78, 120, .12); color: #aebdd0; font-size: 9px; line-height: 1.45; }
+.vault-feedback.error, .vault-feedback.empty { border-color: rgba(231, 167, 119, .24); background: rgba(112, 62, 25, .11); color: #d8a779; }
+.vault-feedback.cancelled { color: var(--muted); }
+.vault-feedback button { justify-self: start; border: 0; background: transparent; padding: 0; color: #8fb8f5; font: inherit; font-weight: 700; cursor: pointer; }
+.vault-feedback button:hover { color: #bed7ff; }
 .adapter-status { display: flex; align-items: center; gap: 7px; padding: 3px 10px 1px; color: var(--muted); font-size: 10px; font-family: var(--mono); }
 .adapter-status svg { color: var(--mint); }
 .adapter-status.offline svg { color: #e7b66a; }
@@ -73,7 +78,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .sidebar-collapsed .sidebar-collapse { width: 42px; height: 38px; margin: 0; }
 .sidebar-collapsed .main-nav { gap: 5px; }
 .sidebar-collapsed .nav-item { height: 42px; justify-content: center; gap: 0; padding: 0; }
-.sidebar-collapsed .nav-item span, .sidebar-collapsed .workspace-copy, .sidebar-collapsed .workspace-switcher > svg, .sidebar-collapsed .settings-link span, .sidebar-collapsed .adapter-status span, .sidebar-collapsed .adapter-status small, .sidebar-collapsed .account-status span, .sidebar-collapsed .account-status button, .sidebar-collapsed .auth-error { display: none; }
+.sidebar-collapsed .nav-item span, .sidebar-collapsed .workspace-copy, .sidebar-collapsed .workspace-switcher > svg, .sidebar-collapsed .settings-link span, .sidebar-collapsed .adapter-status span, .sidebar-collapsed .adapter-status small, .sidebar-collapsed .account-status span, .sidebar-collapsed .account-status button, .sidebar-collapsed .auth-error, .sidebar-collapsed .vault-feedback { display: none; }
 .sidebar-collapsed .sidebar-bottom { justify-items: center; gap: 5px; }
 .sidebar-collapsed .workspace-switcher, .sidebar-collapsed .settings-link, .sidebar-collapsed .adapter-status, .sidebar-collapsed .account-status { width: 42px; min-height: 38px; justify-content: center; padding: 0; }
 .sidebar-collapsed .workspace-switcher { border-color: transparent; background: transparent; }
