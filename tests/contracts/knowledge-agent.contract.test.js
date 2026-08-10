@@ -5,6 +5,7 @@ import { getKnowledgeAgentRunPresentation } from '../../src/features/knowledge/A
 import {
   ANNOTATION_V1_FIXTURE,
   assertKnowledgeEnvelopeFixture,
+  availableKnowledgeCapabilitiesFromRuntime,
   createAnnotationFixture,
   createKnowledgeAgentSessionFixture,
   createKnowledgeContextFixture,
@@ -64,6 +65,58 @@ describe('Knowledge Agent v1 consumer contract', () => {
     })
     expect(invalid.filter(({ id }) => !['query', 'explain'].includes(id)).every(({ available }) => !available)).toBe(true)
     expect(invalid.find(({ id }) => id === 'lint')).toMatchObject({ unavailableReason: expect.stringMatching(/Runtime capability/) })
+  })
+
+  it('derives availability only from the canonical Runtime actions and annotations manifest', () => {
+    const capabilities = availableKnowledgeCapabilitiesFromRuntime({
+      annotations: { available: true, capability: 'annotations.write' },
+      actions: {
+        available: true,
+        capabilities: {
+          'knowledge.lint': true,
+          'actions.paperIngest': true,
+          'actions.xray': true,
+          'actions.codeAnalysis': true,
+          'actions.synthesis': true,
+          'unknown.action': true,
+        },
+      },
+      knowledgeActions: {
+        availableCapabilities: ['legacy.must-not-enable'],
+      },
+    })
+
+    expect(capabilities).toEqual([
+      'annotations.write',
+      'knowledge.lint',
+      'actions.paperIngest',
+      'actions.xray',
+      'actions.codeAnalysis',
+      'actions.synthesis',
+    ])
+  })
+
+  it('fails closed for unavailable, malformed, absent, and synthetic capability shapes', () => {
+    const actionsAvailableWithoutAnnotations = availableKnowledgeCapabilitiesFromRuntime({
+      annotations: { available: false, capability: 'annotations.write' },
+      actions: { available: true, capabilities: { 'knowledge.lint': true } },
+    })
+    expect(actionsAvailableWithoutAnnotations).toEqual(['knowledge.lint'])
+    expect(actionsAvailableWithoutAnnotations).not.toContain('annotations.write')
+
+    expect(availableKnowledgeCapabilitiesFromRuntime({
+      annotations: { available: true, capability: 'annotations.write' },
+      actions: { available: false, capabilities: { 'knowledge.lint': true } },
+      knowledgeActions: ['knowledge.lint'],
+    })).toEqual(['annotations.write'])
+    expect(availableKnowledgeCapabilitiesFromRuntime({
+      annotations: { available: true, capability: 'annotations.other' },
+      actions: { available: true, capabilities: { 'knowledge.lint': 'true' } },
+    })).toEqual([])
+    expect(availableKnowledgeCapabilitiesFromRuntime({ knowledgeActions: {
+      availableCapabilities: ['annotations.write', 'knowledge.lint'],
+    } })).toEqual([])
+    expect(availableKnowledgeCapabilitiesFromRuntime()).toEqual([])
   })
 
   it('uses distinct Context, Action input/handoff, and Action output byte ceilings', () => {

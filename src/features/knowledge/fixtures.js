@@ -15,6 +15,31 @@ export const KNOWLEDGE_ACTION_CONTRACT_MAP = Object.freeze({
   synthesis: Object.freeze({ toolId: 'knowledge.synthesis.write', capability: 'actions.synthesis' }),
 })
 
+const RUNTIME_ACTION_CAPABILITY_IDS = Object.freeze(
+  Object.values(KNOWLEDGE_ACTION_CONTRACT_MAP)
+    .map(({ capability }) => capability)
+    .filter((capability) => capability.startsWith('actions.') || capability === 'knowledge.lint'),
+)
+
+export function availableKnowledgeCapabilitiesFromRuntime(runtimeCapabilities) {
+  const available = []
+  const annotations = runtimeCapabilities?.annotations
+  if (
+    annotations?.available === true
+    && annotations.capability === KNOWLEDGE_ACTION_CONTRACT_MAP.annotation.capability
+  ) {
+    available.push(annotations.capability)
+  }
+
+  const actions = runtimeCapabilities?.actions
+  if (actions?.available === true && actions.capabilities && typeof actions.capabilities === 'object') {
+    for (const capability of RUNTIME_ACTION_CAPABILITY_IDS) {
+      if (actions.capabilities[capability] === true) available.push(capability)
+    }
+  }
+  return available
+}
+
 function mappedTool(id, metadata) {
   return Object.freeze({ id, ...KNOWLEDGE_ACTION_CONTRACT_MAP[id], ...metadata })
 }
