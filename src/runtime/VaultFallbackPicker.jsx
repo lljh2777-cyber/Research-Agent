@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 
 export const VAULT_PICKER_ERROR_CODE = 'selection-not-delivered'
+export const VAULT_PICKER_WATCHDOG_MS = 6000
 
 export function snapshotSelectedFiles(fileList) {
   return Array.from(fileList || [])
@@ -22,20 +23,23 @@ export async function processVaultFallbackSelection({ fileList, onSelect, onCanc
   }
 }
 
-export function createVaultFallbackSelectionController({ input, callbacks, schedule, cancelSchedule, startRecovery = () => {}, stopRecovery = () => {} }) {
+export function createVaultFallbackSelectionController({ input, callbacks, schedule, cancelSchedule, startRecovery = () => {}, stopRecovery = () => {}, watchdogMs = VAULT_PICKER_WATCHDOG_MS }) {
   let state = 'idle'
   let recoveryTimer = null
+  let watchdogTimer = null
   let disposed = false
 
-  const clearRecovery = () => {
+  const clearTimers = () => {
     if (recoveryTimer !== null) cancelSchedule(recoveryTimer)
+    if (watchdogTimer !== null) cancelSchedule(watchdogTimer)
     recoveryTimer = null
+    watchdogTimer = null
   }
   const resetInput = () => { input.value = '' }
   const settlePending = () => {
     if (state !== 'pending' || disposed) return false
     state = 'settled'
-    clearRecovery()
+    clearTimers()
     stopRecovery()
     return true
   }
@@ -49,14 +53,36 @@ export function createVaultFallbackSelectionController({ input, callbacks, sched
     const { onSelect, onCancel, onError } = callbacks()
     return processVaultFallbackSelection({ fileList: input.files, onSelect, onCancel, onError, reset: resetInput })
   }
+  const settleUnavailable = () => {
+    if (disposed || state !== 'pending') return
+    if (input.files?.length) {
+      processInput()
+      return
+    }
+    if (!settlePending()) return
+    resetInput()
+    const error = new Error('The browser closed the folder picker without delivering the selected files.')
+    error.name = 'VaultPickerUnavailableError'
+    error.code = VAULT_PICKER_ERROR_CODE
+    error.outcome = 'picker-unavailable'
+    callbacks().onError?.(error)
+  }
 
   return {
     open() {
       if (disposed) return
-      clearRecovery()
+      clearTimers()
       state = 'pending'
       startRecovery()
-      input.click()
+      watchdogTimer = schedule(() => {
+        watchdogTimer = null
+        settleUnavailable()
+      }, watchdogMs)
+      try {
+        input.click()
+      } catch {
+        settleUnavailable()
+      }
     },
     change: processInput,
     cancel() {
@@ -73,24 +99,13 @@ export function createVaultFallbackSelectionController({ input, callbacks, sched
       if (disposed || state !== 'pending' || recoveryTimer !== null) return
       recoveryTimer = schedule(() => {
         recoveryTimer = null
-        if (disposed || state !== 'pending') return
-        if (input.files?.length) {
-          processInput()
-          return
-        }
-        if (!settlePending()) return
-        resetInput()
-        const error = new Error('The browser closed the folder picker without delivering the selected files.')
-        error.name = 'VaultPickerUnavailableError'
-        error.code = VAULT_PICKER_ERROR_CODE
-        error.outcome = 'picker-unavailable'
-        callbacks().onError?.(error)
+        settleUnavailable()
       }, 250)
     },
     dispose() {
       disposed = true
       state = 'settled'
-      clearRecovery()
+      clearTimers()
       stopRecovery()
     },
     getState: () => state,

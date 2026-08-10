@@ -49,9 +49,8 @@ test('browser directory fallback preserves selection state and reports every out
   await expect(page.getByRole('status')).toContainText('Connected runtime-vault with 1 Markdown note.')
 
   await connectedVault.click()
-  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   const unavailableAlert = page.getByRole('alert')
-  await expect(unavailableAlert).toContainText('The browser did not deliver the selected folder. The current Vault was kept.')
+  await expect(unavailableAlert).toContainText('The browser did not deliver the selected folder. The current Vault was kept.', { timeout: 8_000 })
   await expect(connectedVault).toContainText('runtime-vault')
 
   await picker.setInputFiles(emptyVault)
