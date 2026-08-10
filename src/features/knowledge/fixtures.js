@@ -4,16 +4,31 @@ export const MAX_KNOWLEDGE_CONTEXT_BYTES = 65_536
 export const MAX_KNOWLEDGE_ACTION_INPUT_BYTES = 131_072
 export const MAX_KNOWLEDGE_ACTION_OUTPUT_BYTES = 65_536
 
-const TOOL_FIXTURES = [
-  { id: 'query', title: 'Query', effect: 'read', riskClass: 'low', approvalPolicy: 'none', capability: 'knowledge.query' },
-  { id: 'explain', title: 'Explain', effect: 'read', riskClass: 'low', approvalPolicy: 'none', capability: 'knowledge.explain' },
-  { id: 'lint', title: 'Lint', effect: 'read', riskClass: 'low', approvalPolicy: 'none', capability: 'actions.lint' },
-  { id: 'annotation', title: 'Annotate', effect: 'write', riskClass: 'medium', approvalPolicy: 'explicit', capability: 'annotations.write' },
-  { id: 'paper-ingest', title: 'Paper ingest', effect: 'write', riskClass: 'medium', approvalPolicy: 'explicit', capability: 'actions.paper-ingest' },
-  { id: 'xray', title: 'X-Ray', effect: 'write', riskClass: 'medium', approvalPolicy: 'explicit', capability: 'actions.xray' },
-  { id: 'code-analysis', title: 'Static code analysis', effect: 'write', riskClass: 'medium', approvalPolicy: 'explicit', capability: 'actions.code-analysis' },
-  { id: 'synthesis', title: 'Synthesis', effect: 'write', riskClass: 'medium', approvalPolicy: 'explicit', capability: 'actions.synthesis' },
-]
+export const KNOWLEDGE_ACTION_CONTRACT_MAP = Object.freeze({
+  query: Object.freeze({ toolId: 'knowledge.query', capability: 'knowledge.query' }),
+  explain: Object.freeze({ toolId: 'knowledge.explain', capability: 'knowledge.explain' }),
+  lint: Object.freeze({ toolId: 'knowledge.lint', capability: 'knowledge.lint' }),
+  annotation: Object.freeze({ toolId: 'knowledge.annotation.write', capability: 'annotations.write' }),
+  'paper-ingest': Object.freeze({ toolId: 'knowledge.paper.ingest', capability: 'actions.paperIngest' }),
+  xray: Object.freeze({ toolId: 'knowledge.xray', capability: 'actions.xray' }),
+  'code-analysis': Object.freeze({ toolId: 'knowledge.code.analyze', capability: 'actions.codeAnalysis' }),
+  synthesis: Object.freeze({ toolId: 'knowledge.synthesis.write', capability: 'actions.synthesis' }),
+})
+
+function mappedTool(id, metadata) {
+  return Object.freeze({ id, ...KNOWLEDGE_ACTION_CONTRACT_MAP[id], ...metadata })
+}
+
+const TOOL_FIXTURES = Object.freeze([
+  mappedTool('query', { title: 'Query', effect: 'read', riskClass: 'low', approvalPolicy: 'none' }),
+  mappedTool('explain', { title: 'Explain', effect: 'read', riskClass: 'low', approvalPolicy: 'none' }),
+  mappedTool('lint', { title: 'Lint', effect: 'read', riskClass: 'low', approvalPolicy: 'none' }),
+  mappedTool('annotation', { title: 'Annotate', effect: 'write', riskClass: 'medium', approvalPolicy: 'explicit' }),
+  mappedTool('paper-ingest', { title: 'Paper ingest', effect: 'write', riskClass: 'medium', approvalPolicy: 'explicit' }),
+  mappedTool('xray', { title: 'X-Ray', effect: 'write', riskClass: 'medium', approvalPolicy: 'explicit' }),
+  mappedTool('code-analysis', { title: 'Static code analysis', effect: 'write', riskClass: 'medium', approvalPolicy: 'explicit' }),
+  mappedTool('synthesis', { title: 'Synthesis', effect: 'write', riskClass: 'medium', approvalPolicy: 'explicit' }),
+])
 
 export const KNOWLEDGE_TOOL_DESCRIPTOR_FIXTURES = Object.freeze(TOOL_FIXTURES.map((tool) => Object.freeze({
   ...tool,
@@ -32,8 +47,8 @@ export const KNOWLEDGE_CURATOR_PRESET_FIXTURE = Object.freeze({
   model: Object.freeze({ mode: 'auto', providerId: null, modelId: 'smart-default', endpointType: null }),
   fallbackModels: Object.freeze([]),
   tools: Object.freeze({
-    allowed: Object.freeze(TOOL_FIXTURES.map((tool) => tool.id)),
-    defaults: Object.freeze(['query', 'explain']),
+    allowed: Object.freeze(TOOL_FIXTURES.map((tool) => tool.toolId)),
+    defaults: Object.freeze(TOOL_FIXTURES.slice(0, 2).map((tool) => tool.toolId)),
   }),
   knowledgeScopes: Object.freeze([]),
   permissions: Object.freeze({ readVault: true, writeVault: true, executeCode: false, networkAccess: 'ask' }),

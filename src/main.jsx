@@ -990,10 +990,10 @@ function App() {
     const currentContext = knowledgeAgentSession.context
     if (!currentContext?.activeNote) return
     const targetScope = options.targetScope || `${currentContext.vault.name} / ${currentContext.activeNote.path}`
-    const idempotencyKey = options.idempotencyKey || `${knowledgeAgentSession.sessionId}:${descriptor.id}:${knowledgeAgentSession.cursor + 1}`
+    const idempotencyKey = options.idempotencyKey || `${knowledgeAgentSession.sessionId}:${descriptor.toolId}:${knowledgeAgentSession.cursor + 1}`
     knowledgeApprovalCallbackRef.current = options.onApproved || null
     setKnowledgeApproval({
-      toolId: descriptor.id,
+      toolId: descriptor.toolId,
       actionTitle: descriptor.title,
       targetScope,
       idempotencyKey,

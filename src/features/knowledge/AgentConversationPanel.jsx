@@ -73,6 +73,7 @@ function ToolMenu({ descriptors, onAction }) {
           disabled={!descriptor.available}
           onClick={() => onAction(descriptor)}
           aria-describedby={!descriptor.available ? `tool-reason-${descriptor.id}` : undefined}
+          data-tool-id={descriptor.toolId}
           key={descriptor.id}
         >
           <Icon size={14} />

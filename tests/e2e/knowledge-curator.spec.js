@@ -46,7 +46,7 @@ test('selects Markdown, approves an annotation, reopens it, and continues the sa
     const response = await route.fetch()
     const manifest = await response.json()
     manifest.capabilities.knowledgeActions = {
-      availableCapabilities: ['annotations.write', 'actions.lint', 'actions.synthesis'],
+      availableCapabilities: ['annotations.write', 'knowledge.lint', 'actions.paperIngest', 'actions.xray', 'actions.codeAnalysis', 'actions.synthesis'],
     }
     await route.fulfill({ response, json: manifest })
   })
@@ -62,6 +62,12 @@ test('selects Markdown, approves an annotation, reopens it, and continues the sa
   await expect(compactPanel).toHaveAttribute('data-agent-id', 'knowledge-curator')
   const sessionId = await compactPanel.getAttribute('data-session-id')
   expect(sessionId).toBeTruthy()
+  await expect(compactPanel.getByRole('button', { name: /Lint/ })).toBeEnabled()
+  await expect(compactPanel.getByRole('button', { name: /Lint/ })).toHaveAttribute('data-tool-id', 'knowledge.lint')
+  await expect(compactPanel.getByRole('button', { name: /Paper ingest/ })).toBeEnabled()
+  await expect(compactPanel.getByRole('button', { name: /Paper ingest/ })).toHaveAttribute('data-tool-id', 'knowledge.paper.ingest')
+  await expect(compactPanel.getByRole('button', { name: /Static code analysis/ })).toBeEnabled()
+  await expect(compactPanel.getByRole('button', { name: /Static code analysis/ })).toHaveAttribute('data-tool-id', 'knowledge.code.analyze')
 
   const passage = page.locator('.selectable-markdown-block').filter({ hasText: 'Selected evidence is reproducible' })
   await passage.click()

@@ -9,8 +9,10 @@ import {
   createKnowledgeAgentSessionFixture,
   createKnowledgeContextFixture,
   createKnowledgeToolFixtures,
+  KNOWLEDGE_ACTION_CONTRACT_MAP,
   KNOWLEDGE_AGENT_ID,
   KNOWLEDGE_CONTEXT_V1_FIXTURE,
+  KNOWLEDGE_CURATOR_PRESET_FIXTURE,
   KNOWLEDGE_TOOL_DESCRIPTOR_FIXTURES,
   knowledgeEnvelopeSize,
   MAX_KNOWLEDGE_ACTION_INPUT_BYTES,
@@ -33,16 +35,35 @@ describe('Knowledge Agent v1 consumer contract', () => {
     expect(context).toMatchObject({ activeNote: null, selection: null, attachments: [] })
   })
 
-  it('freezes exactly eight descriptors and per-call explicit approval for writes', () => {
+  it('maps exactly eight UI actions to frozen Core tool IDs and Runtime capability keys', () => {
+    expect(Object.entries(KNOWLEDGE_ACTION_CONTRACT_MAP).map(([id, contract]) => [id, contract.toolId, contract.capability])).toEqual([
+      ['query', 'knowledge.query', 'knowledge.query'],
+      ['explain', 'knowledge.explain', 'knowledge.explain'],
+      ['lint', 'knowledge.lint', 'knowledge.lint'],
+      ['annotation', 'knowledge.annotation.write', 'annotations.write'],
+      ['paper-ingest', 'knowledge.paper.ingest', 'actions.paperIngest'],
+      ['xray', 'knowledge.xray', 'actions.xray'],
+      ['code-analysis', 'knowledge.code.analyze', 'actions.codeAnalysis'],
+      ['synthesis', 'knowledge.synthesis.write', 'actions.synthesis'],
+    ])
     expect(KNOWLEDGE_TOOL_DESCRIPTOR_FIXTURES.map(({ id }) => id)).toEqual(['query', 'explain', 'lint', 'annotation', 'paper-ingest', 'xray', 'code-analysis', 'synthesis'])
+    expect(KNOWLEDGE_TOOL_DESCRIPTOR_FIXTURES.map(({ toolId }) => toolId)).toEqual(KNOWLEDGE_CURATOR_PRESET_FIXTURE.tools.allowed)
+    expect(KNOWLEDGE_CURATOR_PRESET_FIXTURE.tools.defaults).toEqual(['knowledge.query', 'knowledge.explain'])
     expect(KNOWLEDGE_TOOL_DESCRIPTOR_FIXTURES.filter(({ effect }) => effect === 'read').map(({ id, approvalPolicy }) => [id, approvalPolicy])).toEqual([['query', 'none'], ['explain', 'none'], ['lint', 'none']])
     expect(KNOWLEDGE_TOOL_DESCRIPTOR_FIXTURES.filter(({ effect }) => effect === 'write').every(({ approvalPolicy }) => approvalPolicy === 'explicit')).toBe(true)
   })
 
-  it('derives availability without probing and exposes unavailable reasons', () => {
-    const descriptors = createKnowledgeToolFixtures({ context: KNOWLEDGE_CONTEXT_V1_FIXTURE, availableCapabilities: ['annotations.write'] })
-    expect(descriptors.find(({ id }) => id === 'annotation')).toMatchObject({ available: true, approvalPolicy: 'explicit' })
-    expect(descriptors.find(({ id }) => id === 'synthesis')).toMatchObject({ available: false, unavailableReason: expect.stringMatching(/Runtime capability/) })
+  it('enables frozen Runtime capability keys and fails closed for unknown or obsolete keys', () => {
+    const validCapabilities = ['annotations.write', 'knowledge.lint', 'actions.paperIngest', 'actions.xray', 'actions.codeAnalysis', 'actions.synthesis']
+    const enabled = createKnowledgeToolFixtures({ context: KNOWLEDGE_CONTEXT_V1_FIXTURE, availableCapabilities: validCapabilities })
+    expect(enabled.every(({ available }) => available)).toBe(true)
+
+    const invalid = createKnowledgeToolFixtures({
+      context: KNOWLEDGE_CONTEXT_V1_FIXTURE,
+      availableCapabilities: ['unknown.action', 'actions.lint', 'actions.paper-ingest', 'actions.code-analysis'],
+    })
+    expect(invalid.filter(({ id }) => !['query', 'explain'].includes(id)).every(({ available }) => !available)).toBe(true)
+    expect(invalid.find(({ id }) => id === 'lint')).toMatchObject({ unavailableReason: expect.stringMatching(/Runtime capability/) })
   })
 
   it('uses distinct Context, Action input/handoff, and Action output byte ceilings', () => {
@@ -96,5 +117,12 @@ describe('Knowledge Agent v1 consumer contract', () => {
       readFile(new URL('../../src/features/knowledge/KnowledgeRoundTwo.jsx', import.meta.url), 'utf8'),
     ])
     for (const source of sources) expect(source).not.toMatch(/\bfetch\s*\(|FileSystem|showDirectoryPicker|\bprocess\.|electron|obsidian/i)
+  })
+
+  it('uses exact descriptor.toolId values in mock envelopes and idempotency keys', async () => {
+    const source = await readFile(new URL('../../src/main.jsx', import.meta.url), 'utf8')
+    expect(source).toMatch(/toolId:\s*descriptor\.toolId/)
+    expect(source).toMatch(/sessionId}:\$\{descriptor\.toolId}/)
+    expect(source).not.toMatch(/toolId:\s*descriptor\.id/)
   })
 })
