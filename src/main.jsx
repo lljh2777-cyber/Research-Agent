@@ -89,7 +89,7 @@ import {
   updateConversationTools,
 } from './agentPresets.js'
 import { ResearchWorkspace } from './features/research/ResearchWorkspace.jsx'
-import { createKnowledgeAgentSessionFixture, createKnowledgeToolFixtures } from './features/knowledge/fixtures.js'
+import { availableKnowledgeCapabilitiesFromRuntime, createKnowledgeAgentSessionFixture, createKnowledgeToolFixtures } from './features/knowledge/fixtures.js'
 import './styles.css'
 
 const navItems = [
@@ -406,13 +406,14 @@ function App() {
   const supportsResearchRunReattach = runtimeCapabilities?.researchRuns === 'loopback-event-buffer'
   const supportsLoopbackResearchExecution = runtimeCapabilities?.researchExecution === 'loopback-provider'
   const activeResearchSession = researchSessions[activeTabId] || createResearchSession({ modelId: modelConfig.chatModelId, knowledgeBaseId: vaultName })
-  const availableKnowledgeCapabilities = Array.isArray(runtimeCapabilities?.knowledgeActions)
-    ? runtimeCapabilities.knowledgeActions
-    : runtimeCapabilities?.knowledgeActions?.availableCapabilities || []
+  const availableKnowledgeCapabilities = useMemo(
+    () => availableKnowledgeCapabilitiesFromRuntime(runtimeCapabilities),
+    [runtimeCapabilities],
+  )
   const knowledgeToolDescriptors = useMemo(() => createKnowledgeToolFixtures({
     context: knowledgeAgentSession.context,
     availableCapabilities: availableKnowledgeCapabilities,
-  }), [knowledgeAgentSession.context, runtimeCapabilities])
+  }), [availableKnowledgeCapabilities, knowledgeAgentSession.context])
   const { phase, input, messages, running, activeStage, answerMode, retrievalPacket } = activeResearchSession
   const runStatus = activeResearchSession.runSnapshots?.at(-1)?.status
   const activeHasVaultScope = Boolean(vaultName && activeResearchSession.configSnapshot?.knowledgeScopes?.some((scope) => scope.vaultId === vaultName))

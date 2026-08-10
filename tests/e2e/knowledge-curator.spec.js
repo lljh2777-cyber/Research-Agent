@@ -45,8 +45,16 @@ test('selects Markdown, approves an annotation, reopens it, and continues the sa
   await page.route('**/api/runtime', async (route) => {
     const response = await route.fetch()
     const manifest = await response.json()
-    manifest.capabilities.knowledgeActions = {
-      availableCapabilities: ['annotations.write', 'knowledge.lint', 'actions.paperIngest', 'actions.xray', 'actions.codeAnalysis', 'actions.synthesis'],
+    manifest.capabilities.annotations = { available: true, capability: 'annotations.write' }
+    manifest.capabilities.actions = {
+      available: true,
+      capabilities: {
+        'knowledge.lint': true,
+        'actions.paperIngest': true,
+        'actions.xray': true,
+        'actions.codeAnalysis': true,
+        'actions.synthesis': true,
+      },
     }
     await route.fulfill({ response, json: manifest })
   })
