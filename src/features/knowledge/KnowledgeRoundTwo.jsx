@@ -43,7 +43,7 @@ export function AnnotationEditor({
   onDraftChange,
   onRequestSave,
   onArchive,
-  onClose,
+  onDismiss,
   onReopen,
 }) {
   if (!annotation && annotations.length === 0) return null
@@ -51,7 +51,7 @@ export function AnnotationEditor({
   return <aside className="annotation-workbench" aria-label="Annotations">
     <header>
       <span><Highlighter size={15} /><strong>Annotations</strong></span>
-      {annotation && <button type="button" onClick={onClose} aria-label="Close annotation editor"><X size={14} /></button>}
+      <button type="button" onClick={onDismiss} aria-label="Close annotations workbench"><X size={14} /></button>
     </header>
     {annotation && <section className="annotation-editor" aria-labelledby="annotation-editor-title">
       <div className={`annotation-relocation ${annotation.relocation.status}`} role={relocationNeedsAttention ? 'alert' : 'status'}>
