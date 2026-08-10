@@ -12,6 +12,7 @@ import {
   FolderOpen,
   Globe2,
   Hash,
+  Highlighter,
   LayoutPanelLeft,
   LayoutPanelTop,
   Network,
@@ -398,7 +399,18 @@ export default function KnowledgeGraphSection({
   const [selection, setSelection] = useState(null)
   const [annotations, setAnnotations] = useState([])
   const [activeAnnotation, setActiveAnnotation] = useState(null)
+  const [annotationWorkbenchOpen, setAnnotationWorkbenchOpen] = useState(false)
   const [annotationDraft, setAnnotationDraft] = useState({ manual: '', ai: '' })
+
+  const clearAnnotationEditor = () => {
+    setActiveAnnotation(null)
+    setAnnotationDraft({ manual: '', ai: '' })
+  }
+
+  const dismissAnnotationWorkbench = () => {
+    clearAnnotationEditor()
+    setAnnotationWorkbenchOpen(false)
+  }
 
   useEffect(() => {
     const mobileWorkspace = window.matchMedia('(max-width: 900px)')
@@ -454,7 +466,7 @@ export default function KnowledgeGraphSection({
     if (!note) return
     setSelectedNote(note)
     setSelection(null)
-    setActiveAnnotation(null)
+    dismissAnnotationWorkbench()
     setOpenNoteIds((current) => current.includes(note.id) ? current : [...current, note.id])
     setPendingAnchor(anchorId ? { noteId: note.id, anchorId } : null)
   }
@@ -476,7 +488,7 @@ export default function KnowledgeGraphSection({
         const nextId = next[Math.min(closingIndex, next.length - 1)]
         setSelectedNote(nextId ? notesById.get(nextId) || null : null)
         setSelection(null)
-        setActiveAnnotation(null)
+        dismissAnnotationWorkbench()
       }
       return next
     })
@@ -516,6 +528,7 @@ export default function KnowledgeGraphSection({
       context: knowledgeContext,
     })
     setActiveAnnotation(next)
+    setAnnotationWorkbenchOpen(true)
     setAnnotationDraft({ ...next.sections })
   }
 
@@ -531,6 +544,7 @@ export default function KnowledgeGraphSection({
       onApproved: () => {
         setAnnotations((current) => [...current.filter((item) => item.id !== nextAnnotation.id), nextAnnotation])
         setActiveAnnotation(nextAnnotation)
+        setAnnotationWorkbenchOpen(true)
         setAnnotationDraft({ ...nextAnnotation.sections })
       },
     })
@@ -576,6 +590,16 @@ export default function KnowledgeGraphSection({
     if (descriptor?.available) onKnowledgeAction(descriptor, { prompt: `${descriptor.title} selected passage: ${selection?.anchor?.quote?.exact || ''}` })
   }
 
+  const handleSelectPassage = (nextSelection) => {
+    setSelection(nextSelection)
+    dismissAnnotationWorkbench()
+  }
+
+  const handleClearSelection = () => {
+    setSelection(null)
+    dismissAnnotationWorkbench()
+  }
+
   const renderPanel = (panelId) => {
     if (panelId === 'files') return <FilesPanel notes={notes} selectedId={selectedNote?.id} onSelect={handleSelectNote} />
     if (panelId === 'outline') return <OutlinePanel note={selectedNote} />
@@ -586,7 +610,9 @@ export default function KnowledgeGraphSection({
     return <PluginsPanel />
   }
 
-  return <div className={`knowledge-workspace ${leftOpen ? '' : 'left-closed'} ${rightOpen ? '' : 'right-closed'} ${activeAnnotation ? 'annotation-open' : ''}`}>
+  const selectedNoteAnnotations = annotations.filter((item) => item.source.noteId === selectedNote?.id)
+
+  return <div className={`knowledge-workspace ${leftOpen ? '' : 'left-closed'} ${rightOpen ? '' : 'right-closed'} ${annotationWorkbenchOpen ? 'annotation-open' : ''}`}>
     <div className="knowledge-workspace-toolbar">
       <div className="workspace-toolbar-group">
         <button onClick={() => setLeftOpen(!leftOpen)} aria-label={`${leftOpen ? 'Hide' : 'Show'} left sidebar`}>{leftOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}</button>
@@ -595,6 +621,7 @@ export default function KnowledgeGraphSection({
       <div className="workspace-toolbar-group">
         {knowledgeContext?.activeNote && <span className="workspace-context-chip"><FileText size={11} />Current note: {knowledgeContext.activeNote.title}</span>}
         {knowledgeContext?.selection && <span className="workspace-context-chip selection"><Bot size={11} />Selection ready</span>}
+        {!annotationWorkbenchOpen && selectedNoteAnnotations.length > 0 && <button type="button" onClick={() => setAnnotationWorkbenchOpen(true)} aria-label={`Show annotations workbench (${selectedNoteAnnotations.length})`}><Highlighter size={14} /><span>Annotations ({selectedNoteAnnotations.length})</span></button>}
         <span className="workspace-local-badge"><CircleDot size={10} /> Local-first</span>
         <button onClick={resetLayout} title="Reset panel layout"><RotateCcw size={14} /><span>Reset layout</span></button>
         <button onClick={() => setRightOpen(!rightOpen)} aria-label={`${rightOpen ? 'Hide' : 'Show'} right sidebar`}>{rightOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}</button>
@@ -613,7 +640,7 @@ export default function KnowledgeGraphSection({
           <button className="document-tab-add" onClick={() => { setLeftOpen(true); setActivePanels((current) => ({ ...current, left: 'files' })) }} aria-label="Browse Vault files"><Plus size={14} /></button>
         </div>
         <div className="knowledge-editor">
-          {selectedNote ? <MarkdownDocument note={selectedNote} notes={notes} selection={selection} onSelectPassage={setSelection} onSelectionAction={handleSelectionAction} onClearSelection={() => setSelection(null)} onNavigate={handleSelectNote} /> : <div className="knowledge-welcome">
+          {selectedNote ? <MarkdownDocument note={selectedNote} notes={notes} selection={selection} onSelectPassage={handleSelectPassage} onSelectionAction={handleSelectionAction} onClearSelection={handleClearSelection} onNavigate={handleSelectNote} /> : <div className="knowledge-welcome">
             <span><BookOpen size={25} /></span>
             <h2>{notes.length ? 'Choose a document from the Files panel' : 'Your research knowledge, in one workspace'}</h2>
             <p>{notes.length ? 'Open Markdown notes as tabs and keep multiple sources ready while you research.' : 'Connect an Obsidian Vault to browse files, inspect backlinks, read Markdown, and arrange research tools around your document.'}</p>
@@ -622,7 +649,7 @@ export default function KnowledgeGraphSection({
         </div>
       </main>
 
-      {(activeAnnotation || annotations.some((item) => item.source.noteId === selectedNote?.id)) && <AnnotationEditor annotation={activeAnnotation} draft={annotationDraft} annotations={annotations.filter((item) => item.source.noteId === selectedNote?.id)} onDraftChange={setAnnotationDraft} onRequestSave={handleRequestSave} onArchive={handleArchive} onClose={() => setActiveAnnotation(null)} onReopen={(annotation) => { setActiveAnnotation(annotation); setAnnotationDraft({ ...annotation.sections }) }} />}
+      {annotationWorkbenchOpen && (activeAnnotation || selectedNoteAnnotations.length > 0) && <AnnotationEditor annotation={activeAnnotation} draft={annotationDraft} annotations={selectedNoteAnnotations} onDraftChange={setAnnotationDraft} onRequestSave={handleRequestSave} onArchive={handleArchive} onDismiss={dismissAnnotationWorkbench} onReopen={(annotation) => { setActiveAnnotation(annotation); setAnnotationDraft({ ...annotation.sections }); setAnnotationWorkbenchOpen(true) }} />}
       {rightOpen && <Dock side="right" panelIds={dockLayout.right} activePanelId={activePanels.right} draggingId={draggingId} onActivate={(side, panelId) => setActivePanels((current) => ({ ...current, [side]: panelId }))} onDragStart={handleDragStart} onDragEnd={() => setDraggingId(null)} onDrop={handleDrop} renderPanel={renderPanel} />}
     </div>
 
