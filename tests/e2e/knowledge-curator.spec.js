@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { createRuntimeManifest } from '../../shared/runtime-capabilities.mjs'
 
 async function installVaultSnapshot(page) {
   await page.evaluate(async () => {
@@ -43,20 +44,12 @@ test('selects Markdown, approves an annotation, reopens it, and continues the sa
   page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()) })
 
   await page.route('**/api/runtime', async (route) => {
-    const response = await route.fetch()
-    const manifest = await response.json()
-    manifest.capabilities.annotations = { available: true, capability: 'annotations.write' }
-    manifest.capabilities.actions = {
-      available: true,
-      capabilities: {
-        'knowledge.lint': true,
-        'actions.paperIngest': true,
-        'actions.xray': true,
-        'actions.codeAnalysis': true,
-        'actions.synthesis': true,
-      },
-    }
-    await route.fulfill({ response, json: manifest })
+    const manifest = createRuntimeManifest({
+      buildMode: 'test',
+      target: 'local-web',
+      services: { annotations: true, actions: true },
+    })
+    await route.fulfill({ json: manifest })
   })
 
   await page.goto('/')
