@@ -13,6 +13,7 @@ test('browser directory fallback preserves selection state and reports every out
   page.on('pageerror', (error) => pageErrors.push(error.message))
   page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()) })
 
+  await page.addInitScript(() => { delete window.showDirectoryPicker })
   await page.goto('/')
   const picker = page.getByLabel('Select Obsidian Vault folder')
   await picker.setInputFiles(markdownVault)
@@ -39,13 +40,38 @@ test('browser directory fallback preserves selection state and reports every out
     File.prototype.text = window.__originalVaultFileText
     delete window.__originalVaultFileText
   })
+  await picker.evaluate((input) => {
+    input.__nativeClick = input.click
+    input.click = () => {}
+  })
   await page.getByRole('alert').getByRole('button', { name: 'Retry' }).click()
   await picker.setInputFiles(markdownVault)
   await expect(page.getByRole('status')).toContainText('Connected runtime-vault with 1 Markdown note.')
 
+  await connectedVault.click()
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  const unavailableAlert = page.getByRole('alert')
+  await expect(unavailableAlert).toContainText('The browser did not deliver the selected folder. The current Vault was kept.')
+  await expect(connectedVault).toContainText('runtime-vault')
+
+  await picker.setInputFiles(emptyVault)
+  await expect(unavailableAlert).toContainText('The browser did not deliver the selected folder. The current Vault was kept.')
+  await expect(connectedVault).toContainText('1 Markdown note')
+
+  await unavailableAlert.getByRole('button', { name: 'Retry' }).click()
+  await picker.setInputFiles(markdownVault)
+  await expect(page.getByRole('status')).toContainText('Connected runtime-vault with 1 Markdown note.')
+
+  await picker.evaluate((input) => { input.click = () => {} })
+  await connectedVault.click()
   await picker.dispatchEvent('cancel')
   await expect(page.getByRole('status')).toContainText('Folder selection cancelled. The current Vault was kept.')
   await expect(connectedVault).toContainText('runtime-vault')
+
+  await picker.evaluate((input) => {
+    input.click = input.__nativeClick
+    delete input.__nativeClick
+  })
 
   expect(pageErrors).toEqual([])
   expect(consoleErrors).toEqual([])

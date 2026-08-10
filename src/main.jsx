@@ -72,7 +72,7 @@ import { describeVaultConnection, VAULT_CONNECTION_STATUS } from './vaultConnect
 import { AUTH_SERVICE_UNAVAILABLE, getAuthStatus, getChatgptModels, logoutChatgpt, startChatgptLogin, streamChatgptResponse, waitForChatgptAuth } from './authClient.js'
 import { loadRuntimeManifest } from './runtime/client.js'
 import { getRuntimeAdapter } from './runtime/adapter.js'
-import VaultFallbackPicker from './runtime/VaultFallbackPicker.jsx'
+import VaultFallbackPicker, { VAULT_PICKER_ERROR_CODE } from './runtime/VaultFallbackPicker.jsx'
 import { closeWorkspaceTab, createWorkspaceTab, findReusableTab, MAX_WORKSPACE_TABS, researchTabTitle, titleFromQuestion } from './workspaceTabs.js'
 import { clearWorkspaceSnapshot, createWorkspaceSnapshot, loadWorkspaceSnapshot, saveWorkspaceSnapshot } from './workspacePersistence.js'
 import { createDataBackup, createLocalDataSummary, parseDataBackup, serializeDataBackup } from './dataManagement.js'
@@ -798,8 +798,17 @@ function App() {
     })
   }
 
-  const handleVaultSelectionError = () => {
-    setVaultFeedback({ kind: 'error', message: 'The folder could not be processed. Try selecting it again.', retry: true })
+  const handleVaultSelectionError = (error) => {
+    const selectionNotDelivered = error?.code === VAULT_PICKER_ERROR_CODE
+    setVaultFeedback({
+      kind: 'error',
+      message: selectionNotDelivered
+        ? vaultNotes.length
+          ? 'The browser did not deliver the selected folder. The current Vault was kept. Try again or use an available Runtime Vault connection.'
+          : 'The browser did not deliver the selected folder. Try again or use an available Runtime Vault connection.'
+        : 'The folder could not be processed. Try selecting it again.',
+      retry: true,
+    })
   }
 
   const refreshChatgptModels = useCallback(async (force = false) => {
