@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BookOpen,
   Bot,
@@ -31,10 +31,17 @@ import {
 import { createKnowledgeGraph } from './knowledgeGraph.js'
 import { buildVaultFileTree, collectVaultTags, DEFAULT_DOCK_LAYOUT, extractMarkdownOutline, filterVaultFileTree, moveDockPanel, normalizeDockLayout, parseWikilinks, resolveWikilink } from './knowledgeWorkspace.js'
 import { AgentConversationPanel } from './features/knowledge/AgentConversationPanel.jsx'
-import { AnnotationEditor, SelectionActionBar } from './features/knowledge/KnowledgeRoundTwo.jsx'
-import { createAnnotationFixture, createKnowledgeContextFixture, createTextAnchorFixture } from './features/knowledge/fixtures.js'
+import { AnnotationEditor, SelectionChooser } from './features/knowledge/KnowledgeRoundTwo.jsx'
+import { createKnowledgeContextFixture } from './features/knowledge/fixtures.js'
+import { activeAnnotationRanges, isEditableSelectionTarget, mapDomSelectionToMarkdown, splitSourceText } from './features/knowledge/annotationSelection.js'
+import { createAnnotationPatchIntent, createTextAnchor, normalizeAnnotation, parseAnnotationMarkdown, relocateTextAnchor } from './annotations/annotation.js'
 
 const LAYOUT_KEY = 'bioresearch-os:knowledge-dock-layout'
+
+function annotationPath(annotationId) {
+  const safeId = String(annotationId).replace(/[^a-zA-Z0-9._-]/g, '-')
+  return `wiki/annotations/${safeId}.md`
+}
 
 const PANEL_META = {
   files: { title: 'Files', icon: FolderOpen },
@@ -54,11 +61,35 @@ function loadDockLayout() {
   }
 }
 
-function InlineMarkdown({ value, note, notes, onNavigate }) {
+function SourceMappedText({ value, sourceStart, annotations, onOpenAnnotation, interactive = true }) {
+  return splitSourceText(value, sourceStart, annotations).map((part) => {
+    const sourceAttributes = { 'data-source-start': part.start, 'data-source-end': part.end }
+    if (!part.annotations.length) return <span {...sourceAttributes} key={part.start}>{part.text}</span>
+    const annotation = part.annotations[0]
+    const label = part.annotations.length === 1
+      ? `Open annotation for ${annotation.anchor.quote.exact}`
+      : `Open ${part.annotations.length} overlapping annotations for ${part.text}`
+    if (!interactive) return <mark className="annotation-highlight" {...sourceAttributes} data-annotation-count={part.annotations.length} key={part.start}>{part.text}</mark>
+    return <button type="button" className="annotation-highlight" aria-label={label} data-annotation-count={part.annotations.length} onClick={() => onOpenAnnotation(annotation)} {...sourceAttributes} key={part.start}>{part.text}</button>
+  })
+}
+
+function InlineMarkdown({ value, sourceStart, note, notes, annotations, onNavigate, onOpenAnnotation }) {
+  let cursor = 0
   return parseWikilinks(value).map((segment, index) => {
-    if (segment.type === 'text') return segment.value
+    if (segment.type === 'text') {
+      const segmentStart = sourceStart + cursor
+      cursor += segment.value.length
+      return <SourceMappedText value={segment.value} sourceStart={segmentStart} annotations={annotations} onOpenAnnotation={onOpenAnnotation} key={`text-${segmentStart}`} />
+    }
+    const rawStart = value.indexOf(segment.raw, cursor)
+    cursor = rawStart + segment.raw.length
+    const labelOffset = segment.raw.indexOf(segment.label)
+    const mappedLabel = labelOffset >= 0 ? segment.label : segment.raw
+    const mappedStart = sourceStart + rawStart + (labelOffset >= 0 ? labelOffset : 0)
     const resolved = resolveWikilink(notes, note, segment)
     const unavailable = resolved.missing || resolved.missingHeading
+    const linkedAnnotations = activeAnnotationRanges(annotations).filter((annotation) => annotation.relocation.start < mappedStart + mappedLabel.length && annotation.relocation.end > mappedStart)
     const title = resolved.missing
       ? `Note not found: ${segment.target}`
       : resolved.missingHeading
@@ -66,12 +97,12 @@ function InlineMarkdown({ value, note, notes, onNavigate }) {
         : `Open ${resolved.note.title}${segment.heading ? ` · ${segment.heading}` : ''}`
     return <button
       type="button"
-      className={`document-wikilink ${unavailable ? 'missing' : ''}`}
+      className={`document-wikilink ${unavailable ? 'missing' : ''} ${linkedAnnotations.length ? 'annotated' : ''}`}
       disabled={unavailable}
       title={title}
-      onClick={() => onNavigate(resolved.note, resolved.anchorId)}
+      onClick={() => linkedAnnotations.length ? onOpenAnnotation(linkedAnnotations[0]) : onNavigate(resolved.note, resolved.anchorId)}
       key={`${segment.raw}-${index}`}
-    >{segment.label}</button>
+    ><SourceMappedText value={mappedLabel} sourceStart={mappedStart} annotations={annotations} onOpenAnnotation={onOpenAnnotation} interactive={false} /></button>
   })
 }
 
@@ -90,7 +121,9 @@ function metadataText(value) {
   return value
 }
 
-function MarkdownDocument({ note, notes, selection, onNavigate, onSelectPassage, onSelectionAction, onClearSelection }) {
+function MarkdownDocument({ note, notes, selection, annotations, onNavigate, onSelectPassage, onSelectionAction, onClearSelection, onOpenAnnotation, aiAvailable, aiUnavailableReason }) {
+  const documentRef = useRef(null)
+  const [chooserPosition, setChooserPosition] = useState(null)
   const blocks = useMemo(() => {
     if (!note?.body) return []
     const lines = note.body.split(/\r?\n/)
@@ -109,7 +142,7 @@ function MarkdownDocument({ note, notes, selection, onNavigate, onSelectPassage,
     const flushParagraph = () => {
       if (paragraph.length) output.push({
         type: 'paragraph',
-        value: paragraph.join(' '),
+        value: note.body.slice(lineOffsets[paragraphStart], lineOffsets[paragraphEnd] + lines[paragraphEnd].length),
         anchorExact: note.body.slice(lineOffsets[paragraphStart], lineOffsets[paragraphEnd] + lines[paragraphEnd].length),
         start: lineOffsets[paragraphStart],
         end: lineOffsets[paragraphEnd] + lines[paragraphEnd].length,
@@ -179,57 +212,75 @@ function MarkdownDocument({ note, notes, selection, onNavigate, onSelectPassage,
     return output
   }, [note])
 
+  const commitDomSelection = useCallback((openChooser) => {
+    const domSelection = window.getSelection()
+    const mapped = mapDomSelectionToMarkdown(domSelection, documentRef.current, note?.body)
+    if (!mapped) return false
+    try {
+      const nextSelection = {
+        selectionId: `${note.id}:${mapped.start}:${mapped.end}`,
+        anchor: createTextAnchor(note.body, mapped),
+      }
+      onSelectPassage(nextSelection)
+      if (openChooser) {
+        const rect = domSelection.getRangeAt(0).getBoundingClientRect()
+        setChooserPosition({
+          x: Math.max(8, Math.min(window.innerWidth - 190, rect.left + rect.width / 2 - 90)),
+          y: Math.max(8, rect.top > 54 ? rect.top - 46 : rect.bottom + 8),
+        })
+      }
+      return true
+    } catch {
+      setChooserPosition(null)
+      onClearSelection()
+      return false
+    }
+  }, [note, onClearSelection, onSelectPassage])
+
+  useEffect(() => {
+    const handleShortcut = (event) => {
+      if (!event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.key.toLocaleLowerCase() !== 's') return
+      if (isEditableSelectionTarget(event.target)) return
+      if (commitDomSelection(true)) event.preventDefault()
+    }
+    document.addEventListener('keydown', handleShortcut)
+    return () => document.removeEventListener('keydown', handleShortcut)
+  }, [commitDomSelection])
+
   if (!note) return null
   const metadata = Object.entries(note.frontmatter || {}).filter(([, value]) => value !== '' && value != null)
   return (
-    <article className="knowledge-document">
+    <article className="knowledge-document" ref={documentRef} onMouseUp={(event) => {
+      if (event.button !== 0) return
+      if (event.target.closest?.('.selection-chooser')) return
+      window.setTimeout(() => commitDomSelection(true), 0)
+    }}>
       <div className="document-path">{note.path}</div>
       <h1>{note.title}</h1>
       {metadata.length > 0 && <dl className="document-properties">
-        {metadata.map(([key, value]) => <div key={key}><dt>{key}</dt><dd><InlineMarkdown value={metadataText(value)} note={note} notes={notes} onNavigate={onNavigate} /></dd></div>)}
+        {metadata.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{metadataText(value)}</dd></div>)}
       </dl>}
       <div className="document-markdown">
         {blocks.map((block, index) => {
-          const selectionId = `${note.id}:${index}`
-          const isSelected = selection?.selectionId === selectionId
-          const heading = [...blocks.slice(0, index + 1)].reverse().find((candidate) => candidate.heading)?.heading || null
-          const selectBlock = () => block.type !== 'code' && onSelectPassage({
-            selectionId,
-            anchor: createTextAnchorFixture({
-              markdown: note.body,
-              exact: block.anchorExact || block.value,
-              start: block.start,
-              end: block.end,
-              heading,
-              lineStart: block.lineStart,
-              lineEnd: block.lineEnd,
-            }),
-          })
           const content = (() => {
           if (block.type === 'heading') {
             const Heading = `h${Math.min(6, block.level + 1)}`
-            return <Heading id={block.id}><InlineMarkdown value={block.value} note={note} notes={notes} onNavigate={onNavigate} /></Heading>
+            return <Heading id={block.id}><InlineMarkdown value={block.value} sourceStart={block.start} note={note} notes={notes} annotations={annotations} onNavigate={onNavigate} onOpenAnnotation={onOpenAnnotation} /></Heading>
           }
-          if (block.type === 'list') return <div className="document-list-item"><CircleDot size={9} /> <span><InlineMarkdown value={block.value} note={note} notes={notes} onNavigate={onNavigate} /></span></div>
-          if (block.type === 'quote') return <blockquote><InlineMarkdown value={block.value} note={note} notes={notes} onNavigate={onNavigate} /></blockquote>
+          if (block.type === 'list') return <div className="document-list-item"><CircleDot size={9} /> <span><InlineMarkdown value={block.value} sourceStart={block.start} note={note} notes={notes} annotations={annotations} onNavigate={onNavigate} onOpenAnnotation={onOpenAnnotation} /></span></div>
+          if (block.type === 'quote') return <blockquote><InlineMarkdown value={block.value} sourceStart={block.start} note={note} notes={notes} annotations={annotations} onNavigate={onNavigate} onOpenAnnotation={onOpenAnnotation} /></blockquote>
           if (block.type === 'code') return <pre><code>{block.value}</code></pre>
-          return <p><InlineMarkdown value={block.value} note={note} notes={notes} onNavigate={onNavigate} /></p>
+          return <p><InlineMarkdown value={block.value} sourceStart={block.start} note={note} notes={notes} annotations={annotations} onNavigate={onNavigate} onOpenAnnotation={onOpenAnnotation} /></p>
           })()
           return <div
-            className={`selectable-markdown-block ${block.type === 'code' ? 'not-selectable' : ''} ${isSelected ? 'selected' : ''}`}
-            role={block.type === 'code' ? undefined : 'button'}
-            tabIndex={block.type === 'code' ? undefined : 0}
-            aria-pressed={isSelected}
-            aria-label={`Select passage: ${block.value.slice(0, 80)}`}
-            onClick={(event) => { if (!event.target.closest('button')) selectBlock() }}
-            onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectBlock() } }}
+            className={`selectable-markdown-block ${block.type === 'code' ? 'not-selectable' : ''}`}
             key={`${block.id || block.type}-${index}`}
           >
             {content}
-            {isSelected && <SelectionActionBar selection={selection} onAction={onSelectionAction} onClear={onClearSelection} />}
           </div>
         })}
       </div>
+      <SelectionChooser selection={selection} position={chooserPosition} onAction={(action) => { setChooserPosition(null); onSelectionAction(action) }} onDismiss={() => setChooserPosition(null)} aiAvailable={aiAvailable} aiUnavailableReason={aiUnavailableReason} />
     </article>
   )
 }
@@ -385,6 +436,7 @@ export default function KnowledgeGraphSection({
   onResolveKnowledgeApproval,
   onContinueInResearch,
   onKnowledgeContextChange,
+  annotationRuntime,
 }) {
   const graph = useMemo(() => createKnowledgeGraph(index), [index])
   const notes = index?.notes || []
@@ -401,10 +453,18 @@ export default function KnowledgeGraphSection({
   const [activeAnnotation, setActiveAnnotation] = useState(null)
   const [annotationWorkbenchOpen, setAnnotationWorkbenchOpen] = useState(false)
   const [annotationDraft, setAnnotationDraft] = useState({ manual: '', ai: '' })
+  const [annotationMeta, setAnnotationMeta] = useState({})
+  const [annotationVaultId, setAnnotationVaultId] = useState('')
+  const [annotationFocusSection, setAnnotationFocusSection] = useState('manual')
+  const [annotationPersistenceMessage, setAnnotationPersistenceMessage] = useState('')
+  const [annotationAiStatus, setAnnotationAiStatus] = useState(null)
+  const pendingExplainIdRef = useRef(null)
 
   const clearAnnotationEditor = () => {
+    pendingExplainIdRef.current = null
     setActiveAnnotation(null)
     setAnnotationDraft({ manual: '', ai: '' })
+    setAnnotationAiStatus(null)
   }
 
   const dismissAnnotationWorkbench = () => {
@@ -461,6 +521,43 @@ export default function KnowledgeGraphSection({
 
   const notesById = useMemo(() => new Map(notes.map((note) => [note.id, note])), [notes])
   const openNotes = useMemo(() => openNoteIds.map((id) => notesById.get(id)).filter(Boolean), [notesById, openNoteIds])
+
+  useEffect(() => {
+    if (!annotationRuntime?.available || !vaultId || !notes.length) {
+      setAnnotations([])
+      setAnnotationMeta({})
+      setAnnotationVaultId('')
+      return undefined
+    }
+    const controller = new AbortController()
+    let cancelled = false
+    const restoreAnnotations = async () => {
+      const listed = await annotationRuntime.list({ signal: controller.signal })
+      if (!listed?.ok) throw new Error(listed?.error || listed?.reason || 'Annotations could not be listed.')
+      const restored = await Promise.all((listed.annotations || []).map(async (entry) => {
+        const loaded = await annotationRuntime.read({ path: entry.path, signal: controller.signal })
+        if (!loaded?.ok || typeof loaded.content !== 'string') throw new Error(loaded?.error || `Annotation ${entry.path} could not be read.`)
+        const parsed = parseAnnotationMarkdown(loaded.content)
+        const note = notesById.get(parsed.source.noteId) || notes.find((candidate) => candidate.path === parsed.source.path || candidate.path.endsWith('/' + parsed.source.path))
+        if (!note) return null
+        const record = normalizeAnnotation({ ...parsed, relocation: relocateTextAnchor(note.body, parsed.anchor) })
+        return { record, path: entry.path, revision: loaded.revision || entry.revision || null }
+      }))
+      if (cancelled) return
+      const available = restored.filter(Boolean)
+      setAnnotations(available.map(({ record }) => record))
+      setAnnotationMeta(Object.fromEntries(available.map(({ record, path, revision }) => [record.id, { path, revision }])))
+      setAnnotationVaultId(listed.vaultId || vaultId)
+      setAnnotationPersistenceMessage('')
+    }
+    restoreAnnotations().catch((error) => {
+      if (!cancelled && error?.name !== 'AbortError') setAnnotationPersistenceMessage(error.message)
+    })
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  }, [annotationRuntime, notes, notesById, vaultId, vaultRevision])
 
   const handleSelectNote = (note, anchorId = null) => {
     if (!note) return
@@ -520,82 +617,127 @@ export default function KnowledgeGraphSection({
     if (node.note) handleSelectNote(node.note)
   }
 
-  const openAnnotationEditor = () => {
+  const openAnnotationEditor = (focusSection = 'manual') => {
     if (!knowledgeContext?.selection) return
-    const existing = annotations.find((item) => item.source.noteId === selectedNote?.id && item.anchor.position.start === knowledgeContext.selection.anchor.position.start)
-    const next = existing || createAnnotationFixture({
-      id: `annotation-${selectedNote.id}-${knowledgeContext.selection.anchor.position.start}-${knowledgeContext.selection.anchor.position.end}`,
-      context: knowledgeContext,
+    const anchor = knowledgeContext.selection.anchor
+    const existing = annotations.find((item) => item.source.noteId === selectedNote?.id && item.anchor.position.start === anchor.position.start && item.anchor.position.end === anchor.position.end)
+    const timestamp = new Date().toISOString()
+    const next = existing || normalizeAnnotation({
+      schemaVersion: 1,
+      id: `annotation-${selectedNote.id}-${anchor.position.start}-${anchor.position.end}`,
+      source: {
+        vaultId: annotationVaultId || knowledgeContext.vault.id,
+        noteId: knowledgeContext.activeNote.id,
+        path: knowledgeContext.activeNote.path,
+        revision: knowledgeContext.activeNote.revision,
+      },
+      anchor,
+      sections: { manual: '', ai: '' },
+      archived: false,
+      timestamps: { createdAt: timestamp, updatedAt: timestamp, archivedAt: null },
+      relocation: relocateTextAnchor(selectedNote.body, anchor),
     })
     setActiveAnnotation(next)
     setAnnotationWorkbenchOpen(true)
     setAnnotationDraft({ ...next.sections })
+    setAnnotationFocusSection(focusSection)
+    setAnnotationPersistenceMessage('')
+    setAnnotationAiStatus(null)
+    return next
   }
 
   const requestAnnotationWrite = (nextAnnotation, verb) => {
     const descriptor = knowledgeToolDescriptors.find((item) => item.id === 'annotation')
-    if (!descriptor?.available) return
-    const targetScope = `${knowledgeContext.vault.name} / ${knowledgeContext.activeNote.path}`
+    if (!descriptor?.available || !annotationRuntime?.available) return
+    const metadata = annotationMeta[nextAnnotation.id] || {}
+    const path = metadata.path || annotationPath(nextAnnotation.id)
+    const intent = createAnnotationPatchIntent(nextAnnotation, {
+      path,
+      expectedRevision: metadata.revision || null,
+    })
+    const idempotencyKey = `${nextAnnotation.id}:${nextAnnotation.timestamps.updatedAt}:${verb.toLocaleLowerCase()}`
+    const targetScope = `${knowledgeContext.vault.name} / ${path}`
     onKnowledgeAction(descriptor, {
       prompt: `${verb} annotation for ${knowledgeContext.activeNote.title}`,
       targetScope,
-      idempotencyKey: `${nextAnnotation.id}:${nextAnnotation.timestamps.updatedAt}:${verb.toLocaleLowerCase()}`,
-      payload: nextAnnotation,
-      onApproved: () => {
+      idempotencyKey,
+      payload: intent,
+      onApproved: async () => {
+        const result = await annotationRuntime.write({
+          intent,
+          approval: { status: 'approved' },
+          idempotencyKey,
+        })
+        if (!result?.ok) {
+          const message = result?.error || result?.reason || 'The annotation could not be saved.'
+          setAnnotationPersistenceMessage(message)
+          throw new Error(message)
+        }
         setAnnotations((current) => [...current.filter((item) => item.id !== nextAnnotation.id), nextAnnotation])
+        setAnnotationMeta((current) => ({ ...current, [nextAnnotation.id]: { path, revision: result.revision || metadata.revision || null } }))
         setActiveAnnotation(nextAnnotation)
         setAnnotationWorkbenchOpen(true)
         setAnnotationDraft({ ...nextAnnotation.sections })
+        setAnnotationPersistenceMessage('')
+        return result
       },
     })
   }
 
   const handleRequestSave = (annotation, draft) => {
-    const next = createAnnotationFixture({
-      id: annotation.id,
-      context: knowledgeContext,
-      manual: draft.manual,
-      ai: draft.ai,
-      archived: annotation.archived,
-      createdAt: annotation.timestamps.createdAt,
-      updatedAt: new Date().toISOString(),
-      archivedAt: annotation.timestamps.archivedAt,
-      relocation: annotation.relocation,
+    const next = normalizeAnnotation({
+      ...annotation,
+      source: { ...annotation.source, revision: selectedNote?.revision || vaultRevision || annotation.source.revision },
+      sections: { manual: draft.manual, ai: draft.ai },
+      timestamps: { ...annotation.timestamps, updatedAt: new Date().toISOString() },
     })
     requestAnnotationWrite(next, 'Save')
   }
 
   const handleArchive = (annotation) => {
-    const next = createAnnotationFixture({
-      id: annotation.id,
-      context: knowledgeContext,
-      manual: annotation.sections.manual,
-      ai: annotation.sections.ai,
-      archived: !annotation.archived,
-      createdAt: annotation.timestamps.createdAt,
-      updatedAt: new Date().toISOString(),
-      relocation: annotation.relocation,
+    const timestamp = new Date().toISOString()
+    const archived = !annotation.archived
+    const next = normalizeAnnotation({
+      ...annotation,
+      archived,
+      timestamps: { ...annotation.timestamps, updatedAt: timestamp, archivedAt: archived ? timestamp : null },
     })
     requestAnnotationWrite(next, next.archived ? 'Archive' : 'Restore')
   }
 
-  const handleSelectionAction = (toolId) => {
+  const handleSelectionAction = async (action) => {
     setRightOpen(true)
     setActivePanels((current) => ({ ...current, right: 'agent' }))
-    if (toolId === 'annotation') {
-      openAnnotationEditor()
-      return
+    const nextAnnotation = openAnnotationEditor(action === 'ai' ? 'ai' : 'manual')
+    if (action !== 'ai' || !nextAnnotation) return
+    const descriptor = knowledgeToolDescriptors.find((item) => item.id === 'explain')
+    if (!descriptor?.available) return
+    pendingExplainIdRef.current = nextAnnotation.id
+    setAnnotationAiStatus({ kind: 'loading', message: 'Generating an explanation through the Research Run Runtime…' })
+    try {
+      const text = await onKnowledgeAction(descriptor, {
+        prompt: `${descriptor.title} selected passage: ${selection?.anchor?.quote?.exact || ''}`,
+        context: knowledgeContext,
+      })
+      if (pendingExplainIdRef.current !== nextAnnotation.id || typeof text !== 'string' || !text.trim()) return
+      setAnnotationDraft((current) => ({ ...current, ai: text }))
+      setAnnotationAiStatus({ kind: 'ready', message: 'AI explanation ready for review. Saving still requires explicit approval.' })
+    } catch (error) {
+      if (pendingExplainIdRef.current !== nextAnnotation.id) return
+      setAnnotationAiStatus({ kind: 'error', message: error?.name === 'AbortError' ? 'AI explanation was cancelled. Nothing was saved.' : `AI explanation failed: ${error?.message || 'No completed result was returned.'}` })
+    } finally {
+      if (pendingExplainIdRef.current === nextAnnotation.id) pendingExplainIdRef.current = null
     }
-    const descriptor = knowledgeToolDescriptors.find((item) => item.id === toolId)
-    if (descriptor?.available) onKnowledgeAction(descriptor, { prompt: `${descriptor.title} selected passage: ${selection?.anchor?.quote?.exact || ''}` })
   }
 
   const handleSelectPassage = (nextSelection) => {
+    pendingExplainIdRef.current = null
     setSelection(nextSelection)
     dismissAnnotationWorkbench()
   }
 
   const handleClearSelection = () => {
+    pendingExplainIdRef.current = null
     setSelection(null)
     dismissAnnotationWorkbench()
   }
@@ -640,7 +782,7 @@ export default function KnowledgeGraphSection({
           <button className="document-tab-add" onClick={() => { setLeftOpen(true); setActivePanels((current) => ({ ...current, left: 'files' })) }} aria-label="Browse Vault files"><Plus size={14} /></button>
         </div>
         <div className="knowledge-editor">
-          {selectedNote ? <MarkdownDocument note={selectedNote} notes={notes} selection={selection} onSelectPassage={handleSelectPassage} onSelectionAction={handleSelectionAction} onClearSelection={handleClearSelection} onNavigate={handleSelectNote} /> : <div className="knowledge-welcome">
+          {selectedNote ? <MarkdownDocument note={selectedNote} notes={notes} selection={selection} annotations={selectedNoteAnnotations} onSelectPassage={handleSelectPassage} onSelectionAction={handleSelectionAction} onClearSelection={handleClearSelection} onNavigate={handleSelectNote} onOpenAnnotation={(annotation) => { setActiveAnnotation(annotation); setAnnotationDraft({ ...annotation.sections }); setAnnotationFocusSection('manual'); setAnnotationAiStatus(null); setAnnotationWorkbenchOpen(true) }} aiAvailable={knowledgeToolDescriptors.find((item) => item.id === 'explain')?.available === true} aiUnavailableReason={knowledgeToolDescriptors.find((item) => item.id === 'explain')?.unavailableReason || 'AI Explain is unavailable in this Runtime.'} /> : <div className="knowledge-welcome">
             <span><BookOpen size={25} /></span>
             <h2>{notes.length ? 'Choose a document from the Files panel' : 'Your research knowledge, in one workspace'}</h2>
             <p>{notes.length ? 'Open Markdown notes as tabs and keep multiple sources ready while you research.' : 'Connect an Obsidian Vault to browse files, inspect backlinks, read Markdown, and arrange research tools around your document.'}</p>
@@ -649,7 +791,7 @@ export default function KnowledgeGraphSection({
         </div>
       </main>
 
-      {annotationWorkbenchOpen && (activeAnnotation || selectedNoteAnnotations.length > 0) && <AnnotationEditor annotation={activeAnnotation} draft={annotationDraft} annotations={selectedNoteAnnotations} onDraftChange={setAnnotationDraft} onRequestSave={handleRequestSave} onArchive={handleArchive} onDismiss={dismissAnnotationWorkbench} onReopen={(annotation) => { setActiveAnnotation(annotation); setAnnotationDraft({ ...annotation.sections }); setAnnotationWorkbenchOpen(true) }} />}
+      {annotationWorkbenchOpen && (activeAnnotation || selectedNoteAnnotations.length > 0) && <AnnotationEditor annotation={activeAnnotation} draft={annotationDraft} annotations={selectedNoteAnnotations} onDraftChange={setAnnotationDraft} onRequestSave={handleRequestSave} onArchive={handleArchive} onDismiss={dismissAnnotationWorkbench} focusSection={annotationFocusSection} persistenceMessage={annotationPersistenceMessage} aiStatus={annotationAiStatus} onReopen={(annotation) => { setActiveAnnotation(annotation); setAnnotationDraft({ ...annotation.sections }); setAnnotationFocusSection('manual'); setAnnotationAiStatus(null); setAnnotationWorkbenchOpen(true) }} />}
       {rightOpen && <Dock side="right" panelIds={dockLayout.right} activePanelId={activePanels.right} draggingId={draggingId} onActivate={(side, panelId) => setActivePanels((current) => ({ ...current, [side]: panelId }))} onDragStart={handleDragStart} onDragEnd={() => setDraggingId(null)} onDrop={handleDrop} renderPanel={renderPanel} />}
     </div>
 

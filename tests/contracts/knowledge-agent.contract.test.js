@@ -55,7 +55,7 @@ describe('Knowledge Agent v1 consumer contract', () => {
   })
 
   it('enables frozen Runtime capability keys and fails closed for unknown or obsolete keys', () => {
-    const validCapabilities = ['annotations.write', 'knowledge.lint', 'actions.paperIngest', 'actions.xray', 'actions.codeAnalysis', 'actions.synthesis']
+    const validCapabilities = ['knowledge.query', 'knowledge.explain', 'annotations.write', 'knowledge.lint', 'actions.paperIngest', 'actions.xray', 'actions.codeAnalysis', 'actions.synthesis']
     const enabled = createKnowledgeToolFixtures({ context: KNOWLEDGE_CONTEXT_V1_FIXTURE, availableCapabilities: validCapabilities })
     expect(enabled.every(({ available }) => available)).toBe(true)
 
@@ -63,12 +63,17 @@ describe('Knowledge Agent v1 consumer contract', () => {
       context: KNOWLEDGE_CONTEXT_V1_FIXTURE,
       availableCapabilities: ['unknown.action', 'actions.lint', 'actions.paper-ingest', 'actions.code-analysis'],
     })
-    expect(invalid.filter(({ id }) => !['query', 'explain'].includes(id)).every(({ available }) => !available)).toBe(true)
+    expect(invalid.every(({ available }) => !available)).toBe(true)
     expect(invalid.find(({ id }) => id === 'lint')).toMatchObject({ unavailableReason: expect.stringMatching(/Runtime capability/) })
   })
 
   it('derives availability only from the canonical Runtime actions and annotations manifest', () => {
     const capabilities = availableKnowledgeCapabilitiesFromRuntime({
+      knowledgeReads: {
+        available: true,
+        transport: 'research-run',
+        capabilities: { 'knowledge.query': true, 'knowledge.explain': true },
+      },
       annotations: { available: true, capability: 'annotations.write' },
       actions: {
         available: true,
@@ -87,6 +92,8 @@ describe('Knowledge Agent v1 consumer contract', () => {
     })
 
     expect(capabilities).toEqual([
+      'knowledge.query',
+      'knowledge.explain',
       'annotations.write',
       'knowledge.lint',
       'actions.paperIngest',
@@ -116,6 +123,9 @@ describe('Knowledge Agent v1 consumer contract', () => {
     expect(availableKnowledgeCapabilitiesFromRuntime({ knowledgeActions: {
       availableCapabilities: ['annotations.write', 'knowledge.lint'],
     } })).toEqual([])
+    expect(availableKnowledgeCapabilitiesFromRuntime({
+      knowledgeReads: { available: true, transport: 'research-run-v1', capabilities: { 'knowledge.query': true, 'knowledge.explain': true } },
+    })).toEqual([])
     expect(availableKnowledgeCapabilitiesFromRuntime()).toEqual([])
   })
 
