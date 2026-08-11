@@ -1,5 +1,6 @@
 import { getVaultServiceBaseUrl } from './services.js'
 import { getVaultName, parseVaultDirectory, parseVaultFiles, parseVaultTextEntries } from '../vault.js'
+import { RUNTIME_ANNOTATION_REQUEST_MAX_BYTES } from '../../shared/runtime-action-contracts.mjs'
 
 function browserWindow() {
   return globalThis.window
@@ -36,6 +37,23 @@ function unavailableResult(surface, reason = 'Runtime capability has not been di
     surface,
     reason,
   }
+}
+
+function serializeAnnotationRequest(value) {
+  let body
+  try {
+    body = JSON.stringify(value)
+  } catch {
+    return { ok: false, code: 'invalid_json', error: 'Annotation request must be JSON serializable.' }
+  }
+  if (new TextEncoder().encode(body).length > RUNTIME_ANNOTATION_REQUEST_MAX_BYTES) {
+    return {
+      ok: false,
+      code: 'limit_exceeded',
+      error: 'Annotation request exceeds the 131,072-byte limit.',
+    }
+  }
+  return { ok: true, body }
 }
 
 export function createWebRuntimeAdapter({
@@ -276,9 +294,11 @@ export function createWebRuntimeAdapter({
       return optionalJsonRequest('annotations', '/api/runtime/annotations?path=' + encodeURIComponent(path || ''), { signal })
     },
     write({ signal, ...input } = {}) {
+      const serialized = serializeAnnotationRequest(input)
+      if (!serialized.ok) return Promise.resolve(serialized)
       return optionalJsonRequest('annotations', '/api/runtime/annotations', {
         method: 'PUT',
-        body: JSON.stringify(input),
+        body: serialized.body,
         signal,
       })
     },
@@ -357,6 +377,8 @@ export function createWebRuntimeAdapter({
     }),
   })
 }
+
+export const runtimeAdapterInternals = Object.freeze({ serializeAnnotationRequest })
 
 export function createDesktopRuntimeAdapter({
   bridge,

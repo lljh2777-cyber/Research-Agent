@@ -12,9 +12,14 @@ import {
   isTerminalResearchRunStatus,
   RESEARCH_RUN_EVENT,
 } from '../src/research/runProtocol.js'
+import {
+  consumeKnowledgeArchiveResult,
+  createKnowledgeArchiveResult,
+} from '../src/research/knowledgeArchive.js'
 import { ResearchRunManager } from './research-run-manager.mjs'
 
 const IDEMPOTENCY_LIMIT = 1024
+const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled'])
 
 function actionError(message, statusCode = 400, code = 'invalid_request') {
   return Object.assign(new Error(message), { statusCode, code })
@@ -96,9 +101,29 @@ function normalizeActionOutput({ descriptor, requestId, runId, value }) {
   }
 }
 
+function terminalEvent({ descriptor, runId, output }) {
+  if (output.status === 'completed') {
+    return { type: RESEARCH_RUN_EVENT.RUN_COMPLETED, runId, toolId: descriptor.id, output }
+  }
+  const cancelled = output.status === 'cancelled'
+  return {
+    type: cancelled ? RESEARCH_RUN_EVENT.RUN_CANCELLED : RESEARCH_RUN_EVENT.RUN_FAILED,
+    runId,
+    toolId: descriptor.id,
+    error: {
+      name: cancelled ? 'AbortError' : 'Error',
+      message: output.error?.message || output.summary || (cancelled ? 'Action cancelled.' : 'Action failed.'),
+      code: output.error?.code || (cancelled ? 'cancelled' : 'action_failed'),
+      retryable: cancelled,
+    },
+    result: output,
+  }
+}
+
 export class ActionService {
   #manager
   #runner
+  #archiveRealizer
   #descriptors
   #runs = new Map()
   #idempotency = new Map()
@@ -106,11 +131,13 @@ export class ActionService {
   constructor({
     manager = new ResearchRunManager(),
     runner,
+    archiveRealizer = null,
     descriptors = RUNTIME_ACTION_DESCRIPTORS,
   } = {}) {
     if (!runner?.run) throw new Error('ActionService requires a runner.')
     this.#manager = manager
     this.#runner = runner
+    this.#archiveRealizer = archiveRealizer
     this.#descriptors = Object.freeze([...descriptors])
   }
 
@@ -122,7 +149,29 @@ export class ActionService {
     }
   }
 
-  start(envelope = {}) {
+  capabilityEvidence() {
+    const archive = this.#archiveRealizer?.capabilityEvidence?.() || null
+    const archiveExecutable = Boolean(
+      archive?.executable === true
+      && archive.transport === 'research-run'
+      && archive.journal === 'atomic-json-v1'
+      && archive.crashRecovery === true
+      && archive.authenticity === 'hmac-sha256-v1'
+      && archive.planner?.sandbox === 'read-only'
+      && archive.planner?.output === 'strict-json'
+    )
+    return {
+      executable: true,
+      transport: 'same-origin',
+      archive: archiveExecutable ? archive : null,
+      capabilities: Object.fromEntries(this.#descriptors.map((descriptor) => [
+        descriptor.capability,
+        descriptor.id === 'knowledge.synthesis.write' ? archiveExecutable : true,
+      ])),
+    }
+  }
+
+  async start(envelope = {}) {
     if (byteLength(envelope, 'Action input') > MAX_KNOWLEDGE_ACTION_INPUT_BYTES) {
       throw actionError('Action input exceeds the 131,072-byte limit.', 413, 'limit_exceeded')
     }
@@ -133,40 +182,67 @@ export class ActionService {
     if (!descriptor || !this.#descriptors.some((entry) => entry.id === descriptor.id)) {
       throw actionError('Unknown Runtime Action.', 404, 'not_found')
     }
-    const requestId = requiredActionString(envelope.requestId, 'Knowledge Action requestId')
-    const runId = requiredActionString(envelope.runId, 'Knowledge Action runId')
-    const sessionId = requiredActionString(envelope.sessionId, 'Knowledge Action sessionId')
-    if (!envelope.input || typeof envelope.input !== 'object' || Array.isArray(envelope.input)) {
+    const formalArchive = descriptor.id === 'knowledge.synthesis.write'
+    if (formalArchive && !this.#archiveRealizer) {
+      throw actionError('Formal archive realization is unavailable.', 503, 'runtime_unavailable')
+    }
+    const inspection = formalArchive
+      ? await (this.#archiveRealizer.accept?.(envelope) || this.#archiveRealizer.inspect(envelope))
+      : null
+    const effectiveEnvelope = inspection?.existing?.request
+      ? { ...inspection.existing.request, approval: inspection.existing.approval }
+      : envelope
+    const requestId = requiredActionString(effectiveEnvelope.requestId, 'Knowledge Action requestId')
+    const runId = requiredActionString(effectiveEnvelope.runId, 'Knowledge Action runId')
+    const sessionId = requiredActionString(effectiveEnvelope.sessionId, 'Knowledge Action sessionId')
+    if (!effectiveEnvelope.input || typeof effectiveEnvelope.input !== 'object' || Array.isArray(effectiveEnvelope.input)) {
       throw actionError('Knowledge Action input.input must be an object.')
     }
-    if (!envelope.context || typeof envelope.context !== 'object' || Array.isArray(envelope.context)) {
+    if (!effectiveEnvelope.context || typeof effectiveEnvelope.context !== 'object' || Array.isArray(effectiveEnvelope.context)) {
       throw actionError('KnowledgeContextV1 must be an opaque object.')
     }
-    if (envelope.context.schemaVersion !== 1) {
+    if (effectiveEnvelope.context.schemaVersion !== 1) {
       throw actionError('KnowledgeContextV1 requires schemaVersion 1.')
     }
-    if (byteLength(envelope.context, 'KnowledgeContextV1') > MAX_KNOWLEDGE_CONTEXT_BYTES) {
+    if (byteLength(effectiveEnvelope.context, 'KnowledgeContextV1') > MAX_KNOWLEDGE_CONTEXT_BYTES) {
       throw actionError('KnowledgeContextV1 exceeds the 65,536-byte limit.', 413, 'limit_exceeded')
     }
-    if (descriptor.approvalPolicy === 'explicit' && !isApproved(envelope.approval)) {
+    if (descriptor.approvalPolicy === 'explicit' && !isApproved(effectiveEnvelope.approval)) {
       throw actionError('This Runtime Action requires explicit approval.', 403, 'approval_required')
     }
-    if (descriptor.requiresScope && !validWriteScope(envelope.scope)) {
+    if (descriptor.requiresScope && !validWriteScope(effectiveEnvelope.scope)) {
       throw actionError('This Runtime Action requires an explicit scope.', 403, 'scope_required')
     }
-    if (descriptor.requiresIdempotencyKey && !validIdempotencyKey(envelope.idempotencyKey)) {
+    if (descriptor.requiresIdempotencyKey && !validIdempotencyKey(effectiveEnvelope.idempotencyKey)) {
       throw actionError('This Runtime Action requires a valid idempotencyKey.')
     }
 
     const idempotencyKey = descriptor.requiresIdempotencyKey
-      ? descriptor.id + ':' + String(envelope.idempotencyKey).trim()
+      ? descriptor.id + ':' + String(effectiveEnvelope.idempotencyKey).trim()
       : null
     const digest = requestDigest({
       toolId: descriptor.id,
-      input: envelope.input || {},
-      context: envelope.context || null,
-      scope: envelope.scope || null,
+      input: effectiveEnvelope.input || {},
+      context: effectiveEnvelope.context || null,
+      scope: effectiveEnvelope.scope || null,
     })
+    if (inspection?.existing && TERMINAL_STATES.has(inspection.existing.state)) {
+      const created = this.#manager.create({ id: runId, sessionId, executionOwner: 'local-action' })
+      if (created.created) {
+        this.#manager.append(runId, {
+          type: RESEARCH_RUN_EVENT.RUN_STARTED, runId, toolId: descriptor.id, requestId, sessionId,
+        })
+        this.#manager.append(runId, terminalEvent({ descriptor, runId, output: inspection.existing.result }))
+      }
+      this.#runs.set(runId, { toolId: descriptor.id, requestId, sessionId, controller: new AbortController(), execution: Promise.resolve() })
+      return {
+        started: false,
+        replayed: true,
+        toolId: descriptor.id,
+        terminalEvent: this.#terminalEvent(runId),
+        ...this.#manager.get(runId),
+      }
+    }
     if (idempotencyKey) {
       const existing = this.#idempotency.get(idempotencyKey)
       if (existing) {
@@ -199,14 +275,16 @@ export class ActionService {
       requestId,
       sessionId,
     })
-    void this.#execute(runId, descriptor, envelope, controller)
+    const execution = this.#execute(runId, descriptor, effectiveEnvelope, controller, inspection)
+    this.#runs.get(runId).execution = execution
+    void execution
     return { started: true, replayed: false, toolId: descriptor.id, ...this.#manager.get(runId) }
   }
 
   shutdown() {
     for (const [runId] of this.#runs) {
       const snapshot = this.#manager.get(runId)
-      if (!isTerminalResearchRunStatus(snapshot.run.status)) this.cancel(runId)
+      if (!isTerminalResearchRunStatus(snapshot.run.status)) this.#runs.get(runId)?.controller.abort()
     }
   }
 
@@ -224,47 +302,58 @@ export class ActionService {
     return this.#manager.subscribe(runId, listener)
   }
 
-  cancel(runId) {
+  async cancel(runId) {
     const metadata = this.#runs.get(runId)
     const snapshot = this.#manager.get(runId)
     if (isTerminalResearchRunStatus(snapshot.run.status)) {
       return { cancelled: false, toolId: metadata?.toolId || null, ...snapshot }
     }
     metadata?.controller.abort()
-    return { toolId: metadata?.toolId || null, ...this.#manager.cancel(runId, {
-      name: 'AbortError',
-      message: 'Action cancelled.',
-      code: 'cancelled',
-      retryable: true,
-    }) }
+    await metadata?.execution
+    const terminal = this.#manager.get(runId)
+    if (!isTerminalResearchRunStatus(terminal.run.status)) {
+      return { toolId: metadata?.toolId || null, ...this.#manager.cancel(runId, {
+        name: 'AbortError', message: 'Action cancelled.', code: 'cancelled', retryable: true,
+      }) }
+    }
+    return { cancelled: terminal.run.status === 'cancelled', toolId: metadata?.toolId || null, ...terminal }
   }
 
-  async #execute(runId, descriptor, envelope, controller) {
+  async #execute(runId, descriptor, envelope, controller, inspection) {
     try {
-      const runnerOutput = await this.#runner.run({
+      const runnerInput = {
         descriptor,
         input: envelope.input || {},
         context: envelope.context || null,
         scope: envelope.scope || null,
         signal: controller.signal,
         onProgress: (progress) => this.#progress(runId, descriptor.id, progress),
-      })
-      const output = normalizeActionOutput({
-        descriptor,
-        requestId: envelope.requestId,
-        runId,
-        value: runnerOutput,
-      })
+      }
+      const runnerOutput = descriptor.id === 'knowledge.synthesis.write'
+        ? await this.#archiveRealizer.run({ envelope, signal: controller.signal, onProgress: runnerInput.onProgress, inspection })
+        : await this.#runner.run(runnerInput)
+      const output = descriptor.id === 'knowledge.synthesis.write'
+        ? consumeKnowledgeArchiveResult(envelope, runnerOutput)
+        : normalizeActionOutput({ descriptor, requestId: envelope.requestId, runId, value: runnerOutput })
       if (byteLength(output, 'Action output') > MAX_KNOWLEDGE_ACTION_OUTPUT_BYTES) {
         throw actionError('Action output exceeds the 65,536-byte limit.', 413, 'limit_exceeded')
       }
-      this.#appendIfActive(runId, {
-        type: RESEARCH_RUN_EVENT.RUN_COMPLETED,
-        runId,
-        toolId: descriptor.id,
-        output,
-      })
+      this.#appendIfActive(runId, terminalEvent({ descriptor, runId, output }))
     } catch (error) {
+      if (descriptor.id === 'knowledge.synthesis.write') {
+        const status = error?.name === 'AbortError' || controller.signal.aborted ? 'cancelled' : 'failed'
+        const output = createKnowledgeArchiveResult(envelope, {
+          status,
+          summary: error?.message,
+          targets: [],
+          error: {
+            code: status === 'cancelled' ? 'archive_cancelled' : 'archive_failed',
+            message: error?.message || (status === 'cancelled' ? 'Archive run was cancelled.' : 'Knowledge archive failed.'),
+          },
+        })
+        this.#appendIfActive(runId, terminalEvent({ descriptor, runId, output }))
+        return
+      }
       if (error?.name === 'AbortError' || controller.signal.aborted) {
         this.#appendIfActive(runId, {
           type: RESEARCH_RUN_EVENT.RUN_CANCELLED,

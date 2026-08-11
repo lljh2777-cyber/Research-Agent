@@ -4,6 +4,9 @@ export const MAX_KNOWLEDGE_ACTION_INPUT_BYTES = 131_072
 export const MAX_KNOWLEDGE_ACTION_OUTPUT_BYTES = 65_536
 export const RUNTIME_ANNOTATION_CONTENT_MAX_BYTES = 65_536
 export const RUNTIME_ANNOTATION_REQUEST_MAX_BYTES = 131_072
+export const RUNTIME_ARCHIVE_JOURNAL_SCHEMA_VERSION = 1
+export const RUNTIME_ARCHIVE_PLAN_MAX_BYTES = 4 * 1024 * 1024
+export const RUNTIME_ARCHIVE_TARGET_CONTENT_MAX_BYTES = 1024 * 1024
 export const ANNOTATION_PATCH_KIND = 'annotation.upsert'
 export const ANNOTATION_CONTENT_TYPE = 'text/markdown'
 
@@ -178,8 +181,26 @@ export const RUNTIME_ACTION_DESCRIPTORS = Object.freeze([
     capability: 'actions.synthesis',
     inputSchema: actionInputSchema({
       write: true,
-      inputProperties: { instruction: { type: 'string', minLength: 1, maxLength: 4000 } },
-      inputRequired: ['instruction'],
+      inputProperties: {
+        operation: { const: 'archive-annotation' },
+        sourceAnnotation: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', minLength: 1, maxLength: 256 },
+            path: { type: 'string', minLength: 1, maxLength: 512 },
+            revision: { type: 'string', minLength: 1, maxLength: 256 },
+          },
+          required: ['id', 'path', 'revision'],
+          additionalProperties: false,
+        },
+        targets: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 32,
+          items: { type: 'string', minLength: 1, maxLength: 1024 },
+        },
+      },
+      inputRequired: ['operation', 'sourceAnnotation', 'targets'],
     }),
     requiresScope: true,
     requiresIdempotencyKey: true,

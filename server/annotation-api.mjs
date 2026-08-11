@@ -7,7 +7,7 @@ async function readJsonBody(request) {
   for await (const chunk of request) {
     total += chunk.length
     if (total > RUNTIME_ANNOTATION_REQUEST_MAX_BYTES) {
-      throw Object.assign(new Error('Annotation request exceeds the 64 KiB limit.'), { statusCode: 413, code: 'limit_exceeded' })
+      throw Object.assign(new Error('Annotation request exceeds the 131,072-byte limit.'), { statusCode: 413, code: 'limit_exceeded' })
     }
     chunks.push(chunk)
   }

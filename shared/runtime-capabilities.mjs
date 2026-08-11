@@ -130,7 +130,26 @@ function hasExecutableKnowledgeReadService(value) {
 function optionalRuntimeServices(target, services = {}) {
   const local = target === RUNTIME_TARGETS.LOCAL_WEB
   const annotationsAvailable = local && services.annotations === true
-  const actionsAvailable = local && services.actions === true
+  const actionEvidence = services.actions
+  const actionsAvailable = local && (actionEvidence === true || actionEvidence?.executable === true)
+  const archiveAvailable = Boolean(
+    actionsAvailable
+    && actionEvidence?.archive?.executable === true
+    && actionEvidence.archive.transport === 'research-run'
+    && actionEvidence.archive.journal === 'atomic-json-v1'
+    && actionEvidence.archive.crashRecovery === true
+    && actionEvidence.archive.authenticity === 'hmac-sha256-v1'
+    && actionEvidence.archive.planner?.sandbox === 'read-only'
+    && actionEvidence.archive.planner?.output === 'strict-json'
+  )
+  const actionCapabilities = Object.freeze(Object.fromEntries(
+    RUNTIME_ACTION_CAPABILITIES.map((capability) => [
+      capability,
+      actionsAvailable && (capability === 'actions.synthesis'
+        ? archiveAvailable
+        : actionEvidence === true || actionEvidence?.capabilities?.[capability] === true),
+    ]),
+  ))
   const knowledgeReadsAvailable = local && hasExecutableKnowledgeReadService(services.knowledgeReads)
   return {
     knowledgeReads: Object.freeze({
@@ -160,9 +179,7 @@ function optionalRuntimeServices(target, services = {}) {
       maxOutputBytes: MAX_KNOWLEDGE_ACTION_OUTPUT_BYTES,
       maxContextBytes: MAX_KNOWLEDGE_CONTEXT_BYTES,
       maxSessionHandoffBytes: MAX_KNOWLEDGE_ACTION_INPUT_BYTES,
-      capabilities: Object.freeze(Object.fromEntries(
-        RUNTIME_ACTION_CAPABILITIES.map((capability) => [capability, actionsAvailable]),
-      )),
+      capabilities: actionCapabilities,
       reason: actionsAvailable ? null : unavailableReason(target, 'Action service'),
     }),
   }
@@ -246,7 +263,18 @@ export function isRuntimeManifest(value) {
     )
     && sameOptionalService(
       capabilities.actions,
-      optionalRuntimeServices(value.target, { actions: capabilities.actions?.available === true }).actions,
+      optionalRuntimeServices(value.target, { actions: capabilities.actions?.available === true ? {
+        executable: true,
+        capabilities: capabilities.actions.capabilities,
+        archive: capabilities.actions.capabilities?.['actions.synthesis'] === true ? {
+          executable: true,
+          transport: 'research-run',
+          journal: 'atomic-json-v1',
+          crashRecovery: true,
+          authenticity: 'hmac-sha256-v1',
+          planner: { sandbox: 'read-only', output: 'strict-json' },
+        } : null,
+      } : false }).actions,
     )
   )
 }

@@ -6,6 +6,7 @@ import {
   MAX_KNOWLEDGE_ACTION_OUTPUT_BYTES,
   MAX_KNOWLEDGE_CONTEXT_BYTES,
 } from '../shared/runtime-action-contracts.mjs'
+import { CodexArchivePlanner } from './action-runner.mjs'
 import { ActionService } from './action-service.mjs'
 
 async function waitForTerminal(service, runId) {
@@ -86,7 +87,7 @@ test('ActionService exposes Core descriptors and completes through Research Run 
   ])
 
   const context = knowledgeContextAtLimit()
-  const started = service.start(coreActionInput({
+  const started = await service.start(coreActionInput({
     requestId: 'call-lint-1',
     runId: 'action-lint-1',
     input: { rules: [] },
@@ -128,38 +129,38 @@ test('ActionService enforces approval, scope, idempotency, bounds, and cancellat
     approval: { status: 'approved' },
   })
 
-  assert.throws(
+  await assert.rejects(
     () => service.start({ ...approved, runId: 'missing-approval', approval: undefined, permission: { write: 'allow' } }),
     (error) => error.code === 'approval_required' && error.statusCode === 403,
   )
-  assert.throws(
+  await assert.rejects(
     () => service.start({ ...approved, runId: 'missing-scope', scope: undefined }),
     (error) => error.code === 'scope_required' && error.statusCode === 403,
   )
-  assert.throws(
+  await assert.rejects(
     () => service.start({ ...approved, runId: 'missing-key', idempotencyKey: '' }),
     /idempotencyKey/,
   )
-  assert.throws(
+  await assert.rejects(
     () => service.start(coreActionInput({ input: { value: 'x'.repeat(MAX_KNOWLEDGE_ACTION_INPUT_BYTES) } })),
     (error) => error.code === 'limit_exceeded' && error.statusCode === 413,
   )
-  assert.throws(
+  await assert.rejects(
     () => service.start(coreActionInput({ context: { ...knowledgeContextAtLimit(), contextRevision: knowledgeContextAtLimit().contextRevision + 'x' } })),
     (error) => error.code === 'limit_exceeded' && error.statusCode === 413,
   )
 
-  const started = service.start(approved)
+  const started = await service.start(approved)
   assert.equal(started.started, true)
-  const replayed = service.start({ ...approved, runId: 'ignored-by-idempotency' })
+  const replayed = await service.start({ ...approved, runId: 'ignored-by-idempotency' })
   assert.equal(replayed.replayed, true)
   assert.equal(replayed.run.id, 'action-xray-1')
-  assert.throws(
+  await assert.rejects(
     () => service.start({ ...approved, runId: 'action-xray-conflict', input: { sourceRef: 'different' } }),
     (error) => error.code === 'idempotency_conflict' && error.statusCode === 409,
   )
 
-  const cancelled = service.cancel('action-xray-1')
+  const cancelled = await service.cancel('action-xray-1')
   assert.equal(cancelled.cancelled, true)
   assert.equal(cancelled.run.status, 'cancelled')
   resolveRunner({ shouldNotComplete: true })
@@ -176,7 +177,7 @@ test('ActionService bounds terminal output independently from Action input', asy
       },
     },
   })
-  service.start(coreActionInput({ requestId: 'call-output-limit', runId: 'action-output-limit' }))
+  await service.start(coreActionInput({ requestId: 'call-output-limit', runId: 'action-output-limit' }))
   const failed = await waitForTerminal(service, 'action-output-limit')
   assert.equal(failed.run.status, 'failed')
   assert.equal(service.eventsAfter('action-output-limit', 0).events.at(-1).event.error.code, 'limit_exceeded')
@@ -201,10 +202,10 @@ test('ActionService atomically replays the original terminal result for a scoped
     idempotencyKey: 'paper-ingest-terminal-1',
     approval: { status: 'approved' },
   })
-  service.start(envelope)
+  await service.start(envelope)
   const completed = await waitForTerminal(service, envelope.runId)
   assert.equal(completed.run.status, 'completed')
-  const replayed = service.start({ ...envelope, runId: 'must-not-run' })
+  const replayed = await service.start({ ...envelope, runId: 'must-not-run' })
   assert.equal(replayed.replayed, true)
   assert.equal(replayed.run.id, envelope.runId)
   assert.equal(replayed.run.status, 'completed')
@@ -215,4 +216,26 @@ test('ActionService atomically replays the original terminal result for a scoped
   assert.deepEqual(service.eventsAfter(envelope.runId, 0).events.at(-1).event.output.data, {
     changed: ['wiki/sources/paper-1.md'],
   })
+})
+
+test('formal archive planner capability is based on concrete executable evidence', async () => {
+  const unavailable = new CodexArchivePlanner({
+    root: process.cwd(),
+    command: 'missing-codex',
+    probeExecutable: () => false,
+  })
+  assert.deepEqual(unavailable.capabilityEvidence(), {
+    executable: false,
+    sandbox: 'read-only',
+    output: 'strict-json',
+  })
+  await assert.rejects(unavailable.plan({}), (error) => error.code === 'runtime_unavailable')
+
+  const available = new CodexArchivePlanner({
+    root: process.cwd(),
+    command: 'injected-codex',
+    probeExecutable: () => true,
+    spawnProcess() { throw new Error('Capability evidence must not launch the planner.') },
+  })
+  assert.equal(available.capabilityEvidence().executable, true)
 })
