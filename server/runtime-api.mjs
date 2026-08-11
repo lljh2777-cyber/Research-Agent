@@ -16,6 +16,19 @@ function isVaultDirectory(value) {
   }
 }
 
+export function createKnowledgeReadServiceEvidence({
+  providerId,
+  endpoint,
+  model,
+  credential,
+  researchRunExecutable = false,
+} = {}) {
+  return {
+    provider: { selected: true, providerId, endpoint, model, credential },
+    researchRun: { executable: researchRunExecutable === true, transport: 'research-run' },
+  }
+}
+
 export function createLocalWebRuntimeManifest({
   nodeEnv = process.env.NODE_ENV,
   version = process.env.npm_package_version || '0.1.0',
@@ -27,9 +40,10 @@ export function createLocalWebRuntimeManifest({
     buildMode: buildModeFromEnvironment(nodeEnv),
     target: RUNTIME_TARGETS.LOCAL_WEB,
     version,
-    services: services || {
-      annotations: vaultAvailable,
-      actions: vaultAvailable,
+    services: {
+      annotations: services?.annotations ?? vaultAvailable,
+      actions: services?.actions ?? vaultAvailable,
+      knowledgeReads: services?.knowledgeReads,
     },
   })
 }
