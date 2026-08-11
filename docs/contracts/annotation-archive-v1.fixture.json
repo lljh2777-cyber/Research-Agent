@@ -4,6 +4,7 @@
     "operation": "archive-annotation",
     "sourceAnnotation": {
       "id": "annotation-cjk-1",
+      "path": "wiki/annotations/annotation-cjk-1.MD",
       "revision": "annotation-rev-7"
     },
     "targets": [
@@ -19,6 +20,22 @@
     "parserToleranceBytes": 262144,
     "persistenceContentBytes": 65536,
     "runtimeRequestBytes": 131072
+  },
+  "runtimeReadablePathSemantics": {
+    "maxJavaScriptUtf16CodeUnits": 512,
+    "acceptedPreservedPaths": [
+      "wiki/annotations/lowercase.md",
+      "wiki/annotations/uppercase.MD",
+      "wiki/annotations/mixed.Md"
+    ],
+    "boundaryRecipe": {
+      "prefix": "wiki/annotations/",
+      "suffix": ".md",
+      "cjkCodeUnit": "界",
+      "cjkCountAtLimit": 492,
+      "surrogatePair": "🧬",
+      "surrogatePairCountAtLimit": 246
+    }
   },
   "invalidCompletedHalfStates": [
     {

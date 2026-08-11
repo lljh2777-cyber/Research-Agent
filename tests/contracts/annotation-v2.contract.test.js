@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest'
 
 import {
   ANNOTATION_ARCHIVE_MAX_TARGETS,
+  ANNOTATION_ARCHIVE_RUN_ID_MAX_BYTES,
   ANNOTATION_MARKDOWN_MAX_BYTES,
   ANNOTATION_PATCH_CONTENT_MAX_BYTES,
+  ANNOTATION_RECORD_PATH_MAX_LENGTH,
   ANNOTATION_SECTION_MAX_BYTES,
   ANNOTATION_V2_SCHEMA_VERSION,
   createAnnotationPatchIntent,
@@ -21,6 +23,7 @@ import {
   RUNTIME_ANNOTATION_CONTENT_MAX_BYTES,
   RUNTIME_ANNOTATION_REQUEST_MAX_BYTES,
 } from '../../shared/runtime-action-contracts.mjs'
+import { annotationStoreInternals } from '../../server/annotation-store.mjs'
 
 async function fixture(name) {
   return JSON.parse(await readFile(new URL('../../docs/contracts/' + name, import.meta.url), 'utf8'))
@@ -54,8 +57,46 @@ describe('Annotation v2 owner contract', () => {
     const value = await fixture('annotation-archive-v1.fixture.json')
     expect(normalizeArchiveAnnotationInput(value.archiveInput)).toEqual(value.archiveInput)
     expect(normalizeSourceAnnotationReference(value.archiveInput.sourceAnnotation)).toEqual(value.archiveInput.sourceAnnotation)
+    expect(Object.keys(value.archiveInput.sourceAnnotation)).toEqual(['id', 'path', 'revision'])
+    expect(JSON.parse(JSON.stringify(normalizeArchiveAnnotationInput(value.archiveInput)))).toEqual(value.archiveInput)
     expect(normalizeAnnotationArchiveTargets(value.archiveInput.targets)).toEqual(value.archiveInput.targets)
+    const pathSemantics = value.runtimeReadablePathSemantics
+    expect(annotationStoreInternals.normalizeAnnotationPath(value.archiveInput.sourceAnnotation.path)).toBe(value.archiveInput.sourceAnnotation.path)
+    for (const path of pathSemantics.acceptedPreservedPaths) {
+      expect(annotationStoreInternals.normalizeAnnotationPath(path)).toBe(path)
+      expect(normalizeSourceAnnotationReference({ ...value.archiveInput.sourceAnnotation, path }).path).toBe(path)
+      expect(normalizeArchiveAnnotationInput({
+        ...value.archiveInput,
+        sourceAnnotation: { ...value.archiveInput.sourceAnnotation, path },
+      }).sourceAnnotation.path).toBe(path)
+    }
+    const recipe = pathSemantics.boundaryRecipe
+    const cjkBoundaryPath = recipe.prefix + recipe.cjkCodeUnit.repeat(recipe.cjkCountAtLimit) + recipe.suffix
+    const surrogateBoundaryPath = recipe.prefix + recipe.surrogatePair.repeat(recipe.surrogatePairCountAtLimit) + recipe.suffix
+    expect(cjkBoundaryPath.length).toBe(pathSemantics.maxJavaScriptUtf16CodeUnits)
+    expect(surrogateBoundaryPath.length).toBe(pathSemantics.maxJavaScriptUtf16CodeUnits)
+    expect(annotationStoreInternals.normalizeAnnotationPath(cjkBoundaryPath)).toBe(cjkBoundaryPath)
+    expect(annotationStoreInternals.normalizeAnnotationPath(surrogateBoundaryPath)).toBe(surrogateBoundaryPath)
+    expect(normalizeSourceAnnotationReference({ ...value.archiveInput.sourceAnnotation, path: cjkBoundaryPath }).path).toBe(cjkBoundaryPath)
+    expect(normalizeSourceAnnotationReference({ ...value.archiveInput.sourceAnnotation, path: surrogateBoundaryPath }).path).toBe(surrogateBoundaryPath)
+    expect(normalizeArchiveAnnotationInput({
+      ...value.archiveInput,
+      sourceAnnotation: { ...value.archiveInput.sourceAnnotation, path: cjkBoundaryPath },
+    }).sourceAnnotation.path).toBe(cjkBoundaryPath)
+    expect(normalizeArchiveAnnotationInput({
+      ...value.archiveInput,
+      sourceAnnotation: { ...value.archiveInput.sourceAnnotation, path: surrogateBoundaryPath },
+    }).sourceAnnotation.path).toBe(surrogateBoundaryPath)
+    const overLimitPath = recipe.prefix + 'a'.repeat(493) + recipe.suffix
+    expect(overLimitPath.length).toBe(pathSemantics.maxJavaScriptUtf16CodeUnits + 1)
+    expect(() => annotationStoreInternals.normalizeAnnotationPath(overLimitPath)).toThrow(/Annotation path is invalid/)
+    expect(() => normalizeSourceAnnotationReference({
+      ...value.archiveInput.sourceAnnotation,
+      path: overLimitPath,
+    })).toThrow(/512 JavaScript UTF-16 code units/)
     expect(ANNOTATION_ARCHIVE_MAX_TARGETS).toBe(32)
+    expect(ANNOTATION_ARCHIVE_RUN_ID_MAX_BYTES).toBe(256)
+    expect(ANNOTATION_RECORD_PATH_MAX_LENGTH).toBe(512)
     expect(ANNOTATION_SECTION_MAX_BYTES).toBe(65_536)
     expect(ANNOTATION_PATCH_CONTENT_MAX_BYTES).toBe(RUNTIME_ANNOTATION_CONTENT_MAX_BYTES)
     expect(value.bounds).toEqual({

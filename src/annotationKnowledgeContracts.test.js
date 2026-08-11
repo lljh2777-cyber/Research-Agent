@@ -53,7 +53,36 @@ test('authoritative source annotation and archive target fixture matches Core co
   assert.equal(fixture.schemaVersion, 1)
   assert.deepEqual(normalizeArchiveAnnotationInput(fixture.archiveInput), fixture.archiveInput)
   assert.deepEqual(normalizeSourceAnnotationReference(fixture.archiveInput.sourceAnnotation), fixture.archiveInput.sourceAnnotation)
+  assert.deepEqual(Object.keys(fixture.archiveInput.sourceAnnotation), ['id', 'path', 'revision'])
+  assert.deepEqual(JSON.parse(JSON.stringify(normalizeArchiveAnnotationInput(fixture.archiveInput))), fixture.archiveInput)
   assert.deepEqual(normalizeAnnotationArchiveTargets(fixture.archiveInput.targets), fixture.archiveInput.targets)
+  const pathSemantics = fixture.runtimeReadablePathSemantics
+  for (const path of pathSemantics.acceptedPreservedPaths) {
+    assert.equal(normalizeSourceAnnotationReference({ ...fixture.archiveInput.sourceAnnotation, path }).path, path)
+    assert.equal(normalizeArchiveAnnotationInput({
+      ...fixture.archiveInput,
+      sourceAnnotation: { ...fixture.archiveInput.sourceAnnotation, path },
+    }).sourceAnnotation.path, path)
+  }
+  const recipe = pathSemantics.boundaryRecipe
+  const cjkBoundaryPath = recipe.prefix + recipe.cjkCodeUnit.repeat(recipe.cjkCountAtLimit) + recipe.suffix
+  const surrogateBoundaryPath = recipe.prefix + recipe.surrogatePair.repeat(recipe.surrogatePairCountAtLimit) + recipe.suffix
+  assert.equal(cjkBoundaryPath.length, pathSemantics.maxJavaScriptUtf16CodeUnits)
+  assert.equal(surrogateBoundaryPath.length, pathSemantics.maxJavaScriptUtf16CodeUnits)
+  assert.equal(normalizeSourceAnnotationReference({ ...fixture.archiveInput.sourceAnnotation, path: cjkBoundaryPath }).path, cjkBoundaryPath)
+  assert.equal(normalizeSourceAnnotationReference({ ...fixture.archiveInput.sourceAnnotation, path: surrogateBoundaryPath }).path, surrogateBoundaryPath)
+  assert.equal(normalizeArchiveAnnotationInput({
+    ...fixture.archiveInput,
+    sourceAnnotation: { ...fixture.archiveInput.sourceAnnotation, path: cjkBoundaryPath },
+  }).sourceAnnotation.path, cjkBoundaryPath)
+  assert.equal(normalizeArchiveAnnotationInput({
+    ...fixture.archiveInput,
+    sourceAnnotation: { ...fixture.archiveInput.sourceAnnotation, path: surrogateBoundaryPath },
+  }).sourceAnnotation.path, surrogateBoundaryPath)
+  assert.throws(
+    () => normalizeSourceAnnotationReference({ ...fixture.archiveInput.sourceAnnotation, path: recipe.prefix + 'a'.repeat(493) + recipe.suffix }),
+    /512 JavaScript UTF-16 code units/,
+  )
   assert.deepEqual(createArchiveCancellationError(), fixture.cancellationError)
   assert.deepEqual(fixture.bounds, {
     parserToleranceBytes: 262_144,
