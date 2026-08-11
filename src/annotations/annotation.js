@@ -9,7 +9,7 @@ export const ANNOTATION_PATCH_CONTENT_MAX_BYTES = 64 * 1024
 export const ANNOTATION_SECTION_MAX_BYTES = 64 * 1024
 export const ANNOTATION_ID_MAX_BYTES = 256
 export const ANNOTATION_REVISION_MAX_BYTES = 256
-export const ANNOTATION_RECORD_PATH_MAX_BYTES = 1024
+export const ANNOTATION_RECORD_PATH_MAX_LENGTH = 512
 export const ANNOTATION_SOURCE_PATH_MAX_BYTES = 4 * 1024
 export const ANNOTATION_ARCHIVE_MAX_TARGETS = 32
 export const ANNOTATION_ARCHIVE_TARGET_MAX_BYTES = 1024
@@ -231,7 +231,10 @@ export function normalizeSourceAnnotationReference(value) {
 
 export function normalizeAnnotationRecordPath(value) {
   const label = 'source annotation reference.path'
-  const path = requireBoundedString(value, label, ANNOTATION_RECORD_PATH_MAX_BYTES)
+  if (typeof value !== 'string' || !value || value.length > ANNOTATION_RECORD_PATH_MAX_LENGTH) {
+    throw new TypeError(label + ' must be a non-empty string no longer than ' + ANNOTATION_RECORD_PATH_MAX_LENGTH + ' JavaScript UTF-16 code units.')
+  }
+  const path = value
   if (path.startsWith('/') || path.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(path) || path.includes('\\')) {
     throw new TypeError(label + ' must be a relative Vault path using forward slashes.')
   }
@@ -241,7 +244,7 @@ export function normalizeAnnotationRecordPath(value) {
     throw new TypeError(label + ' must be a normalized relative Vault path.')
   }
   if (!path.startsWith('wiki/annotations/')) throw new TypeError(label + ' must be under wiki/annotations/.')
-  if (!path.endsWith('.md')) throw new TypeError(label + ' must identify a .md file.')
+  if (path.slice(-3).toLowerCase() !== '.md') throw new TypeError(label + ' must identify a Markdown file.')
   return path
 }
 

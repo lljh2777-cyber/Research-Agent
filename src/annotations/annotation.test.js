@@ -6,7 +6,7 @@ import {
   ANNOTATION_MARKDOWN_MAX_BYTES,
   ANNOTATION_PATCH_CONTENT_MAX_BYTES,
   ANNOTATION_PATCH_SCHEMA_VERSION,
-  ANNOTATION_RECORD_PATH_MAX_BYTES,
+  ANNOTATION_RECORD_PATH_MAX_LENGTH,
   ANNOTATION_SECTION_MAX_BYTES,
   ANNOTATION_SCHEMA_VERSION,
   ANNOTATION_V2_SCHEMA_VERSION,
@@ -286,7 +286,7 @@ test('Annotation v2 freezes exact source record identity and normalized archive 
   )
   assert.throws(
     () => normalizeSourceAnnotationReference({ ...sourceAnnotation, path: 'wiki/annotations/folder' }),
-    /\.md file/,
+    /Markdown file/,
   )
   assert.throws(
     () => normalizeSourceAnnotationReference({ ...sourceAnnotation, path: 'wiki/annotations/folder/' }),
@@ -294,11 +294,11 @@ test('Annotation v2 freezes exact source record identity and normalized archive 
   )
   assert.throws(
     () => normalizeSourceAnnotationReference({ ...sourceAnnotation, path: 'wiki/annotations/annotation-1.txt' }),
-    /\.md file/,
+    /Markdown file/,
   )
-  assert.throws(
-    () => normalizeSourceAnnotationReference({ ...sourceAnnotation, path: 'wiki/annotations/annotation-1.MD' }),
-    /\.md file/,
+  assert.equal(
+    normalizeSourceAnnotationReference({ ...sourceAnnotation, path: 'wiki/annotations/annotation-1.MD' }).path,
+    'wiki/annotations/annotation-1.MD',
   )
   assert.throws(
     () => normalizeSourceAnnotationReference({ ...sourceAnnotation, path: '/wiki/annotations/annotation-1.md' }),
@@ -316,12 +316,17 @@ test('Annotation v2 freezes exact source record identity and normalized archive 
     () => normalizeSourceAnnotationReference({ ...sourceAnnotation, path: 'wiki\\annotations\\annotation-1.md' }),
     /forward slashes/,
   )
+  const cjkBoundaryPath = 'wiki/annotations/' + '界'.repeat(492) + '.md'
+  const surrogateBoundaryPath = 'wiki/annotations/' + '🧬'.repeat(246) + '.md'
+  assert.equal(cjkBoundaryPath.length, ANNOTATION_RECORD_PATH_MAX_LENGTH)
+  assert.equal(surrogateBoundaryPath.length, ANNOTATION_RECORD_PATH_MAX_LENGTH)
+  assert.ok(utf8ByteLength(cjkBoundaryPath) > 1024)
+  assert.equal(utf8ByteLength(surrogateBoundaryPath), 1004)
+  assert.equal(normalizeSourceAnnotationReference({ ...sourceAnnotation, path: cjkBoundaryPath }).path, cjkBoundaryPath)
+  assert.equal(normalizeSourceAnnotationReference({ ...sourceAnnotation, path: surrogateBoundaryPath }).path, surrogateBoundaryPath)
   assert.throws(
-    () => normalizeSourceAnnotationReference({
-      ...sourceAnnotation,
-      path: 'wiki/annotations/' + '界'.repeat(ANNOTATION_RECORD_PATH_MAX_BYTES) + '.md',
-    }),
-    /1024 UTF-8 bytes/,
+    () => normalizeSourceAnnotationReference({ ...sourceAnnotation, path: 'wiki/annotations/' + 'a'.repeat(493) + '.md' }),
+    /512 JavaScript UTF-16 code units/,
   )
   assert.deepEqual(normalizeAnnotationArchiveTargets(['knowledge/findings.md', '知识/证据.md']), [
     'knowledge/findings.md',
