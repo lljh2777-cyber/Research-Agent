@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "archiveInput": {
+    "operation": "archive-annotation",
+    "sourceAnnotation": {
+      "id": "annotation-cjk-1",
+      "revision": "annotation-rev-7"
+    },
+    "targets": [
+      "knowledge/findings.md",
+      "知识/证据汇总.md"
+    ]
+  },
+  "cancellationError": {
+    "code": "archive_cancelled",
+    "message": "Archive run was cancelled."
+  },
+  "bounds": {
+    "parserToleranceBytes": 262144,
+    "persistenceContentBytes": 65536,
+    "runtimeRequestBytes": 131072
+  },
+  "invalidCompletedHalfStates": [
+    {
+      "state": "completed",
+      "targets": [],
+      "runId": "run-invalid",
+      "error": null
+    },
+    {
+      "state": "completed",
+      "targets": [
+        "knowledge/result.md"
+      ],
+      "runId": null,
+      "error": null
+    }
+  ]
+}

@@ -2,16 +2,27 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  ANNOTATION_ARCHIVE_ERROR_MESSAGE_MAX_BYTES,
+  ANNOTATION_MARKDOWN_MAX_BYTES,
+  ANNOTATION_PATCH_CONTENT_MAX_BYTES,
   ANNOTATION_PATCH_SCHEMA_VERSION,
+  ANNOTATION_SECTION_MAX_BYTES,
   ANNOTATION_SCHEMA_VERSION,
+  ANNOTATION_V2_SCHEMA_VERSION,
   RELOCATION_SCHEMA_VERSION,
+  createArchiveCancellationError,
   createAnnotationPatchIntent,
   createTextAnchor,
+  migrateAnnotationToV2,
   normalizeAnnotation,
+  normalizeAnnotationArchiveTargets,
+  normalizeArchiveAnnotationInput,
+  normalizeSourceAnnotationReference,
   normalizeTextAnchor,
   parseAnnotationMarkdown,
   relocateTextAnchor,
   serializeAnnotationMarkdown,
+  utf8ByteLength,
 } from './annotation.js'
 
 function annotationFixture() {
@@ -158,6 +169,158 @@ test('Annotation v1 archive invariants are explicit', () => {
   assert.throws(() => normalizeAnnotation(annotation), /updatedAt must not precede/)
 })
 
+test('Annotation v1 migrates explicitly to v2 without fabricated provenance or archive identity', () => {
+  const active = migrateAnnotationToV2(annotationFixture())
+  assert.equal(active.schemaVersion, ANNOTATION_V2_SCHEMA_VERSION)
+  assert.equal(active.aiProvenance, null)
+  assert.deepEqual(active.archive, { state: 'none', targets: [], runId: null, error: null })
+  assert.equal(active.archived, false)
+
+  const legacy = annotationFixture()
+  legacy.archived = true
+  legacy.timestamps.archivedAt = '2026-08-09T12:06:00.000Z'
+  const archived = migrateAnnotationToV2(legacy)
+  assert.deepEqual(archived.archive, { state: 'completed', targets: [], runId: null, error: null })
+  assert.equal(archived.archived, true)
+  assert.equal(archived.aiProvenance, null)
+})
+
+test('Annotation v2 projects archived only for completed archive state', () => {
+  const base = migrateAnnotationToV2(annotationFixture())
+  const pending = normalizeAnnotation({
+    ...base,
+    archived: true,
+    archive: { state: 'pending', targets: ['knowledge/findings.md'], runId: 'run-1', error: null },
+  })
+  assert.equal(pending.archived, false)
+  assert.equal(pending.timestamps.archivedAt, null)
+
+  const failed = normalizeAnnotation({
+    ...pending,
+    archive: {
+      state: 'failed',
+      targets: pending.archive.targets,
+      runId: pending.archive.runId,
+      error: createArchiveCancellationError(),
+    },
+  })
+  assert.equal(failed.archived, false)
+  assert.deepEqual(failed.archive.error, {
+    code: 'archive_cancelled',
+    message: 'Archive run was cancelled.',
+  })
+
+  const completedAt = '2026-08-09T12:07:00.000Z'
+  const completed = normalizeAnnotation({
+    ...pending,
+    archive: { ...pending.archive, state: 'completed' },
+    timestamps: { ...pending.timestamps, updatedAt: completedAt, archivedAt: completedAt },
+  })
+  assert.equal(completed.archived, true)
+})
+
+test('Annotation v2 rejects completed archive target/runId half-states through normalize, serialize, and parse', () => {
+  const base = migrateAnnotationToV2(annotationFixture())
+  const invalidArchives = [
+    { state: 'completed', targets: [], runId: 'run-invalid', error: null },
+    { state: 'completed', targets: ['knowledge/result.md'], runId: null, error: null },
+  ]
+  for (const archive of invalidArchives) {
+    const invalid = {
+      ...base,
+      archive,
+      timestamps: {
+        ...base.timestamps,
+        updatedAt: '2026-08-09T12:07:00.000Z',
+        archivedAt: '2026-08-09T12:07:00.000Z',
+      },
+    }
+    assert.throws(() => normalizeAnnotation(invalid), /paired empty targets\/null runId/)
+    assert.throws(() => serializeAnnotationMarkdown(invalid), /paired empty targets\/null runId/)
+
+    const validLegacy = serializeAnnotationMarkdown({
+      ...invalid,
+      archive: { state: 'completed', targets: [], runId: null, error: null },
+    })
+    const invalidMarkdown = validLegacy.replace(
+      'archive: ' + JSON.stringify({ state: 'completed', targets: [], runId: null, error: null }),
+      'archive: ' + JSON.stringify(archive),
+    )
+    assert.throws(() => parseAnnotationMarkdown(invalidMarkdown), /paired empty targets\/null runId/)
+  }
+})
+
+test('Annotation v2 migration and archive lifecycle preserve Web anchoring and relocation semantics', () => {
+  const original = '# Findings\nA durable evidence statement.\n'
+  const revised = '# Findings\nA newly durable evidence statement.\n'
+  const migrated = migrateAnnotationToV2(annotationFixture())
+  const before = relocateTextAnchor(revised, migrated.anchor)
+  const pending = normalizeAnnotation({
+    ...migrated,
+    archive: { state: 'pending', targets: ['knowledge/findings.md'], runId: 'run-1', error: null },
+  })
+
+  assert.deepEqual(pending.source, migrated.source)
+  assert.deepEqual(pending.anchor, migrated.anchor)
+  assert.deepEqual(pending.sections, migrated.sections)
+  assert.deepEqual(relocateTextAnchor(revised, pending.anchor), before)
+  assert.equal(original.slice(migrated.anchor.position.start, migrated.anchor.position.end), migrated.anchor.quote.exact)
+})
+
+test('Annotation v2 freezes opaque source revision and normalized archive target semantics', () => {
+  assert.deepEqual(normalizeSourceAnnotationReference({ id: 'annotation-1', revision: 'annotation-rev-7' }), {
+    id: 'annotation-1',
+    revision: 'annotation-rev-7',
+  })
+  assert.deepEqual(normalizeAnnotationArchiveTargets(['knowledge/findings.md', '知识/证据.md']), [
+    'knowledge/findings.md',
+    '知识/证据.md',
+  ])
+  assert.throws(() => normalizeAnnotationArchiveTargets(['../escape.md']), /normalized relative Vault path/)
+  assert.throws(() => normalizeAnnotationArchiveTargets(['knowledge\\escape.md']), /forward slashes/)
+  assert.throws(() => normalizeAnnotationArchiveTargets(['knowledge/bad\npath.md']), /control characters/)
+  assert.throws(() => normalizeAnnotationArchiveTargets(['knowledge/findings.md', 'knowledge/findings.md']), /duplicate/)
+  assert.throws(() => normalizeAnnotationArchiveTargets(['knowledge/findings.txt']), /Markdown file/)
+  assert.deepEqual(normalizeArchiveAnnotationInput({
+    operation: 'archive-annotation',
+    sourceAnnotation: { id: 'annotation-1', revision: 'annotation-rev-7' },
+    targets: ['knowledge/findings.md'],
+  }), {
+    operation: 'archive-annotation',
+    sourceAnnotation: { id: 'annotation-1', revision: 'annotation-rev-7' },
+    targets: ['knowledge/findings.md'],
+  })
+  assert.throws(() => normalizeArchiveAnnotationInput({
+    operation: 'archive-annotation',
+    sourceAnnotation: { id: 'annotation-1', revision: 'annotation-rev-7' },
+    targets: [],
+  }), /must not be empty/)
+})
+
+test('Annotation v2 enforces safe provenance and UTF-8 section bounds', () => {
+  const base = migrateAnnotationToV2(annotationFixture())
+  const withProvenance = normalizeAnnotation({
+    ...base,
+    aiProvenance: {
+      providerId: 'provider-id',
+      modelId: 'model-id',
+      generatedAt: base.timestamps.updatedAt,
+      apiKey: 'must-be-dropped',
+    },
+  })
+  assert.deepEqual(Object.keys(withProvenance.aiProvenance), ['providerId', 'modelId', 'generatedAt'])
+  assert.equal('apiKey' in withProvenance.aiProvenance, false)
+  assert.throws(() => normalizeAnnotation({
+    ...base,
+    sections: { ...base.sections, manual: '界'.repeat(Math.floor(ANNOTATION_SECTION_MAX_BYTES / 3) + 1) },
+  }), /65536 UTF-8 bytes/)
+  assert.throws(
+    () => createArchiveCancellationError('x'.repeat(ANNOTATION_ARCHIVE_ERROR_MESSAGE_MAX_BYTES + 1)),
+    /1024 UTF-8 bytes/,
+  )
+  assert.throws(() => parseAnnotationMarkdown('x'.repeat(ANNOTATION_MARKDOWN_MAX_BYTES + 1)), /262144 UTF-8 bytes/)
+})
+
 test('annotation writes are represented only as a versioned patch intent', () => {
   const annotation = annotationFixture()
   const patchIntent = createAnnotationPatchIntent(annotation, {
@@ -181,6 +344,69 @@ test('annotation writes are represented only as a versioned patch intent', () =>
     expectedRevision: 'annotation-rev-2',
   })
   assert.deepEqual(parseAnnotationMarkdown(patchIntent.content), annotation)
+})
+
+test('AnnotationPatchIntentV1 remains unchanged for Annotation v2 payloads', () => {
+  const annotation = migrateAnnotationToV2(annotationFixture())
+  const intent = createAnnotationPatchIntent(annotation, {
+    path: '.annotations/annotation-1.md',
+    expectedRevision: null,
+  })
+  assert.deepEqual(Object.keys(intent), ['schemaVersion', 'kind', 'annotationId', 'target', 'contentType', 'content'])
+  assert.equal(intent.schemaVersion, 1)
+  assert.equal(parseAnnotationMarkdown(intent.content).schemaVersion, 2)
+})
+
+test('persistable v2 counts complete Markdown and accepts exactly 65536 UTF-8 bytes', () => {
+  const annotation = migrateAnnotationToV2(annotationFixture())
+  const withCjkPrefix = normalizeAnnotation({
+    ...annotation,
+    sections: { ...annotation.sections, manual: '界' },
+  })
+  const prefixBytes = utf8ByteLength(serializeAnnotationMarkdown(withCjkPrefix))
+  const exact = normalizeAnnotation({
+    ...annotation,
+    sections: {
+      ...annotation.sections,
+      manual: '界' + 'x'.repeat(ANNOTATION_PATCH_CONTENT_MAX_BYTES - prefixBytes),
+    },
+  })
+  const intent = createAnnotationPatchIntent(exact, {
+    path: '.annotations/annotation-exact.md',
+    expectedRevision: null,
+  })
+  assert.equal(utf8ByteLength(intent.content), ANNOTATION_PATCH_CONTENT_MAX_BYTES)
+  assert.equal(parseAnnotationMarkdown(intent.content).sections.manual.startsWith('界'), true)
+
+  const oneByteOver = normalizeAnnotation({
+    ...exact,
+    sections: { ...exact.sections, manual: exact.sections.manual + 'x' },
+  })
+  const oversized = serializeAnnotationMarkdown(oneByteOver)
+  assert.equal(utf8ByteLength(oversized), ANNOTATION_PATCH_CONTENT_MAX_BYTES + 1)
+  assert.deepEqual(parseAnnotationMarkdown(oversized), oneByteOver)
+  assert.throws(() => createAnnotationPatchIntent(oneByteOver, {
+    path: '.annotations/annotation-over.md',
+    expectedRevision: null,
+  }), /65536-byte Runtime write ceiling/)
+})
+
+test('oversized external v2 remains readable but cannot produce AnnotationPatchIntentV1', () => {
+  const annotation = migrateAnnotationToV2(annotationFixture())
+  const large = normalizeAnnotation({
+    ...annotation,
+    sections: { ...annotation.sections, manual: '界'.repeat(21_700) },
+  })
+  const serialized = serializeAnnotationMarkdown(large)
+  const contentBytes = utf8ByteLength(serialized)
+
+  assert.ok(contentBytes > ANNOTATION_PATCH_CONTENT_MAX_BYTES)
+  assert.ok(contentBytes <= ANNOTATION_MARKDOWN_MAX_BYTES)
+  assert.deepEqual(parseAnnotationMarkdown(serialized), large)
+  assert.throws(() => createAnnotationPatchIntent(large, {
+    path: '.annotations/annotation-large.md',
+    expectedRevision: null,
+  }), /65536-byte Runtime write ceiling/)
 })
 
 test('TextAnchor normalization rejects unknown schema versions', () => {

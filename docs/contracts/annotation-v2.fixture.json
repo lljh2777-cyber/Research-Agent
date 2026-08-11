@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 2,
+  "id": "annotation-cjk-1",
+  "source": {
+    "vaultId": "vault-1",
+    "noteId": "note-1",
+    "path": "论文/发现.md",
+    "revision": "note-rev-8"
+  },
+  "anchor": {
+    "schemaVersion": 1,
+    "quote": {
+      "exact": "selected evidence",
+      "prefix": "# Findings\nThe ",
+      "suffix": " is reproducible.\n"
+    },
+    "position": {
+      "start": 15,
+      "end": 32
+    },
+    "heading": {
+      "text": "Findings",
+      "level": 1,
+      "line": 1,
+      "relativeStartLine": 1,
+      "relativeEndLine": 1
+    },
+    "line": {
+      "start": 2,
+      "end": 2
+    }
+  },
+  "sections": {
+    "manual": "研究者复核：证据可重复。",
+    "ai": "模型解释：该结论与 [[证据]] 一致。"
+  },
+  "aiProvenance": {
+    "providerId": "provider-safe-id",
+    "modelId": "model-safe-id",
+    "generatedAt": "2026-08-11T04:10:00.000Z"
+  },
+  "archive": {
+    "state": "completed",
+    "targets": [
+      "knowledge/findings.md",
+      "知识/证据汇总.md"
+    ],
+    "runId": "archive-run-1",
+    "error": null
+  },
+  "archived": true,
+  "timestamps": {
+    "createdAt": "2026-08-11T04:00:00.000Z",
+    "updatedAt": "2026-08-11T04:15:00.000Z",
+    "archivedAt": "2026-08-11T04:15:00.000Z"
+  },
+  "relocation": {
+    "schemaVersion": 1,
+    "status": "anchored",
+    "strategy": "position",
+    "start": 15,
+    "end": 32,
+    "candidates": 1
+  }
+}

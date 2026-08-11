@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "baseAnnotationFixture": "annotation-v2.fixture.json",
+  "contentBoundary": {
+    "maximumUtf8Bytes": 65536,
+    "manualPrefix": "界",
+    "manualFill": "x",
+    "exactLimitAccepted": true,
+    "oneAdditionalFillByteRejected": true
+  },
+  "externalParserBoundary": {
+    "maximumUtf8Bytes": 262144,
+    "runtimeAdapterReadListSupportedAboveContentBoundary": false
+  },
+  "runtimeEnvelopeAdversary": {
+    "manualCharacter": "\u0000",
+    "repeat": 21700,
+    "purpose": "JSON escaping can expand a content-compliant record; Runtime owns final request-envelope preflight."
+  }
+}
