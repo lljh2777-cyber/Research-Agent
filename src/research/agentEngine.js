@@ -1,5 +1,6 @@
 import {
   DEFAULT_RESEARCH_RUN_POLICY,
+  MAX_RESEARCH_RUN_ACTION_OUTPUT_BYTES,
   RESEARCH_RUN_EVENT,
   normalizeResearchRunPolicy,
 } from './runProtocol.js'
@@ -21,6 +22,17 @@ function safeError(error) {
     message: error?.message || 'Research run failed.',
     code: error?.code || null,
     retryable: Boolean(error?.retryable),
+  }
+}
+
+function safeTerminalResult(error) {
+  if (error?.terminalResult === undefined) return undefined
+  try {
+    const serialized = JSON.stringify(error.terminalResult)
+    if (new TextEncoder().encode(serialized).length > MAX_RESEARCH_RUN_ACTION_OUTPUT_BYTES) return undefined
+    return JSON.parse(serialized)
+  } catch {
+    return undefined
   }
 }
 
@@ -97,10 +109,12 @@ export async function runResearchAgent({
     }
   } catch (error) {
     const cancelled = error?.name === 'AbortError' || signal?.aborted
+    const terminalResult = safeTerminalResult(error)
     await emit(cancelled ? RESEARCH_RUN_EVENT.RUN_CANCELLED : RESEARCH_RUN_EVENT.RUN_FAILED, {
       iteration: toolTrace.length + 1,
       error: safeError(cancelled ? abortError() : error),
       toolTrace: [...toolTrace],
+      ...(terminalResult === undefined ? {} : { result: terminalResult }),
     })
     throw cancelled ? abortError() : error
   }

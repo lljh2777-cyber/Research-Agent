@@ -3,8 +3,10 @@ import {
   createKnowledgeActionOutput,
   KNOWLEDGE_ACTION_STATUS,
   KNOWLEDGE_ACTION_TOOL_DESCRIPTORS,
+  KNOWLEDGE_TOOL_IDS,
   parseKnowledgeActionCall,
 } from './research/knowledgeAgent.js'
+import { consumeKnowledgeArchiveExecutionResult } from './research/knowledgeArchive.js'
 
 export const TOOL_EFFECTS = Object.freeze({ READ: 'read', WRITE: 'write', DESTRUCTIVE: 'destructive' })
 
@@ -81,7 +83,7 @@ export function createToolRegistry(entries, permissions, { requestApproval } = {
         }
         return await Promise.resolve(entry.execute(call, { approved, prepared }))
       } catch (error) {
-        if (error?.name === 'AbortError') throw error
+        if (error?.name === 'AbortError' || error?.terminalResult !== undefined) throw error
         return toolError(call, error?.message || 'Tool execution failed.')
       }
     },
@@ -100,18 +102,26 @@ function capabilityState(capabilities, capability) {
 }
 
 function knowledgeActionResult(call, descriptor, request, value = {}) {
-  const output = createKnowledgeActionOutput(descriptor.id, {
-    requestId: request.requestId,
-    runId: request.runId,
-    status: value.status,
-    summary: value.summary,
-    data: value.data,
-    artifacts: value.artifacts,
-    error: value.error,
-    effect: value.effect,
+  const output = descriptor.id === KNOWLEDGE_TOOL_IDS.SYNTHESIS
+    ? consumeKnowledgeArchiveExecutionResult(request, value)
+    : createKnowledgeActionOutput(descriptor.id, {
+      requestId: request.requestId,
+      runId: request.runId,
+      status: value.status,
+      summary: value.summary,
+      data: value.data,
+      artifacts: value.artifacts,
+      error: value.error,
+      effect: value.effect,
   })
-  if (output.status === KNOWLEDGE_ACTION_STATUS.CANCELLED) {
-    throw Object.assign(new Error(output.summary || 'Knowledge action cancelled.'), { name: 'AbortError' })
+  if (
+    output.status === KNOWLEDGE_ACTION_STATUS.CANCELLED
+    || (descriptor.id === KNOWLEDGE_TOOL_IDS.SYNTHESIS && output.status === KNOWLEDGE_ACTION_STATUS.FAILED)
+  ) {
+    throw Object.assign(new Error(output.summary || 'Knowledge action cancelled.'), {
+      ...(output.status === KNOWLEDGE_ACTION_STATUS.CANCELLED ? { name: 'AbortError' } : {}),
+      terminalResult: output,
+    })
   }
   return {
     id: call.id,
@@ -150,7 +160,7 @@ export function createKnowledgeActionToolEntries({
         return knowledgeActionResult(call, descriptor, request, await executeAction(request, { descriptor }))
       },
     }
-  })
+    })
 }
 
 export function createKnowledgeActionToolRegistry(options = {}) {

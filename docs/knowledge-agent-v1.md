@@ -133,3 +133,9 @@ Consumption chooses the target surface while preserving session, run, cursor, an
 ## Executable Knowledge reads
 
 `knowledge.query` and `knowledge.explain` execute through the existing Research Run v1 Provider boundary using the Core contract in `docs/knowledge-read-result-v1.md`. A real completed model result is normalized into KnowledgeActionOutputV1 with nested `data.kind: "knowledge-read-result"`; only its guarded non-empty `data.text` may become AI-authored annotation text. Empty, failed, cancelled, oversized, or tool-calling results never qualify as completed. Runtime advertises the fail-closed `knowledgeReads` capability with transport `research-run`; no Action Runner mapping or new endpoint is used.
+
+## Formal Annotation archive
+
+`knowledge.synthesis.write` now has the single typed formal-archive input described in `docs/knowledge-archive-result-v1.md`. The input uses the KB-owned exact `archive-annotation` fragment with `sourceAnnotation: {id,path,revision}`; the path is the exact case-preserved Runtime record path and is never derived by Core or React. The existing Action envelope continues to own request/session/run identity, opaque Context, authorization-root scope, expected revision, stable idempotency, and fresh per-call approval. Generic instruction text cannot identify archive targets.
+
+The result remains KnowledgeActionOutputV1 and uses `data.kind: "knowledge-archive-result"`. Its target entries are execution evidence and are intentionally distinct from KB Annotation v2 `archive.targets`, which are requested paths only. Failed and cancelled results retain any reported bounded partial target evidence. Research Run v1 remains the only event, cancellation, replay, cursor, and terminal engine.

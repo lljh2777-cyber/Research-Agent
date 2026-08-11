@@ -1,3 +1,12 @@
+import {
+  ANNOTATION_ARCHIVE_MAX_TARGETS,
+  ANNOTATION_ARCHIVE_TARGET_MAX_BYTES,
+  ANNOTATION_ID_MAX_BYTES,
+  ANNOTATION_RECORD_PATH_MAX_LENGTH,
+  ANNOTATION_REVISION_MAX_BYTES,
+  normalizeArchiveAnnotationInput,
+} from '../annotations/annotation.js'
+
 export const KNOWLEDGE_AGENT_SCHEMA_VERSION = 1
 export const KNOWLEDGE_ACTION_SCHEMA_VERSION = 1
 export const KNOWLEDGE_SESSION_HANDOFF_SCHEMA_VERSION = 1
@@ -107,6 +116,9 @@ function validateSchema(value, schema, path = 'Knowledge action arguments') {
     }
   }
   if (Array.isArray(value)) {
+    if (schema.minItems !== undefined && value.length < schema.minItems) {
+      throw new Error(`${path} contains too few items.`)
+    }
     if (schema.maxItems !== undefined && value.length > schema.maxItems) {
       throw new Error(`${path} contains too many items.`)
     }
@@ -328,8 +340,26 @@ export const KNOWLEDGE_ACTION_TOOL_DESCRIPTORS = Object.freeze([
     ...WRITE_POLICY,
     inputSchema: inputSchema({
       write: true,
-      inputProperties: { instruction: { type: 'string', minLength: 1, maxLength: 4_000 } },
-      inputRequired: ['instruction'],
+      inputProperties: {
+        operation: { const: 'archive-annotation' },
+        sourceAnnotation: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', minLength: 1, maxLength: ANNOTATION_ID_MAX_BYTES },
+            path: { type: 'string', minLength: 1, maxLength: ANNOTATION_RECORD_PATH_MAX_LENGTH },
+            revision: { type: 'string', minLength: 1, maxLength: ANNOTATION_REVISION_MAX_BYTES },
+          },
+          required: ['id', 'path', 'revision'],
+          additionalProperties: false,
+        },
+        targets: {
+          type: 'array',
+          minItems: 1,
+          maxItems: ANNOTATION_ARCHIVE_MAX_TARGETS,
+          items: { type: 'string', minLength: 1, maxLength: ANNOTATION_ARCHIVE_TARGET_MAX_BYTES },
+        },
+      },
+      inputRequired: ['operation', 'sourceAnnotation', 'targets'],
     }),
     outputSchema: OUTPUT_SCHEMA,
   }),
@@ -378,11 +408,15 @@ export function createKnowledgeActionInput(descriptorId, {
 } = {}) {
   const descriptor = getKnowledgeActionToolDescriptor(descriptorId)
   if (!descriptor) throw new Error(`Unknown Knowledge Action Tool: ${String(descriptorId || 'missing')}.`)
-  const normalizedInput = cloneJson(input, 'Knowledge action input')
   const normalizedScope = descriptor.requiresScope ? normalizeKnowledgeActionScope(scope) : null
   const normalizedIdempotencyKey = descriptor.requiresIdempotencyKey
     ? requiredString(idempotencyKey, 'Knowledge action idempotency key')
     : null
+  const clonedInput = cloneJson(input, 'Knowledge action input')
+  validateSchema(clonedInput, descriptor.inputSchema.properties.input, 'Knowledge action arguments.input')
+  const normalizedInput = descriptor.id === KNOWLEDGE_TOOL_IDS.SYNTHESIS
+    ? normalizeArchiveAnnotationInput(clonedInput)
+    : clonedInput
   validateSchema({
     input: normalizedInput,
     ...(descriptor.requiresScope
