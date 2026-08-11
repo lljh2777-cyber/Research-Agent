@@ -375,6 +375,7 @@ function App() {
   const mockRunTimersRef = useRef(new Map())
   const toolApprovalResolverRef = useRef(null)
   const knowledgeApprovalCallbackRef = useRef(null)
+  const knowledgeApprovalDeclineCallbackRef = useRef(null)
   const knowledgeApprovalResolvingRef = useRef(false)
   const reattachedResearchRunsRef = useRef(new Set())
   const researchToolRegistryRef = useRef(null)
@@ -1021,7 +1022,7 @@ function App() {
     setKnowledgeAgentSession((current) => current.context === context ? current : { ...current, context })
   }, [])
 
-  const executeKnowledgeRead = useCallback(async (descriptor, prompt, context) => {
+  const executeKnowledgeRead = useCallback(async (descriptor, prompt, context, signal) => {
     const capability = knowledgeReadCapabilityState(runtimeCapabilities, descriptor.toolId)
     if (!capability.available || !supportsLoopbackResearchExecution) {
       throw new Error(capability.reason || 'Knowledge Read execution is unavailable in this Runtime.')
@@ -1068,6 +1069,7 @@ function App() {
         context: currentContext,
         input,
         model: selectedModel.apiModelId,
+        signal,
         executeRun: (runOptions) => executeResearchRun({
           ...runOptions,
           execution: {
@@ -1086,7 +1088,14 @@ function App() {
         runStatus: 'completed',
         messages: [...current.messages, { id: `knowledge-assistant-${cursor}`, role: 'assistant', text }],
       }))
-      return text
+      return {
+        text,
+        aiProvenance: {
+          providerId: selectedModel.providerId,
+          modelId: selectedModel.apiModelId,
+          generatedAt: new Date().toISOString(),
+        },
+      }
     } catch (error) {
       setKnowledgeAgentSession((current) => ({
         ...current,
@@ -1106,7 +1115,8 @@ function App() {
     if (!descriptor?.available) return
     const prompt = options.prompt || `${descriptor.title} the current note.`
     if (['knowledge.query', 'knowledge.explain'].includes(descriptor.toolId)) {
-      return executeKnowledgeRead(descriptor, prompt, options.context)
+      return executeKnowledgeRead(descriptor, prompt, options.context, options.signal)
+        .then((result) => options.includeProvenance ? result : result.text)
     }
     if (descriptor.effect === 'read') return
     const currentContext = knowledgeAgentSession.context
@@ -1114,13 +1124,16 @@ function App() {
     const targetScope = options.targetScope || `${currentContext.vault.name} / ${currentContext.activeNote.path}`
     const idempotencyKey = options.idempotencyKey || `${knowledgeAgentSession.sessionId}:${descriptor.toolId}:${knowledgeAgentSession.cursor + 1}`
     knowledgeApprovalCallbackRef.current = options.onApproved || null
+    knowledgeApprovalDeclineCallbackRef.current = options.onDeclined || null
     setKnowledgeApproval({
       toolId: descriptor.toolId,
-      actionTitle: descriptor.title,
+      actionTitle: options.actionTitle || descriptor.title,
       targetScope,
       idempotencyKey,
       prompt,
       payload: options.payload || null,
+      approvalDetails: options.approvalDetails || null,
+      declinedMessage: options.declinedMessage || null,
     })
     setKnowledgeAgentSession((current) => ({ ...current, runId: current.runId || `knowledge-run-${current.cursor + 1}`, runStatus: 'waiting-approval' }))
   }, [executeKnowledgeRead, knowledgeAgentSession])
@@ -1129,7 +1142,9 @@ function App() {
     if (!knowledgeApproval || knowledgeApprovalResolvingRef.current) return
     knowledgeApprovalResolvingRef.current = true
     const callback = knowledgeApprovalCallbackRef.current
+    const declineCallback = knowledgeApprovalDeclineCallbackRef.current
     knowledgeApprovalCallbackRef.current = null
+    knowledgeApprovalDeclineCallbackRef.current = null
     let completed = approved
     let failureMessage = ''
     if (approved) {
@@ -1138,6 +1153,12 @@ function App() {
       } catch (error) {
         completed = false
         failureMessage = error?.message || 'The approved write failed.'
+      }
+    } else {
+      try {
+        await declineCallback?.()
+      } catch (error) {
+        failureMessage = error?.message || 'The cancellation callback failed.'
       }
     }
     setKnowledgeAgentSession((current) => {
@@ -1149,7 +1170,7 @@ function App() {
         messages: [
           ...current.messages,
           { id: `knowledge-user-${cursor}`, role: 'user', text: knowledgeApproval.prompt },
-          { id: `knowledge-assistant-${cursor}`, role: 'assistant', text: completed ? `${knowledgeApproval.actionTitle} completed for ${knowledgeApproval.targetScope}.` : approved ? `${knowledgeApproval.actionTitle} failed: ${failureMessage}` : `${knowledgeApproval.actionTitle} was cancelled. No Vault changes were made.` },
+          { id: `knowledge-assistant-${cursor}`, role: 'assistant', text: completed ? `${knowledgeApproval.actionTitle} completed for ${knowledgeApproval.targetScope}.` : approved ? `${knowledgeApproval.actionTitle} failed: ${failureMessage}` : knowledgeApproval.declinedMessage || `${knowledgeApproval.actionTitle} was cancelled. No Vault changes were made.` },
         ],
       }
     })
@@ -1725,6 +1746,14 @@ function App() {
           onContinueInResearch={continueKnowledgeInResearch}
           onKnowledgeContextChange={handleKnowledgeContextChange}
           annotationRuntime={runtimeAdapter.annotations}
+          actionRuntime={runtimeAdapter.actions}
+          provider={selectedModel ? {
+            providerId: selectedModel.providerId || selectedModel.authProvider || 'unknown',
+            providerName: selectedModel.provider || selectedModel.authProvider || 'Provider',
+            modelId: selectedModel.apiModelId || selectedModel.id,
+            modelName: selectedModel.name || selectedModel.apiModelId || selectedModel.id,
+          } : null}
+          onOpenSettings={() => handleOpenSection('settings')}
         /> : activeSection === 'pipelines' ? (
           <PipelinesSection vaultName={vaultName} noteCount={vaultNotes.length} runs={pipelineRuns} runningPipelineId={pipelineRunningId} onRun={handleRunPipeline} onViewRun={handleViewPipelineRun} onConnectVault={handleConnectVault} />
         ) : activeSection === 'runs' ? (

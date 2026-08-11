@@ -34,13 +34,17 @@ import { AgentConversationPanel } from './features/knowledge/AgentConversationPa
 import { AnnotationEditor, SelectionChooser } from './features/knowledge/KnowledgeRoundTwo.jsx'
 import { createKnowledgeContextFixture } from './features/knowledge/fixtures.js'
 import { activeAnnotationRanges, isEditableSelectionTarget, mapDomSelectionToMarkdown, splitSourceText } from './features/knowledge/annotationSelection.js'
-import { createAnnotationPatchIntent, createTextAnchor, normalizeAnnotation, parseAnnotationMarkdown, relocateTextAnchor } from './annotations/annotation.js'
+import { createAnnotationPatchIntent, createTextAnchor, migrateAnnotationToV2, normalizeAnnotation, normalizeAnnotationArchiveTargets, parseAnnotationMarkdown, relocateTextAnchor } from './annotations/annotation.js'
+import { createKnowledgeArchiveActionInput, createKnowledgeArchiveResult, knowledgeArchiveResultToAnnotationArchive } from './research/knowledgeArchive.js'
+import { executeKnowledgeArchiveAction } from './features/knowledge/archiveActionClient.js'
 
 const LAYOUT_KEY = 'bioresearch-os:knowledge-dock-layout'
 
-function annotationPath(annotationId) {
-  const safeId = String(annotationId).replace(/[^a-zA-Z0-9._-]/g, '-')
-  return `wiki/annotations/${safeId}.md`
+function newAnnotationWriteTarget(annotationId) {
+  if (!/^annotation-[a-zA-Z0-9._-]+$/.test(annotationId)) {
+    throw new TypeError('A new annotation needs a generated safe id before its first save.')
+  }
+  return `wiki/annotations/${annotationId}.md`
 }
 
 const PANEL_META = {
@@ -280,7 +284,7 @@ function MarkdownDocument({ note, notes, selection, annotations, onNavigate, onS
           </div>
         })}
       </div>
-      <SelectionChooser selection={selection} position={chooserPosition} onAction={(action) => { setChooserPosition(null); onSelectionAction(action) }} onDismiss={() => setChooserPosition(null)} aiAvailable={aiAvailable} aiUnavailableReason={aiUnavailableReason} />
+      <SelectionChooser selection={selection} position={chooserPosition} onAction={(action) => { const position = chooserPosition; setChooserPosition(null); onSelectionAction(action, position) }} onDismiss={() => setChooserPosition(null)} aiAvailable={aiAvailable} aiUnavailableReason={aiUnavailableReason} />
     </article>
   )
 }
@@ -437,6 +441,9 @@ export default function KnowledgeGraphSection({
   onContinueInResearch,
   onKnowledgeContextChange,
   annotationRuntime,
+  actionRuntime,
+  provider,
+  onOpenSettings,
 }) {
   const graph = useMemo(() => createKnowledgeGraph(index), [index])
   const notes = index?.notes || []
@@ -458,18 +465,54 @@ export default function KnowledgeGraphSection({
   const [annotationFocusSection, setAnnotationFocusSection] = useState('manual')
   const [annotationPersistenceMessage, setAnnotationPersistenceMessage] = useState('')
   const [annotationAiStatus, setAnnotationAiStatus] = useState(null)
+  const [annotationStage, setAnnotationStage] = useState('view')
+  const [annotationPosition, setAnnotationPosition] = useState(null)
+  const [annotationInitialDraft, setAnnotationInitialDraft] = useState({ manual: '', ai: '' })
+  const [annotationProvenance, setAnnotationProvenance] = useState(null)
+  const [annotationCloseGuard, setAnnotationCloseGuard] = useState(false)
+  const [annotationArchiveTargets, setAnnotationArchiveTargets] = useState('')
+  const [annotationArchiveEvidence, setAnnotationArchiveEvidence] = useState([])
+  const [annotationArchiveOutcome, setAnnotationArchiveOutcome] = useState(null)
+  const [annotationArchiveRunning, setAnnotationArchiveRunning] = useState(false)
   const pendingExplainIdRef = useRef(null)
+  const explainControllerRef = useRef(null)
+  const archiveControllerRef = useRef(null)
 
   const clearAnnotationEditor = () => {
     pendingExplainIdRef.current = null
+    explainControllerRef.current?.abort()
+    explainControllerRef.current = null
     setActiveAnnotation(null)
     setAnnotationDraft({ manual: '', ai: '' })
+    setAnnotationInitialDraft({ manual: '', ai: '' })
+    setAnnotationProvenance(null)
     setAnnotationAiStatus(null)
+    setAnnotationStage('view')
+    setAnnotationPosition(null)
+    setAnnotationCloseGuard(false)
+    setAnnotationArchiveTargets('')
+    setAnnotationArchiveEvidence([])
+    setAnnotationArchiveOutcome(null)
+    setAnnotationArchiveRunning(false)
   }
 
-  const dismissAnnotationWorkbench = () => {
+  const discardAnnotationWorkbench = () => {
     clearAnnotationEditor()
     setAnnotationWorkbenchOpen(false)
+  }
+
+  const annotationHasUnsavedChanges = Boolean(activeAnnotation && (
+    annotationDraft.manual !== annotationInitialDraft.manual
+    || annotationDraft.ai !== annotationInitialDraft.ai
+    || annotationStage === 'generating'
+  ))
+
+  const dismissAnnotationWorkbench = () => {
+    if (annotationHasUnsavedChanges) {
+      setAnnotationCloseGuard(true)
+      return
+    }
+    discardAnnotationWorkbench()
   }
 
   useEffect(() => {
@@ -617,9 +660,9 @@ export default function KnowledgeGraphSection({
     if (node.note) handleSelectNote(node.note)
   }
 
-  const openAnnotationEditor = (focusSection = 'manual') => {
-    if (!knowledgeContext?.selection) return
-    const anchor = knowledgeContext.selection.anchor
+  const openAnnotationEditor = (focusSection = 'manual', position = null) => {
+    const anchor = knowledgeContext?.selection?.anchor || activeAnnotation?.anchor
+    if (!anchor) return
     const existing = annotations.find((item) => item.source.noteId === selectedNote?.id && item.anchor.position.start === anchor.position.start && item.anchor.position.end === anchor.position.end)
     const timestamp = new Date().toISOString()
     const next = existing || normalizeAnnotation({
@@ -637,20 +680,77 @@ export default function KnowledgeGraphSection({
       timestamps: { createdAt: timestamp, updatedAt: timestamp, archivedAt: null },
       relocation: relocateTextAnchor(selectedNote.body, anchor),
     })
-    setActiveAnnotation(next)
+    const migrated = migrateAnnotationToV2(next)
+    setActiveAnnotation(migrated)
     setAnnotationWorkbenchOpen(true)
-    setAnnotationDraft({ ...next.sections })
+    setAnnotationDraft({ ...migrated.sections })
+    setAnnotationInitialDraft({ ...migrated.sections })
+    setAnnotationProvenance(migrated.aiProvenance)
     setAnnotationFocusSection(focusSection)
+    setAnnotationStage('edit')
+    setAnnotationPosition(position || { x: Math.max(8, window.innerWidth - 370), y: 72 })
     setAnnotationPersistenceMessage('')
     setAnnotationAiStatus(null)
-    return next
+    setAnnotationCloseGuard(false)
+    return migrated
   }
 
-  const requestAnnotationWrite = (nextAnnotation, verb) => {
+  const requireExactWrittenAnnotation = async (nextAnnotation, result) => {
+    if (typeof result?.path !== 'string' || !result.path || typeof result?.revision !== 'string' || !result.revision) {
+      throw new Error('Runtime saved the annotation without returning its exact path and revision; formal archive is disabled.')
+    }
+    if (result.annotationId !== nextAnnotation.id) {
+      throw new Error('Runtime returned a mismatched annotation identity; formal archive is disabled.')
+    }
+    const loaded = await annotationRuntime.read({ path: result.path })
+    if (!loaded?.ok || typeof loaded.content !== 'string') {
+      throw new Error(loaded?.error || 'Runtime saved the annotation, but its exact record could not be reread.')
+    }
+    if (loaded.path !== result.path || loaded.revision !== result.revision) {
+      throw new Error('Runtime write/read identity did not match exactly; formal archive is disabled.')
+    }
+    const record = normalizeAnnotation(parseAnnotationMarkdown(loaded.content))
+    if (record.id !== result.annotationId) {
+      throw new Error('The reread annotation id did not match the Runtime write result; formal archive is disabled.')
+    }
+    return { record, metadata: { path: loaded.path, revision: loaded.revision } }
+  }
+
+  const commitAnnotationWrite = async (nextAnnotation, verb, metadataOverride = null) => {
+    if (!annotationRuntime?.available) throw new Error(annotationRuntime?.reason || 'Annotation persistence is unavailable.')
+    const metadata = metadataOverride || annotationMeta[nextAnnotation.id] || {}
+    const path = metadata.path || newAnnotationWriteTarget(nextAnnotation.id)
+    const intent = createAnnotationPatchIntent(nextAnnotation, { path, expectedRevision: metadata.revision || null })
+    const idempotencyKey = `${nextAnnotation.id}:${nextAnnotation.timestamps.updatedAt}:${verb.toLocaleLowerCase()}`
+    const result = await annotationRuntime.write({ intent, approval: { status: 'approved' }, idempotencyKey })
+    if (!result?.ok) throw new Error(result?.error || result?.reason || 'The annotation could not be saved.')
+    const confirmed = await requireExactWrittenAnnotation(nextAnnotation, result)
+    const nextMetadata = confirmed.metadata
+    setAnnotations((current) => [...current.filter((item) => item.id !== confirmed.record.id), confirmed.record])
+    setAnnotationMeta((current) => ({ ...current, [confirmed.record.id]: nextMetadata }))
+    setActiveAnnotation(confirmed.record)
+    setAnnotationWorkbenchOpen(true)
+    setAnnotationDraft({ ...confirmed.record.sections })
+    setAnnotationInitialDraft({ ...confirmed.record.sections })
+    setAnnotationProvenance(confirmed.record.aiProvenance)
+    setAnnotationStage('view')
+    setAnnotationPersistenceMessage('')
+    return { result, record: confirmed.record, metadata: nextMetadata }
+  }
+
+  const scheduleAnnotationStep = (callback) => {
+    window.setTimeout(() => {
+      Promise.resolve().then(callback).catch((error) => {
+        setAnnotationPersistenceMessage(error?.message || 'The next annotation step could not be prepared.')
+      })
+    }, 0)
+  }
+
+  const requestAnnotationWrite = (nextAnnotation, verb, options = {}) => {
     const descriptor = knowledgeToolDescriptors.find((item) => item.id === 'annotation')
     if (!descriptor?.available || !annotationRuntime?.available) return
-    const metadata = annotationMeta[nextAnnotation.id] || {}
-    const path = metadata.path || annotationPath(nextAnnotation.id)
+    const metadata = options.metadata || annotationMeta[nextAnnotation.id] || {}
+    const path = metadata.path || newAnnotationWriteTarget(nextAnnotation.id)
     const intent = createAnnotationPatchIntent(nextAnnotation, {
       path,
       expectedRevision: metadata.revision || null,
@@ -659,75 +759,207 @@ export default function KnowledgeGraphSection({
     const targetScope = `${knowledgeContext.vault.name} / ${path}`
     onKnowledgeAction(descriptor, {
       prompt: `${verb} annotation for ${knowledgeContext.activeNote.title}`,
+      actionTitle: verb,
       targetScope,
       idempotencyKey,
       payload: intent,
+      declinedMessage: options.declinedMessage,
       onApproved: async () => {
-        const result = await annotationRuntime.write({
-          intent,
-          approval: { status: 'approved' },
-          idempotencyKey,
-        })
-        if (!result?.ok) {
-          const message = result?.error || result?.reason || 'The annotation could not be saved.'
-          setAnnotationPersistenceMessage(message)
-          throw new Error(message)
+        try {
+          const persisted = await commitAnnotationWrite(nextAnnotation, verb, metadata)
+          if (options.onPersisted) scheduleAnnotationStep(() => options.onPersisted(persisted))
+          return persisted
+        } catch (error) {
+          setAnnotationPersistenceMessage(error?.message || 'The annotation could not be saved.')
+          options.onFailed?.(error)
+          throw error
         }
-        setAnnotations((current) => [...current.filter((item) => item.id !== nextAnnotation.id), nextAnnotation])
-        setAnnotationMeta((current) => ({ ...current, [nextAnnotation.id]: { path, revision: result.revision || metadata.revision || null } }))
-        setActiveAnnotation(nextAnnotation)
-        setAnnotationWorkbenchOpen(true)
-        setAnnotationDraft({ ...nextAnnotation.sections })
-        setAnnotationPersistenceMessage('')
-        return result
+      },
+      onDeclined: () => {
+        options.onDeclined?.()
       },
     })
   }
 
   const handleRequestSave = (annotation, draft) => {
+    const timestamp = new Date().toISOString()
     const next = normalizeAnnotation({
-      ...annotation,
+      ...migrateAnnotationToV2(annotation),
       source: { ...annotation.source, revision: selectedNote?.revision || vaultRevision || annotation.source.revision },
       sections: { manual: draft.manual, ai: draft.ai },
-      timestamps: { ...annotation.timestamps, updatedAt: new Date().toISOString() },
+      aiProvenance: draft.ai.trim() ? annotationProvenance : null,
+      timestamps: { ...annotation.timestamps, updatedAt: timestamp },
     })
     requestAnnotationWrite(next, 'Save')
   }
 
-  const handleArchive = (annotation) => {
-    const timestamp = new Date().toISOString()
-    const archived = !annotation.archived
-    const next = normalizeAnnotation({
-      ...annotation,
-      archived,
-      timestamps: { ...annotation.timestamps, updatedAt: timestamp, archivedAt: archived ? timestamp : null },
-    })
-    requestAnnotationWrite(next, next.archived ? 'Archive' : 'Restore')
-  }
-
-  const handleSelectionAction = async (action) => {
+  const handleSelectionAction = async (action, position = annotationPosition) => {
     setRightOpen(true)
     setActivePanels((current) => ({ ...current, right: 'agent' }))
-    const nextAnnotation = openAnnotationEditor(action === 'ai' ? 'ai' : 'manual')
+    const nextAnnotation = openAnnotationEditor(action === 'ai' ? 'ai' : 'manual', position)
     if (action !== 'ai' || !nextAnnotation) return
     const descriptor = knowledgeToolDescriptors.find((item) => item.id === 'explain')
     if (!descriptor?.available) return
+    const controller = new AbortController()
+    explainControllerRef.current = controller
     pendingExplainIdRef.current = nextAnnotation.id
+    setAnnotationStage('generating')
     setAnnotationAiStatus({ kind: 'loading', message: 'Generating an explanation through the Research Run Runtime…' })
     try {
-      const text = await onKnowledgeAction(descriptor, {
-        prompt: `${descriptor.title} selected passage: ${selection?.anchor?.quote?.exact || ''}`,
-        context: knowledgeContext,
+      const explainContext = knowledgeContext.selection ? knowledgeContext : {
+        ...knowledgeContext,
+        selection: { noteId: selectedNote.id, anchor: nextAnnotation.anchor },
+      }
+      const result = await onKnowledgeAction(descriptor, {
+        prompt: `${descriptor.title} selected passage: ${nextAnnotation.anchor?.quote?.exact || ''}`,
+        context: explainContext,
+        signal: controller.signal,
+        includeProvenance: true,
       })
-      if (pendingExplainIdRef.current !== nextAnnotation.id || typeof text !== 'string' || !text.trim()) return
-      setAnnotationDraft((current) => ({ ...current, ai: text }))
+      if (pendingExplainIdRef.current !== nextAnnotation.id || typeof result?.text !== 'string' || !result.text.trim()) return
+      setAnnotationDraft((current) => ({ ...current, ai: result.text }))
+      setAnnotationProvenance(result.aiProvenance)
+      setAnnotationStage('review')
       setAnnotationAiStatus({ kind: 'ready', message: 'AI explanation ready for review. Saving still requires explicit approval.' })
     } catch (error) {
       if (pendingExplainIdRef.current !== nextAnnotation.id) return
+      setAnnotationStage('review')
       setAnnotationAiStatus({ kind: 'error', message: error?.name === 'AbortError' ? 'AI explanation was cancelled. Nothing was saved.' : `AI explanation failed: ${error?.message || 'No completed result was returned.'}` })
     } finally {
       if (pendingExplainIdRef.current === nextAnnotation.id) pendingExplainIdRef.current = null
+      if (explainControllerRef.current === controller) explainControllerRef.current = null
     }
+  }
+
+  const handleCancelAi = () => {
+    pendingExplainIdRef.current = null
+    explainControllerRef.current?.abort()
+    explainControllerRef.current = null
+    setAnnotationStage('review')
+    setAnnotationAiStatus({ kind: 'error', message: 'AI explanation was cancelled. Nothing was saved.' })
+  }
+
+  const handleBackToChooser = () => {
+    explainControllerRef.current?.abort()
+    pendingExplainIdRef.current = null
+    setAnnotationDraft({ ...annotationInitialDraft })
+    setAnnotationProvenance(activeAnnotation?.aiProvenance || null)
+    setAnnotationAiStatus(null)
+    setAnnotationStage('choice')
+    setAnnotationWorkbenchOpen(false)
+  }
+
+  const requestFormalArchiveAction = (pendingAnnotation, pendingMetadata) => {
+    const descriptor = knowledgeToolDescriptors.find((item) => item.id === 'synthesis')
+    if (!descriptor?.available || !actionRuntime?.available) return
+    const targets = pendingAnnotation.archive.targets
+    const sourceAnnotation = { id: pendingAnnotation.id, path: pendingMetadata.path, revision: pendingMetadata.revision }
+    const scope = {
+      vaultId: knowledgeContext.vault.id,
+      target: { kind: 'vault', id: knowledgeContext.vault.id },
+      expectedRevision: null,
+    }
+    const request = createKnowledgeArchiveActionInput({
+      requestId: `${pendingAnnotation.archive.runId}:request`,
+      runId: pendingAnnotation.archive.runId,
+      sessionId: knowledgeSession.sessionId,
+      context: knowledgeContext,
+      scope,
+      idempotencyKey: `${pendingAnnotation.id}:${pendingMetadata.revision}:archive:${pendingAnnotation.archive.runId}`,
+      input: { operation: 'archive-annotation', sourceAnnotation, targets },
+    })
+    const approval = { status: 'approved', scope: request.scope, sourceAnnotation, targets }
+    onKnowledgeAction(descriptor, {
+      prompt: `Archive saved annotation into ${targets.length} requested knowledge target${targets.length === 1 ? '' : 's'}.`,
+      actionTitle: 'Formal archive Action',
+      targetScope: `${knowledgeContext.vault.name} (Vault root)`,
+      idempotencyKey: request.idempotencyKey,
+      payload: request,
+      approvalDetails: { scope: request.scope, sourceAnnotation, targets },
+      onApproved: async () => {
+        const controller = new AbortController()
+        archiveControllerRef.current = controller
+        setAnnotationArchiveRunning(true)
+        setAnnotationArchiveOutcome(null)
+        setAnnotationArchiveEvidence([])
+        let result
+        try {
+          result = await executeKnowledgeArchiveAction({ actionRuntime, request, approval, signal: controller.signal })
+        } catch (error) {
+          result = createKnowledgeArchiveResult(request, {
+            status: error?.name === 'AbortError' ? 'cancelled' : 'failed',
+            summary: error?.message,
+            targets: [],
+            error: { code: error?.name === 'AbortError' ? 'archive_cancelled' : 'archive_failed', message: error?.message },
+          })
+        } finally {
+          if (archiveControllerRef.current === controller) archiveControllerRef.current = null
+          setAnnotationArchiveRunning(false)
+        }
+        const archive = knowledgeArchiveResultToAnnotationArchive(request, result)
+        const timestamp = new Date().toISOString()
+        const terminal = normalizeAnnotation({
+          ...pendingAnnotation,
+          archive,
+          timestamps: { ...pendingAnnotation.timestamps, updatedAt: timestamp, archivedAt: archive.state === 'completed' ? timestamp : null },
+        })
+        setAnnotationArchiveEvidence(result.data.targets)
+        setAnnotationArchiveOutcome({ status: result.status, archive, persistence: 'awaiting-approval' })
+        scheduleAnnotationStep(() => requestAnnotationWrite(terminal, `Persist ${result.status} archive lifecycle`, {
+          metadata: pendingMetadata,
+          declinedMessage: 'Terminal lifecycle persistence was cancelled. The Action result remains visible and the Annotation remains pending.',
+          onPersisted: () => setAnnotationArchiveOutcome(null),
+          onDeclined: () => {
+            setAnnotationArchiveOutcome((current) => current && { ...current, persistence: 'declined' })
+            setAnnotationPersistenceMessage('The Action result remains visible, but its terminal lifecycle write was declined. The saved annotation remains pending.')
+          },
+          onFailed: (error) => {
+            setAnnotationArchiveOutcome((current) => current && { ...current, persistence: 'failed' })
+            setAnnotationPersistenceMessage(`The Action result remains visible, but its terminal lifecycle was not persisted: ${error?.message || 'Annotation write failed.'}`)
+          },
+        }))
+        if (result.status !== 'completed') throw new Error(result.error?.message || result.summary)
+        return result
+      },
+      onDeclined: () => {
+        setAnnotationPersistenceMessage('Formal archive Action approval was declined. No Action started; the persisted pending lifecycle remains visible.')
+      },
+      declinedMessage: 'Formal archive Action was cancelled. No Action started; the persisted pending lifecycle remains visible.',
+    })
+  }
+
+  const handleRequestArchive = (annotation) => {
+    const metadata = annotationMeta[annotation.id]
+    if (!metadata?.path || !metadata?.revision) {
+      setAnnotationPersistenceMessage('Reload this saved annotation before starting a formal archive so its exact Runtime path and revision are available.')
+      return
+    }
+    let targets
+    try {
+      targets = normalizeAnnotationArchiveTargets(annotationArchiveTargets.split(/\r?\n/).filter((value) => value.length > 0))
+    } catch (error) {
+      setAnnotationPersistenceMessage(error.message)
+      return
+    }
+    const sequence = Date.now().toString(36)
+    const pending = normalizeAnnotation({
+      ...migrateAnnotationToV2(annotation),
+      archive: { state: 'pending', targets, runId: `${knowledgeSession.sessionId}:archive:run:${sequence}`, error: null },
+      timestamps: { ...annotation.timestamps, updatedAt: new Date().toISOString(), archivedAt: null },
+    })
+    setAnnotationArchiveOutcome(null)
+    setAnnotationPersistenceMessage('')
+    requestAnnotationWrite(pending, 'Persist pending archive lifecycle', {
+      metadata,
+      declinedMessage: 'Pending archive persistence was cancelled. No Action started.',
+      onPersisted: ({ record, metadata: confirmedMetadata }) => requestFormalArchiveAction(record, confirmedMetadata),
+      onDeclined: () => setAnnotationPersistenceMessage('Pending archive persistence was declined. No Action started.'),
+      onFailed: () => setAnnotationArchiveRunning(false),
+    })
+  }
+
+  const handleCancelArchive = () => {
+    archiveControllerRef.current?.abort()
   }
 
   const handleSelectPassage = (nextSelection) => {
@@ -740,6 +972,26 @@ export default function KnowledgeGraphSection({
     pendingExplainIdRef.current = null
     setSelection(null)
     dismissAnnotationWorkbench()
+  }
+
+  const openSavedAnnotation = (annotation) => {
+    const migrated = migrateAnnotationToV2(annotation)
+    setSelection({ selectionId: `${migrated.source.noteId}:${migrated.anchor.position.start}:${migrated.anchor.position.end}`, anchor: migrated.anchor })
+    setActiveAnnotation(migrated)
+    setAnnotationDraft({ ...migrated.sections })
+    setAnnotationInitialDraft({ ...migrated.sections })
+    setAnnotationProvenance(migrated.aiProvenance)
+    setAnnotationFocusSection('manual')
+    setAnnotationAiStatus(null)
+    setAnnotationStage('view')
+    setAnnotationPosition({ x: Math.max(8, window.innerWidth - 370), y: 72 })
+    setAnnotationArchiveTargets(migrated.archive.targets.join('\n'))
+    setAnnotationArchiveEvidence([])
+    setAnnotationArchiveOutcome(null)
+    setAnnotationArchiveRunning(false)
+    setAnnotationPersistenceMessage('')
+    setAnnotationCloseGuard(false)
+    setAnnotationWorkbenchOpen(true)
   }
 
   const renderPanel = (panelId) => {
@@ -763,6 +1015,7 @@ export default function KnowledgeGraphSection({
       <div className="workspace-toolbar-group">
         {knowledgeContext?.activeNote && <span className="workspace-context-chip"><FileText size={11} />Current note: {knowledgeContext.activeNote.title}</span>}
         {knowledgeContext?.selection && <span className="workspace-context-chip selection"><Bot size={11} />Selection ready</span>}
+        {provider && <button type="button" className="workspace-provider-chip" onClick={onOpenSettings} aria-label={`Switch Provider or model. Current: ${provider.providerName}, ${provider.modelName}`}><Bot size={11} /><span>{provider.providerName} · {provider.modelName}</span></button>}
         {!annotationWorkbenchOpen && selectedNoteAnnotations.length > 0 && <button type="button" onClick={() => setAnnotationWorkbenchOpen(true)} aria-label={`Show annotations workbench (${selectedNoteAnnotations.length})`}><Highlighter size={14} /><span>Annotations ({selectedNoteAnnotations.length})</span></button>}
         <span className="workspace-local-badge"><CircleDot size={10} /> Local-first</span>
         <button onClick={resetLayout} title="Reset panel layout"><RotateCcw size={14} /><span>Reset layout</span></button>
@@ -782,7 +1035,7 @@ export default function KnowledgeGraphSection({
           <button className="document-tab-add" onClick={() => { setLeftOpen(true); setActivePanels((current) => ({ ...current, left: 'files' })) }} aria-label="Browse Vault files"><Plus size={14} /></button>
         </div>
         <div className="knowledge-editor">
-          {selectedNote ? <MarkdownDocument note={selectedNote} notes={notes} selection={selection} annotations={selectedNoteAnnotations} onSelectPassage={handleSelectPassage} onSelectionAction={handleSelectionAction} onClearSelection={handleClearSelection} onNavigate={handleSelectNote} onOpenAnnotation={(annotation) => { setActiveAnnotation(annotation); setAnnotationDraft({ ...annotation.sections }); setAnnotationFocusSection('manual'); setAnnotationAiStatus(null); setAnnotationWorkbenchOpen(true) }} aiAvailable={knowledgeToolDescriptors.find((item) => item.id === 'explain')?.available === true} aiUnavailableReason={knowledgeToolDescriptors.find((item) => item.id === 'explain')?.unavailableReason || 'AI Explain is unavailable in this Runtime.'} /> : <div className="knowledge-welcome">
+          {selectedNote ? <MarkdownDocument note={selectedNote} notes={notes} selection={selection} annotations={selectedNoteAnnotations} onSelectPassage={handleSelectPassage} onSelectionAction={handleSelectionAction} onClearSelection={handleClearSelection} onNavigate={handleSelectNote} onOpenAnnotation={openSavedAnnotation} aiAvailable={knowledgeToolDescriptors.find((item) => item.id === 'explain')?.available === true} aiUnavailableReason={knowledgeToolDescriptors.find((item) => item.id === 'explain')?.unavailableReason || 'AI Explain is unavailable in this Runtime.'} /> : <div className="knowledge-welcome">
             <span><BookOpen size={25} /></span>
             <h2>{notes.length ? 'Choose a document from the Files panel' : 'Your research knowledge, in one workspace'}</h2>
             <p>{notes.length ? 'Open Markdown notes as tabs and keep multiple sources ready while you research.' : 'Connect an Obsidian Vault to browse files, inspect backlinks, read Markdown, and arrange research tools around your document.'}</p>
@@ -791,7 +1044,40 @@ export default function KnowledgeGraphSection({
         </div>
       </main>
 
-      {annotationWorkbenchOpen && (activeAnnotation || selectedNoteAnnotations.length > 0) && <AnnotationEditor annotation={activeAnnotation} draft={annotationDraft} annotations={selectedNoteAnnotations} onDraftChange={setAnnotationDraft} onRequestSave={handleRequestSave} onArchive={handleArchive} onDismiss={dismissAnnotationWorkbench} focusSection={annotationFocusSection} persistenceMessage={annotationPersistenceMessage} aiStatus={annotationAiStatus} onReopen={(annotation) => { setActiveAnnotation(annotation); setAnnotationDraft({ ...annotation.sections }); setAnnotationFocusSection('manual'); setAnnotationAiStatus(null); setAnnotationWorkbenchOpen(true) }} />}
+      {!knowledgeApproval && annotationStage === 'choice' && <SelectionChooser selection={selection} position={annotationPosition} onAction={handleSelectionAction} onDismiss={() => setAnnotationStage('view')} aiAvailable={knowledgeToolDescriptors.find((item) => item.id === 'explain')?.available === true} aiUnavailableReason={knowledgeToolDescriptors.find((item) => item.id === 'explain')?.unavailableReason || 'AI Explain is unavailable in this Runtime.'} />}
+      {!knowledgeApproval && annotationWorkbenchOpen && (activeAnnotation || selectedNoteAnnotations.length > 0) && <AnnotationEditor
+        annotation={activeAnnotation}
+        draft={annotationDraft}
+        annotations={selectedNoteAnnotations}
+        stage={annotationStage}
+        position={annotationPosition}
+        onDraftChange={setAnnotationDraft}
+        onRequestSave={handleRequestSave}
+        onRequestArchive={handleRequestArchive}
+        onDismiss={dismissAnnotationWorkbench}
+        onBack={handleBackToChooser}
+        onEdit={() => { setAnnotationStage('edit'); setAnnotationInitialDraft({ ...activeAnnotation.sections }) }}
+        onRegenerate={() => handleSelectionAction('ai', annotationPosition)}
+        onCancelAi={handleCancelAi}
+        onCancelArchive={handleCancelArchive}
+        focusSection={annotationFocusSection}
+        persistenceMessage={annotationPersistenceMessage}
+        aiStatus={annotationAiStatus}
+        provenance={annotationProvenance}
+        provider={provider}
+        onOpenSettings={onOpenSettings}
+        archiveAvailable={knowledgeToolDescriptors.find((item) => item.id === 'synthesis')?.available === true}
+        archiveUnavailableReason={knowledgeToolDescriptors.find((item) => item.id === 'synthesis')?.unavailableReason || actionRuntime?.reason || 'Formal archive is unavailable.'}
+        archiveTargets={annotationArchiveTargets}
+        onArchiveTargetsChange={setAnnotationArchiveTargets}
+        archiveEvidence={annotationArchiveEvidence}
+        archiveOutcome={annotationArchiveOutcome}
+        archiveRunning={annotationArchiveRunning}
+        closeGuard={annotationCloseGuard}
+        onConfirmDiscard={discardAnnotationWorkbench}
+        onKeepEditing={() => setAnnotationCloseGuard(false)}
+        onReopen={openSavedAnnotation}
+      />}
       {rightOpen && <Dock side="right" panelIds={dockLayout.right} activePanelId={activePanels.right} draggingId={draggingId} onActivate={(side, panelId) => setActivePanels((current) => ({ ...current, [side]: panelId }))} onDragStart={handleDragStart} onDragEnd={() => setDraggingId(null)} onDrop={handleDrop} renderPanel={renderPanel} />}
     </div>
 
