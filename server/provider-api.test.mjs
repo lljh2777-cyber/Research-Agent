@@ -72,6 +72,35 @@ test('uses the documented DeepSeek model catalog route without adding v1', async
   assert.equal(capturedUrl, 'https://api.deepseek.com/models')
 })
 
+test('discovers account-visible SiliconFlow models through the authenticated models route', async () => {
+  let captured
+  const result = await discoverProviderModels({
+    providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret-key',
+  }, async (url, options) => {
+    captured = { url, options }
+    return new Response(JSON.stringify({ data: [
+      { id: 'Qwen/Qwen3-8B', owned_by: 'Qwen' },
+      { id: 'BAAI/bge-m3', owned_by: 'BAAI' },
+      { id: 'BAAI/bge-reranker-v2-m3', owned_by: 'BAAI' },
+    ] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  })
+
+  assert.equal(captured.url, 'https://api.siliconflow.cn/v1/models')
+  assert.equal(captured.options.headers.Authorization, 'Bearer secret-key')
+  assert.equal(captured.url.includes('secret-key'), false)
+  assert.equal(result.catalogSource, 'remote')
+  assert.deepEqual(result.models.map(({ id, kind }) => ({ id, kind })), [
+    { id: 'BAAI/bge-m3', kind: 'embedding' },
+    { id: 'BAAI/bge-reranker-v2-m3', kind: 'rerank' },
+    { id: 'Qwen/Qwen3-8B', kind: 'chat' },
+  ])
+  const embedding = result.models.find(({ kind }) => kind === 'embedding')
+  const reranker = result.models.find(({ kind }) => kind === 'rerank')
+  assert.equal(embedding.capabilities.embedding, true)
+  assert.equal(embedding.capabilities.embeddings, true)
+  assert.equal(reranker.capabilities.rerank, true)
+})
+
 test('adds the documented DeepSeek endpoint matrix to discovered models', () => {
   const [model] = normalizeProviderModels('deepseek', {
     data: [{ id: 'deepseek-v4-flash', owned_by: 'deepseek' }],

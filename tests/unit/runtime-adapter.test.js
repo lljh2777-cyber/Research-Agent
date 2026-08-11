@@ -90,6 +90,9 @@ describe('runtime adapters', () => {
     await adapter.providers.discoverModels({
       providerId: 'deepseek', endpoint: 'https://api.deepseek.com', apiKey: 'session-key', signal: controller.signal,
     })
+    await adapter.providers.discoverModels({
+      providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'session-key', signal: controller.signal,
+    })
     await adapter.providers.streamResponse({
       providerId: 'deepseek', endpoint: 'https://api.deepseek.com', model: 'deepseek-chat', messages: [], options: {}, signal: controller.signal,
     })
@@ -100,6 +103,9 @@ describe('runtime adapters', () => {
     const modelCall = fetchImpl.mock.calls.find(([url]) => url === '/api/providers/models')
     expect(JSON.parse(modelCall[1].body)).toMatchObject({ providerId: 'deepseek', apiKey: 'session-key' })
     expect(modelCall[1].signal).toBe(controller.signal)
+    const siliconFlowModelCall = fetchImpl.mock.calls.find(([url, options]) => url === '/api/providers/models' && JSON.parse(options.body).providerId === 'siliconflow')
+    expect(JSON.parse(siliconFlowModelCall[1].body)).toMatchObject({ providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'session-key' })
+    expect(siliconFlowModelCall[1].signal).toBe(controller.signal)
     const streamCall = fetchImpl.mock.calls.find(([url]) => url === '/api/providers/responses/stream')
     expect(streamCall[1].headers.Accept).toBe('text/event-stream')
     const mcpCall = fetchImpl.mock.calls.find(([url]) => url === '/api/mcp/sessions/connect')

@@ -2,6 +2,7 @@ import { appendProviderRoute, buildBailianResponseResourceRequest, cleanProvider
 import { normalizeProviderError } from './provider-errors.mjs'
 import { withDeepSeekModelProfile } from '../shared/deepseek-provider.mjs'
 import { BAILIAN_OFFICIAL_MODELS, withBailianModelProfile } from '../shared/bailian-provider.mjs'
+import { classifySiliconFlowModel, withSiliconFlowModelProfile } from '../shared/siliconflow-provider.mjs'
 
 const PROVIDER_MODEL_ROUTES = {
   openai: { route: 'models', auth: 'bearer' },
@@ -9,6 +10,7 @@ const PROVIDER_MODEL_ROUTES = {
   gemini: { route: 'v1beta/models', auth: 'gemini' },
   deepseek: { route: 'models', auth: 'bearer' },
   bailian: { route: 'models', auth: 'bearer' },
+  siliconflow: { route: 'models', auth: 'bearer' },
   openrouter: { route: 'models', auth: 'bearer' },
   compatible: { route: 'models', auth: 'optional-bearer' },
 }
@@ -37,7 +39,8 @@ function buildRequest(providerId, endpoint, apiKey = '') {
   return { url: appendProviderRoute(cleanProviderBaseUrl(endpoint), protocol.route), headers }
 }
 
-function inferModelKind(model) {
+function inferModelKind(model, providerId) {
+  if (providerId === 'siliconflow') return classifySiliconFlowModel(model)
   const id = `${model.id || ''} ${model.name || ''}`.toLowerCase()
   const methods = model.supportedGenerationMethods || []
   if (id.includes('embed') || methods.some((method) => /embed/i.test(method))) return 'embedding'
@@ -47,7 +50,7 @@ function inferModelKind(model) {
   return 'chat'
 }
 
-export function inferModelCapabilities(providerId, record, kind = inferModelKind(record)) {
+export function inferModelCapabilities(providerId, record, kind = inferModelKind(record, providerId)) {
   const haystack = `${record?.id || ''} ${record?.name || ''}`.toLowerCase()
   const methods = Array.isArray(record?.supportedGenerationMethods) ? record.supportedGenerationMethods : []
   const parameters = Array.isArray(record?.supported_parameters) ? record.supported_parameters : []
@@ -80,7 +83,7 @@ export function normalizeProviderModels(providerId, payload) {
       id,
       name: String(record.display_name || record.displayName || record.name || record.id || id).replace(/^models\//, ''),
       ownedBy: record.owned_by || record.ownedBy || providerId,
-      kind: inferModelKind({ ...record, id }),
+      kind: inferModelKind({ ...record, id }, providerId),
     }
     model.capabilities = inferModelCapabilities(providerId, { ...record, id }, model.kind)
     if (Array.isArray(record.supportedGenerationMethods)) {
@@ -88,7 +91,9 @@ export function normalizeProviderModels(providerId, payload) {
     }
     unique.set(id, providerId === 'deepseek'
       ? withDeepSeekModelProfile(model)
-      : providerId === 'bailian' ? withBailianModelProfile(model) : model)
+      : providerId === 'bailian' ? withBailianModelProfile(model)
+        : providerId === 'siliconflow' ? withSiliconFlowModelProfile(model)
+          : model)
   }
   return [...unique.values()].sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true }))
 }
