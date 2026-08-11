@@ -22,6 +22,15 @@ describe('runtime capability matrix', () => {
     expect(manifest.capabilities.providerTransport).toBe('loopback')
     expect(manifest.capabilities.researchRuns).toBe('loopback-event-buffer')
     expect(manifest.capabilities.researchExecution).toBe('loopback-provider')
+    expect(manifest.capabilities.knowledgeReads).toEqual({
+      available: true,
+      transport: 'research-run',
+      capabilities: {
+        'knowledge.query': true,
+        'knowledge.explain': true,
+      },
+      reason: null,
+    })
     expect(manifest.capabilities.mcp).toBe('loopback')
     expect(manifest.capabilities.annotations.available).toBe(false)
     expect(manifest.capabilities.actions.available).toBe(false)
@@ -71,6 +80,7 @@ describe('runtime capability matrix', () => {
     expect(manifest.capabilities.mcp).toBe(false)
     expect(manifest.capabilities.researchRuns).toBe(false)
     expect(manifest.capabilities.researchExecution).toBe(false)
+    expect(manifest.capabilities.knowledgeReads.available).toBe(false)
     expect(manifest.capabilities.annotations.available).toBe(false)
     expect(manifest.capabilities.actions.available).toBe(false)
   })
@@ -91,6 +101,14 @@ describe('runtime capability matrix', () => {
     expect(manifest.capabilities.mcp).toBe('desktop-loopback')
     expect(manifest.capabilities.annotations.reason).toMatch(/not implemented/i)
     expect(manifest.capabilities.actions.reason).toMatch(/not implemented/i)
+    expect(manifest.capabilities.knowledgeReads).toMatchObject({
+      available: false,
+      transport: false,
+      capabilities: {
+        'knowledge.query': false,
+        'knowledge.explain': false,
+      },
+    })
   })
 
   it('rejects a manifest with injected local adapters', () => {
@@ -130,6 +148,14 @@ describe('runtime capability matrix', () => {
         credentials: { subscriptionOAuth: false },
         annotations: { available: false, transport: false },
         actions: { available: false, transport: false },
+        knowledgeReads: {
+          available: false,
+          transport: false,
+          capabilities: {
+            'knowledge.query': false,
+            'knowledge.explain': false,
+          },
+        },
         localVault: { adapters: ['browser-picker'] },
       },
     })

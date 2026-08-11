@@ -22,6 +22,7 @@ export const RUNTIME_TARGETS = Object.freeze({
 
 const BUILD_MODE_VALUES = new Set(Object.values(BUILD_MODES))
 const RUNTIME_TARGET_VALUES = new Set(Object.values(RUNTIME_TARGETS))
+const KNOWLEDGE_READ_CAPABILITIES = Object.freeze(['knowledge.query', 'knowledge.explain'])
 
 const CAPABILITY_PROFILES = Object.freeze({
   [RUNTIME_TARGETS.LOCAL_WEB]: Object.freeze({
@@ -101,7 +102,16 @@ function optionalRuntimeServices(target, services = {}) {
   const local = target === RUNTIME_TARGETS.LOCAL_WEB
   const annotationsAvailable = local && services.annotations === true
   const actionsAvailable = local && services.actions === true
+  const knowledgeReadsAvailable = local
   return {
+    knowledgeReads: Object.freeze({
+      available: knowledgeReadsAvailable,
+      transport: knowledgeReadsAvailable ? 'research-run' : false,
+      capabilities: Object.freeze(Object.fromEntries(
+        KNOWLEDGE_READ_CAPABILITIES.map((capability) => [capability, knowledgeReadsAvailable]),
+      )),
+      reason: knowledgeReadsAvailable ? null : unavailableReason(target, 'Knowledge read execution'),
+    }),
     annotations: Object.freeze({
       available: annotationsAvailable,
       transport: annotationsAvailable ? 'same-origin' : false,
@@ -186,6 +196,10 @@ export function isRuntimeManifest(value) {
     && capabilities.researchRuns === expected.researchRuns
     && capabilities.researchExecution === expected.researchExecution
     && capabilities.mcp === expected.mcp
+    && sameOptionalService(
+      capabilities.knowledgeReads,
+      optionalRuntimeServices(value.target).knowledgeReads,
+    )
     && sameOptionalService(
       capabilities.annotations,
       optionalRuntimeServices(value.target, { annotations: capabilities.annotations?.available === true }).annotations,

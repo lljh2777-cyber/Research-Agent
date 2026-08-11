@@ -16,6 +16,15 @@ test('configured full local Runtime advertises owned loopback and optional servi
       mcp: 'loopback',
       researchRuns: 'loopback-event-buffer',
       researchExecution: 'loopback-provider',
+      knowledgeReads: {
+        available: true,
+        transport: 'research-run',
+        capabilities: {
+          'knowledge.query': true,
+          'knowledge.explain': true,
+        },
+        reason: null,
+      },
       annotations: {
         available: true,
         transport: 'same-origin',
