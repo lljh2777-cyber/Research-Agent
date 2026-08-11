@@ -89,7 +89,13 @@ function ApprovalCard({ approval, onResolveApproval }) {
   if (!approval) return null
   return <section className="knowledge-approval-card" role="dialog" aria-modal="false" aria-labelledby="knowledge-approval-title">
     <div><LockKeyhole size={16} /><span><strong id="knowledge-approval-title">Approval required</strong><small>{approval.actionTitle}</small></span></div>
-    <dl><div><dt>Target scope</dt><dd>{approval.targetScope}</dd></div><div><dt>Idempotency</dt><dd>{approval.idempotencyKey}</dd></div></dl>
+    <dl>
+      <div><dt>Target scope</dt><dd>{approval.targetScope}</dd></div>
+      {approval.approvalDetails?.scope && <div><dt>Authorization root</dt><dd>{approval.approvalDetails.scope.vaultId} · {approval.approvalDetails.scope.target.kind}:{approval.approvalDetails.scope.target.id}</dd></div>}
+      {approval.approvalDetails?.sourceAnnotation && <div><dt>Source Annotation</dt><dd>{approval.approvalDetails.sourceAnnotation.id}<br />{approval.approvalDetails.sourceAnnotation.path}<br />Revision {approval.approvalDetails.sourceAnnotation.revision}</dd></div>}
+      {approval.approvalDetails?.targets?.length > 0 && <div><dt>Requested targets</dt><dd><ol>{approval.approvalDetails.targets.map((target) => <li key={target}>{target}</li>)}</ol></dd></div>}
+      <div><dt>Idempotency</dt><dd>{approval.idempotencyKey}</dd></div>
+    </dl>
     <p>This write action runs only once for the displayed target scope.</p>
     <div><button type="button" onClick={() => onResolveApproval(false)}>Cancel</button><button type="button" className="approve" onClick={() => onResolveApproval(true)}><ShieldCheck size={13} />Approve once</button></div>
   </section>

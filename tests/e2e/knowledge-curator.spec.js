@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { createRuntimeManifest } from '../../shared/runtime-capabilities.mjs'
 import { parseAnnotationMarkdown } from '../../src/annotations/annotation.js'
+import { createKnowledgeArchiveResult } from '../../src/research/knowledgeArchive.js'
 
 const KNOWLEDGE_READ_SERVICE = {
   provider: {
@@ -11,6 +12,19 @@ const KNOWLEDGE_READ_SERVICE = {
     credential: 'not-required',
   },
   researchRun: { executable: true, transport: 'research-run' },
+}
+
+const ARCHIVE_ACTION_SERVICE = {
+  executable: true,
+  capabilities: {},
+  archive: {
+    executable: true,
+    transport: 'research-run',
+    journal: 'atomic-json-v1',
+    crashRecovery: true,
+    authenticity: 'hmac-sha256-v1',
+    planner: { sandbox: 'read-only', output: 'strict-json' },
+  },
 }
 
 const AI_EXPLANATION = '该段证据说明所选结果在重复实验中保持一致。'
@@ -59,6 +73,40 @@ async function installKnowledgeReadTransport(page, { text = AI_EXPLANATION, stat
       return route.fulfill({ json: { events: [{ cursor: 1, event: { type: 'run.completed', runId: read?.runId, result } }] } })
     }
     return route.fulfill({ status: 405, json: { error: 'Unexpected Research Run request.' } })
+  })
+  return calls
+}
+
+async function installArchiveTransport(page, { status = 'completed' } = {}) {
+  const calls = { starts: [], cancels: [] }
+  await page.route('**/api/runtime/actions**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    if (request.method() === 'POST' && url.pathname.endsWith('/api/runtime/actions')) {
+      calls.starts.push(request.postDataJSON())
+      return route.fulfill({ status: 202, json: { started: true, replayed: false } })
+    }
+    if (request.method() === 'DELETE') {
+      calls.cancels.push(url.pathname.split('/').at(-1))
+      return route.fulfill({ json: { ok: true, cancelled: true } })
+    }
+    if (request.method() === 'GET' && url.pathname.endsWith('/events')) {
+      const { approval, ...action } = calls.starts.at(-1)
+      const terminalStatus = status === 'cancelled' ? 'cancelled' : status === 'failed' ? 'failed' : 'completed'
+      const targets = terminalStatus === 'completed'
+        ? action.input.targets.map((path, index) => ({ path, status: index ? 'updated' : 'created', revision: `target-revision-${index + 1}` }))
+        : action.input.targets.slice(0, 1).map((path) => ({ path, status: 'created', revision: 'partial-target-revision-1' }))
+      const output = createKnowledgeArchiveResult(action, {
+        status: terminalStatus,
+        summary: terminalStatus === 'completed' ? 'Formal archive completed.' : terminalStatus === 'cancelled' ? 'Formal archive cancelled.' : 'Formal archive failed.',
+        targets,
+        error: terminalStatus === 'completed' ? null : { code: terminalStatus === 'cancelled' ? 'archive_cancelled' : 'archive_failed', message: terminalStatus === 'cancelled' ? 'Archive run was cancelled.' : 'Planner failed after one committed target.' },
+      })
+      const type = terminalStatus === 'completed' ? 'run.completed' : terminalStatus === 'cancelled' ? 'run.cancelled' : 'run.failed'
+      const event = { type, runId: action.runId, ...(terminalStatus === 'completed' ? { output } : { result: output }) }
+      return route.fulfill({ status: 200, contentType: 'text/event-stream', body: `data: ${JSON.stringify({ cursor: 2, event })}\n\n` })
+    }
+    return route.fulfill({ status: 405, json: { error: 'Unexpected Action request.' } })
   })
   return calls
 }
@@ -236,11 +284,14 @@ test('captures a real Explain result, approves the same file-backed annotation, 
   expect(write.intent).toMatchObject({ schemaVersion: 1, kind: 'annotation.upsert', contentType: 'text/markdown', target: { vaultId: 'saved-vault', expectedRevision: null } })
   expect(write.intent.target.path).toMatch(/^wiki\/annotations\/annotation-findings-note-/)
   const savedRecord = parseAnnotationMarkdown(write.intent.content)
+  expect(savedRecord.schemaVersion).toBe(2)
   expect(savedRecord.anchor.quote.exact).toBe('Selected evidence is reproducible')
   expect(savedRecord.sections).toEqual({ manual: '讨论部分需要人工核验。', ai: AI_EXPLANATION })
+  expect(savedRecord.aiProvenance).toMatchObject({ providerId: 'compatible', modelId: 'test-model', generatedAt: expect.any(String) })
+  expect(savedRecord.archive).toEqual({ state: 'none', targets: [], runId: null, error: null })
   await expect(page.getByRole('button', { name: /Open annotation for Selected evidence is reproducible/ }).first()).toBeVisible()
 
-  const closeWorkbench = page.getByRole('button', { name: 'Close annotations workbench' })
+  const closeWorkbench = page.getByRole('button', { name: 'Close annotations' })
   await closeWorkbench.focus()
   await page.keyboard.press('Enter')
   await expect(page.getByRole('complementary', { name: 'Annotations' })).toHaveCount(0)
@@ -252,12 +303,14 @@ test('captures a real Explain result, approves the same file-backed annotation, 
   await page.keyboard.press('Enter')
   await expect(page.getByRole('complementary', { name: 'Annotations' })).toBeVisible()
   await expect(page.locator('.knowledge-workspace')).toHaveClass(/annotation-open/)
-  await expect(page.getByRole('button', { name: 'Close annotations workbench' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Close annotations' })).toBeVisible()
   await expect(page.getByRole('textbox', { name: 'Your annotation' })).toHaveCount(0)
   const savedAnnotation = page.locator('.annotation-record').filter({ hasText: '讨论部分需要人工核验。' })
   await expect(savedAnnotation).toBeVisible()
   await savedAnnotation.focus()
   await page.keyboard.press('Enter')
+  await expect(page.locator('.annotation-rendered')).toContainText('讨论部分需要人工核验。')
+  await page.getByRole('button', { name: 'Edit' }).click()
   await expect(page.getByRole('textbox', { name: 'Your annotation' })).toHaveValue('讨论部分需要人工核验。')
   await page.getByRole('textbox', { name: 'Your annotation' }).fill('讨论部分已完成人工核验。')
   await page.getByRole('button', { name: 'Save with approval' }).click()
@@ -265,7 +318,7 @@ test('captures a real Explain result, approves the same file-backed annotation, 
   await expect.poll(() => annotationCalls.writes.length).toBe(2)
   expect(annotationCalls.writes[1].intent.target.expectedRevision).toBe('annotation-rev-1')
   expect(parseAnnotationMarkdown(annotationCalls.writes[1].intent.content).sections).toEqual({ manual: '讨论部分已完成人工核验。', ai: AI_EXPLANATION })
-  await page.getByRole('button', { name: 'Close annotations workbench' }).click()
+  await page.getByRole('button', { name: 'Close annotations' }).click()
 
   await compactPanel.getByRole('button', { name: /Continue in Research/ }).click()
   const fullPanel = page.locator('.agent-conversation-panel.full')
@@ -300,7 +353,7 @@ test('captures a real Explain result, approves the same file-backed annotation, 
   await expect(relocatedHighlight).toBeVisible()
   await relocatedHighlight.click()
   await expect(page.getByRole('status').filter({ hasText: 'Anchor relocated' })).toBeVisible()
-  await expect(page.getByRole('textbox', { name: 'AI contribution' })).toHaveValue(AI_EXPLANATION)
+  await expect(page.locator('.annotation-rendered')).toContainText(AI_EXPLANATION)
   expect(annotationCalls.list).toBeGreaterThan(1)
   expect(annotationCalls.read).toBeGreaterThan(0)
 
@@ -308,6 +361,145 @@ test('captures a real Explain result, approves the same file-backed annotation, 
   expect(pageErrors).toEqual([])
   expect(consoleErrors).toEqual([])
 })
+
+test('runs a separately approved formal archive with exact source identity, targets, terminal evidence, and reload', async ({ page }) => {
+  const pageErrors = []
+  const consoleErrors = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()) })
+  await page.route('**/api/runtime', (route) => route.fulfill({
+    json: createRuntimeManifest({
+      buildMode: 'test',
+      target: 'local-web',
+      services: { annotations: true, actions: ARCHIVE_ACTION_SERVICE, knowledgeReads: KNOWLEDGE_READ_SERVICE },
+    }),
+  }))
+  const persisted = new Map()
+  const writes = []
+  await page.route('**/api/runtime/annotations*', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    if (request.method() === 'GET' && url.searchParams.has('path')) {
+      const entry = persisted.get(url.searchParams.get('path'))
+      return route.fulfill({ status: entry ? 200 : 404, json: entry ? { ok: true, schemaVersion: 1, ...entry } : { ok: false, error: 'Missing annotation.' } })
+    }
+    if (request.method() === 'GET') {
+      return route.fulfill({ json: { ok: true, schemaVersion: 1, vaultId: 'saved-vault', annotations: [...persisted.entries()].map(([path, entry]) => ({ path, revision: entry.revision })) } })
+    }
+    const body = request.postDataJSON()
+    writes.push(body)
+    const revision = `annotation-revision-${writes.length}`
+    persisted.set(body.intent.target.path, { content: body.intent.content, revision })
+    return route.fulfill({ json: { ok: true, schemaVersion: 1, revision, replayed: false } })
+  })
+  await installKnowledgeReadTransport(page)
+  const archiveCalls = await installArchiveTransport(page)
+
+  await page.goto('/')
+  await installVaultSnapshot(page)
+  await page.reload()
+  await page.locator('.main-nav').getByRole('button', { name: 'Knowledge Graph' }).click()
+  const noteBody = '# Findings\n\nSelected evidence is reproducible with [[findings#Methods|inline evidence]] and\ncontinues across a second rendered line.\n\n## Methods\n\nThe assay was repeated in three cohorts.\n\n```js\nconst protectedValue = true\n```'
+  const start = noteBody.indexOf('Selected evidence')
+  await selectMarkdownRange(page, start, start + 'Selected evidence is reproducible'.length)
+  await page.getByRole('menuitem', { name: 'AI 解释' }).click()
+  await expect(page.getByRole('textbox', { name: 'AI contribution' })).toHaveValue(AI_EXPLANATION)
+  await page.getByRole('button', { name: 'Save with approval' }).click()
+  await page.getByRole('dialog', { name: 'Approval required' }).getByRole('button', { name: 'Approve once' }).click()
+  await expect.poll(() => writes.length).toBe(1)
+
+  await page.getByRole('textbox', { name: 'Formal archive targets (one Vault .md path per line)' }).fill('synthesis/findings.md\nsynthesis/methods.md')
+  await page.getByRole('button', { name: 'Archive knowledge with approval' }).click()
+  const approval = page.getByRole('dialog', { name: 'Approval required' })
+  await expect(approval).toContainText('saved-vault (Vault root)')
+  await expect(approval).toContainText('saved-vault · vault:saved-vault')
+  await expect(approval).toContainText('wiki/annotations/annotation-findings-note-')
+  await expect(approval).toContainText('annotation-revision-1')
+  await expect(approval).toContainText('synthesis/findings.md')
+  await expect(approval).toContainText('synthesis/methods.md')
+  await approval.getByRole('button', { name: 'Approve once' }).click()
+  await expect.poll(() => archiveCalls.starts.length).toBe(1)
+  await expect.poll(() => writes.length).toBe(2)
+
+  const action = archiveCalls.starts[0]
+  expect(action.input).toEqual({
+    operation: 'archive-annotation',
+    sourceAnnotation: { id: expect.any(String), path: writes[0].intent.target.path, revision: 'annotation-revision-1' },
+    targets: ['synthesis/findings.md', 'synthesis/methods.md'],
+  })
+  expect(action.approval).toEqual({ status: 'approved', scope: action.scope, sourceAnnotation: action.input.sourceAnnotation, targets: action.input.targets })
+  const terminalRecord = parseAnnotationMarkdown(writes[1].intent.content)
+  expect(terminalRecord.archive).toMatchObject({ state: 'completed', targets: action.input.targets, runId: action.runId, error: null })
+  expect(terminalRecord.archived).toBe(true)
+  await expect(page.getByRole('region', { name: 'Formal archive status' })).toContainText('completed')
+  await expect(page.getByRole('region', { name: 'Formal archive status' })).toContainText('created')
+  await expect(page.getByRole('region', { name: 'Formal archive status' })).toContainText('updated')
+
+  await page.reload()
+  await page.locator('.main-nav').getByRole('button', { name: 'Knowledge Graph' }).click()
+  await page.getByRole('button', { name: 'Show annotations workbench (1)' }).click()
+  const record = page.locator('.annotation-record').filter({ hasText: 'Archived' })
+  await expect(record).toBeVisible()
+  await record.click()
+  await expect(page.getByRole('region', { name: 'Formal archive status' })).toContainText('completed')
+  expect(pageErrors).toEqual([])
+  expect(consoleErrors).toEqual([])
+})
+
+for (const archiveStatus of ['failed', 'cancelled']) {
+  test(`keeps a ${archiveStatus} formal archive visible with truthful partial evidence`, async ({ page }) => {
+    await page.route('**/api/runtime', (route) => route.fulfill({
+      json: createRuntimeManifest({ buildMode: 'test', target: 'local-web', services: { annotations: true, actions: ARCHIVE_ACTION_SERVICE } }),
+    }))
+    const persisted = new Map()
+    const writes = []
+    await page.route('**/api/runtime/annotations*', async (route) => {
+      const request = route.request()
+      const url = new URL(request.url())
+      if (request.method() === 'GET' && url.searchParams.has('path')) {
+        const entry = persisted.get(url.searchParams.get('path'))
+        return route.fulfill({ status: entry ? 200 : 404, json: entry ? { ok: true, schemaVersion: 1, ...entry } : { ok: false, error: 'Missing annotation.' } })
+      }
+      if (request.method() === 'GET') return route.fulfill({ json: { ok: true, schemaVersion: 1, vaultId: 'saved-vault', annotations: [] } })
+      const body = request.postDataJSON()
+      writes.push(body)
+      const revision = `annotation-revision-${writes.length}`
+      persisted.set(body.intent.target.path, { content: body.intent.content, revision })
+      return route.fulfill({ json: { ok: true, schemaVersion: 1, revision } })
+    })
+    await installArchiveTransport(page, { status: archiveStatus })
+    await page.goto('/')
+    await installVaultSnapshot(page)
+    await page.reload()
+    await page.locator('.main-nav').getByRole('button', { name: 'Knowledge Graph' }).click()
+    const markdown = '# Findings\n\nSelected evidence is reproducible with [[findings#Methods|inline evidence]] and\ncontinues across a second rendered line.\n\n## Methods\n\nThe assay was repeated in three cohorts.\n\n```js\nconst protectedValue = true\n```'
+    const start = markdown.indexOf('Selected evidence')
+    await selectMarkdownRange(page, start, start + 'Selected evidence'.length)
+    await page.getByRole('menuitem', { name: '手工批注' }).click()
+    await page.getByRole('textbox', { name: 'Your annotation' }).fill('Saved before archive.')
+    await page.getByRole('button', { name: 'Save with approval' }).click()
+    await page.getByRole('dialog', { name: 'Approval required' }).getByRole('button', { name: 'Approve once' }).click()
+    await expect.poll(() => writes.length).toBe(1)
+    await page.getByRole('textbox', { name: 'Formal archive targets (one Vault .md path per line)' }).fill('synthesis/first.md\nsynthesis/second.md')
+    await page.getByRole('button', { name: 'Archive knowledge with approval' }).click()
+    await page.getByRole('dialog', { name: 'Approval required' }).getByRole('button', { name: 'Approve once' }).click()
+    await expect.poll(() => writes.length).toBe(2)
+    const terminal = parseAnnotationMarkdown(writes[1].intent.content)
+    expect(terminal.archive).toMatchObject({
+      state: 'failed',
+      targets: ['synthesis/first.md', 'synthesis/second.md'],
+      runId: expect.any(String),
+      error: { code: archiveStatus === 'cancelled' ? 'archive_cancelled' : 'archive_failed' },
+    })
+    expect(terminal.archived).toBe(false)
+    const status = page.getByRole('region', { name: 'Formal archive status' })
+    await expect(status).toContainText('failed')
+    await expect(status).toContainText('synthesis/first.md')
+    await expect(status).toContainText('created')
+    await expect(status).not.toContainText('completed')
+    await expect(page.getByRole('button', { name: /Open annotation for Selected evidence/ }).first()).toBeVisible()
+  })
+}
 
 test('shows a truthful empty curator boundary without fabricated note, selection, or run state', async ({ page }) => {
   await page.goto('/')
@@ -357,6 +549,69 @@ for (const terminalStatus of ['failed', 'cancelled']) {
   })
 }
 
+test('cancels an in-flight AI explanation and excludes its late completed text', async ({ page }) => {
+  const pageErrors = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  await page.route('**/api/runtime', (route) => route.fulfill({
+    json: createRuntimeManifest({ buildMode: 'test', target: 'local-web', services: { annotations: true, knowledgeReads: KNOWLEDGE_READ_SERVICE } }),
+  }))
+  let writeCount = 0
+  let cancelledRun = null
+  let readRequest = null
+  await page.route('**/api/runtime/annotations*', (route) => {
+    if (route.request().method() === 'PUT') writeCount += 1
+    return route.fulfill({ json: { ok: true, schemaVersion: 1, vaultId: 'saved-vault', annotations: [] } })
+  })
+  await page.route('**/api/research/runs**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    if (request.method() === 'POST' && url.pathname.endsWith('/api/research/runs')) return route.fulfill({ status: 201, json: { created: true } })
+    if (request.method() === 'POST' && url.pathname.endsWith('/start')) {
+      readRequest = request.postDataJSON().knowledgeRead
+      return route.fulfill({ status: 202, json: { started: true } })
+    }
+    if (request.method() === 'DELETE') {
+      cancelledRun = decodeURIComponent(url.pathname.split('/').at(-1))
+      return route.fulfill({ json: { cancelled: true } })
+    }
+    if (request.method() === 'GET' && url.searchParams.get('follow') !== '1') return route.fulfill({ json: { events: [] } })
+    if (request.method() === 'GET') {
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      const result = {
+        schemaVersion: 1,
+        toolId: readRequest.toolId,
+        requestId: readRequest.requestId,
+        runId: readRequest.runId,
+        status: 'completed',
+        effect: 'read',
+        summary: 'Late result.',
+        data: { schemaVersion: 1, kind: 'knowledge-read-result', agentId: 'knowledge-curator', sessionId: readRequest.sessionId, runId: readRequest.runId, text: 'This late text must never enter sections.ai.' },
+        artifacts: [],
+        error: null,
+      }
+      return route.fulfill({ contentType: 'text/event-stream', body: `data: ${JSON.stringify({ cursor: 1, event: { type: 'run.completed', runId: readRequest.runId, result } })}\n\n` })
+    }
+    return route.fulfill({ status: 405, json: { error: 'Unexpected request.' } })
+  })
+
+  await page.goto('/')
+  await installVaultSnapshot(page)
+  await page.reload()
+  await page.locator('.main-nav').getByRole('button', { name: 'Knowledge Graph' }).click()
+  const markdown = '# Findings\n\nSelected evidence is reproducible with [[findings#Methods|inline evidence]] and\ncontinues across a second rendered line.\n\n## Methods\n\nThe assay was repeated in three cohorts.\n\n```js\nconst protectedValue = true\n```'
+  const start = markdown.indexOf('Selected evidence')
+  await selectMarkdownRange(page, start, start + 'Selected evidence'.length)
+  await page.getByRole('menuitem', { name: 'AI 解释' }).click()
+  await expect(page.getByRole('button', { name: 'Cancel AI' })).toBeVisible()
+  await page.getByRole('button', { name: 'Cancel AI' }).click()
+  await expect(page.getByRole('alert')).toContainText('cancelled')
+  await page.waitForTimeout(450)
+  await expect(page.getByRole('textbox', { name: 'AI contribution' })).toHaveValue('')
+  expect(cancelledRun).toBe(readRequest.runId)
+  expect(writeCount).toBe(0)
+  expect(pageErrors).toEqual([])
+})
+
 test('maps word, phrase, paragraph, inline-node, and multi-line selections and keeps Shift+S safe', async ({ page }) => {
   const pageErrors = []
   const consoleErrors = []
@@ -381,7 +636,7 @@ test('maps word, phrase, paragraph, inline-node, and multi-line selections and k
     await expect(chooser).toBeVisible()
     await chooser.getByRole('menuitem', { name: '手工批注' }).click()
     await expect(page.locator('.annotation-source blockquote')).toHaveText(expected)
-    await page.getByRole('button', { name: 'Close annotations workbench' }).click()
+    await page.getByRole('button', { name: 'Close annotations' }).click()
   }
 
   const wordStart = markdown.indexOf('evidence')
@@ -393,7 +648,7 @@ test('maps word, phrase, paragraph, inline-node, and multi-line selections and k
   await chooser.getByRole('menuitem', { name: '手工批注' }).click()
   await expect(page.getByRole('textbox', { name: 'Your annotation' })).toBeFocused()
   await expect(page.locator('.annotation-source blockquote')).toHaveText('Selected evidence is reproducible')
-  await page.getByRole('button', { name: 'Close annotations workbench' }).click()
+  await page.getByRole('button', { name: 'Close annotations' }).click()
   const inlineStart = markdown.indexOf('with')
   const inlineEnd = markdown.indexOf('inline evidence') + 'inline evidence'.length
   await inspectSelection(inlineStart, inlineEnd, markdown.slice(inlineStart, inlineEnd))
@@ -435,6 +690,21 @@ test('maps word, phrase, paragraph, inline-node, and multi-line selections and k
   await page.getByRole('dialog', { name: 'Approval required' }).getByRole('button', { name: 'Cancel' }).click()
   await expect(page.locator('.agent-conversation-panel.compact').getByText(/was cancelled/)).toBeVisible()
   expect(writeCount).toBe(0)
+
+  await page.getByRole('button', { name: 'Back' }).click()
+  await expect(chooser).toBeVisible()
+  await chooser.getByRole('menuitem', { name: '手工批注' }).click()
+  await expect(page.getByRole('textbox', { name: 'Your annotation' })).toHaveValue('')
+  await page.getByRole('textbox', { name: 'Your annotation' }).fill('guarded draft')
+  await page.keyboard.press('Escape')
+  const closeGuard = page.getByRole('alertdialog', { name: 'Discard unsaved changes?' })
+  await expect(closeGuard).toBeVisible()
+  await closeGuard.getByRole('button', { name: 'Keep editing' }).click()
+  await expect(page.getByRole('textbox', { name: 'Your annotation' })).toHaveValue('guarded draft')
+  await page.locator('.workspace-breadcrumb').click()
+  await expect(closeGuard).toBeVisible()
+  await closeGuard.getByRole('button', { name: 'Discard' }).click()
+  await expect(page.getByRole('complementary', { name: 'Annotations' })).toHaveCount(0)
 
   expect(pageErrors).toEqual([])
   expect(consoleErrors).toEqual([])

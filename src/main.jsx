@@ -1021,7 +1021,7 @@ function App() {
     setKnowledgeAgentSession((current) => current.context === context ? current : { ...current, context })
   }, [])
 
-  const executeKnowledgeRead = useCallback(async (descriptor, prompt, context) => {
+  const executeKnowledgeRead = useCallback(async (descriptor, prompt, context, signal) => {
     const capability = knowledgeReadCapabilityState(runtimeCapabilities, descriptor.toolId)
     if (!capability.available || !supportsLoopbackResearchExecution) {
       throw new Error(capability.reason || 'Knowledge Read execution is unavailable in this Runtime.')
@@ -1068,6 +1068,7 @@ function App() {
         context: currentContext,
         input,
         model: selectedModel.apiModelId,
+        signal,
         executeRun: (runOptions) => executeResearchRun({
           ...runOptions,
           execution: {
@@ -1086,7 +1087,14 @@ function App() {
         runStatus: 'completed',
         messages: [...current.messages, { id: `knowledge-assistant-${cursor}`, role: 'assistant', text }],
       }))
-      return text
+      return {
+        text,
+        aiProvenance: {
+          providerId: selectedModel.providerId,
+          modelId: selectedModel.apiModelId,
+          generatedAt: new Date().toISOString(),
+        },
+      }
     } catch (error) {
       setKnowledgeAgentSession((current) => ({
         ...current,
@@ -1106,7 +1114,8 @@ function App() {
     if (!descriptor?.available) return
     const prompt = options.prompt || `${descriptor.title} the current note.`
     if (['knowledge.query', 'knowledge.explain'].includes(descriptor.toolId)) {
-      return executeKnowledgeRead(descriptor, prompt, options.context)
+      return executeKnowledgeRead(descriptor, prompt, options.context, options.signal)
+        .then((result) => options.includeProvenance ? result : result.text)
     }
     if (descriptor.effect === 'read') return
     const currentContext = knowledgeAgentSession.context
@@ -1121,6 +1130,7 @@ function App() {
       idempotencyKey,
       prompt,
       payload: options.payload || null,
+      approvalDetails: options.approvalDetails || null,
     })
     setKnowledgeAgentSession((current) => ({ ...current, runId: current.runId || `knowledge-run-${current.cursor + 1}`, runStatus: 'waiting-approval' }))
   }, [executeKnowledgeRead, knowledgeAgentSession])
@@ -1725,6 +1735,14 @@ function App() {
           onContinueInResearch={continueKnowledgeInResearch}
           onKnowledgeContextChange={handleKnowledgeContextChange}
           annotationRuntime={runtimeAdapter.annotations}
+          actionRuntime={runtimeAdapter.actions}
+          provider={selectedModel ? {
+            providerId: selectedModel.providerId || selectedModel.authProvider || 'unknown',
+            providerName: selectedModel.provider || selectedModel.authProvider || 'Provider',
+            modelId: selectedModel.apiModelId || selectedModel.id,
+            modelName: selectedModel.name || selectedModel.apiModelId || selectedModel.id,
+          } : null}
+          onOpenSettings={() => handleOpenSection('settings')}
         /> : activeSection === 'pipelines' ? (
           <PipelinesSection vaultName={vaultName} noteCount={vaultNotes.length} runs={pipelineRuns} runningPipelineId={pipelineRunningId} onRun={handleRunPipeline} onViewRun={handleViewPipelineRun} onConnectVault={handleConnectVault} />
         ) : activeSection === 'runs' ? (

@@ -1214,9 +1214,10 @@ mark.annotation-highlight { cursor: inherit; }
 .annotation-highlight[data-annotation-count="2"], .annotation-highlight[data-annotation-count="3"] { border-bottom-style: double; background: rgba(110, 168, 254, .13); }
 .annotation-highlight:hover, .annotation-highlight:focus-visible { background: rgba(126, 226, 195, .2); color: #eefcf8; outline-offset: 2px; }
 .document-wikilink.annotated { border-bottom-color: rgba(126, 226, 195, .75); }
-.annotation-workbench { width: min(310px, calc(100% - 24px)); min-width: 0; min-height: 0; position: absolute; inset: 0 var(--right-dock) 0 auto; z-index: 10; overflow: auto; border-left: 1px solid var(--border); box-shadow: -14px 0 30px rgba(0, 0, 0, .28); background: #0d192b; color: #aebed0; scrollbar-width: thin; }
-.knowledge-workspace.right-closed .annotation-workbench { right: 0; }
+.annotation-workbench { width: min(328px, calc(100vw - 16px)); min-width: 0; max-height: min(690px, calc(100vh - 16px)); position: fixed; z-index: 35; overflow: auto; border: 1px solid rgba(110, 168, 254, .3); border-radius: 9px; box-shadow: 0 20px 55px rgba(0, 0, 0, .48); background: #0d192b; color: #aebed0; scrollbar-width: thin; }
 .annotation-workbench > header { min-height: 38px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); padding: 0 9px; }
+.annotation-workbench > header { cursor: grab; touch-action: none; }
+.annotation-workbench > header:active { cursor: grabbing; }
 .annotation-workbench > header > span, .annotation-record > span { min-width: 0; display: flex; align-items: center; gap: 6px; }
 .annotation-workbench > header button { width: 27px; height: 27px; display: grid; place-items: center; border: 0; border-radius: 4px; background: transparent; color: #7f91a8; cursor: pointer; }
 .annotation-editor { display: grid; gap: 11px; padding: 12px; border-bottom: 1px solid var(--border); }
@@ -1227,6 +1228,34 @@ mark.annotation-highlight { cursor: inherit; }
 .annotation-source small { color: #65778f; font-size: 8px; }
 .annotation-editor textarea { width: 100%; min-height: 74px; resize: vertical; border: 1px solid rgba(125, 157, 201, .2); border-radius: 5px; outline: 0; background: #091424; color: #dbe5f0; padding: 8px; font: 10px/1.5 var(--sans); }
 .annotation-editor textarea:focus { border-color: rgba(110, 168, 254, .58); }
+.annotation-rendered { display: grid; gap: 8px; }
+.annotation-rendered section { border: 1px solid rgba(125, 157, 201, .14); border-radius: 5px; background: rgba(9, 20, 36, .66); padding: 9px; }
+.annotation-rendered span, .annotation-archive-targets > span { color: #71839a; font-family: var(--mono); font-size: 8px; }
+.annotation-rendered p { margin: 5px 0 0; color: #d6e0eb; font-size: 10px; line-height: 1.55; white-space: pre-wrap; }
+.annotation-rendered small { display: block; margin-top: 7px; color: #6f8299; font-size: 7px; }
+.annotation-provider { display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid rgba(110, 168, 254, .16); border-radius: 5px; padding: 7px 8px; color: #8295ad; font-size: 8px; }
+.annotation-provider > span, .annotation-provider button { display: inline-flex; align-items: center; gap: 4px; }
+.annotation-provider strong { color: #c4d5e8; }
+.annotation-provider button { border: 0; background: transparent; color: #7fb3f5; cursor: pointer; font-size: 8px; }
+.workspace-provider-chip { max-width: 210px; }
+.workspace-provider-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.annotation-close-guard { display: grid; grid-template-columns: auto 1fr; gap: 8px; padding: 14px; }
+.annotation-close-guard svg { color: #e2b464; }
+.annotation-close-guard p { margin: 3px 0 10px; color: #7f90a6; font-size: 8px; }
+.annotation-close-guard button { border: 1px solid rgba(125, 157, 201, .22); border-radius: 4px; background: transparent; color: #aebed0; padding: 6px 8px; cursor: pointer; font-size: 8px; }
+.annotation-close-guard button.danger, .annotation-archive-button.danger { border-color: rgba(216, 120, 131, .42); color: #eea2aa; }
+.annotation-archive-state { border: 1px solid rgba(125, 157, 201, .16); border-radius: 5px; padding: 8px; font-size: 8px; }
+.annotation-archive-state.completed { border-color: rgba(126, 226, 195, .28); }
+.annotation-archive-state.failed { border-color: rgba(216, 120, 131, .35); }
+.annotation-archive-state p { margin: 5px 0 0; color: #8192a8; }
+.annotation-archive-state ul { display: grid; gap: 4px; margin: 7px 0 0; padding: 0; list-style: none; }
+.annotation-archive-state li { display: grid; gap: 2px; }
+.annotation-archive-state li span { overflow-wrap: anywhere; color: #b9c7d8; }
+.annotation-archive-state li small { color: #7ed3ab; }
+.annotation-archive-targets { display: grid; gap: 5px; }
+.annotation-archive-targets textarea { min-height: 54px; }
+.annotation-archive-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid rgba(126, 226, 195, .3); border-radius: 4px; background: rgba(126, 226, 195, .06); color: #a9d8c8; padding: 7px 9px; cursor: pointer; font-size: 8px; }
+.annotation-archive-button:disabled { cursor: not-allowed; opacity: .42; }
 .annotation-editor-actions { display: flex; justify-content: space-between; gap: 7px; }
 .annotation-editor-actions button { display: inline-flex; align-items: center; gap: 5px; border: 1px solid rgba(125, 157, 201, .2); border-radius: 4px; background: transparent; color: #9cafc4; padding: 7px 9px; cursor: pointer; font-size: 8px; }
 .annotation-editor-actions button.save { border-color: rgba(110, 168, 254, .4); background: #1b4ca8; color: #fff; }
@@ -1285,4 +1314,10 @@ mark.annotation-highlight { cursor: inherit; }
   .knowledge-document > h1 { font-size: 27px; }
   .document-properties { grid-template-columns: 88px 1fr; }
   .knowledge-statusbar span:nth-child(3), .knowledge-statusbar span:nth-child(4) { display: none; }
+  .annotation-workbench { left: 8px !important; right: 8px; top: auto !important; bottom: 8px; width: auto; max-height: min(74vh, 640px); }
+  .workspace-provider-chip span { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .annotation-workbench, .selection-chooser, .annotation-highlight { scroll-behavior: auto; transition: none !important; animation: none !important; }
 }
