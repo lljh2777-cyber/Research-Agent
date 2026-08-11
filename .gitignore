@@ -22,3 +22,6 @@ playwright-report/
 Thumbs.db
 .idea/
 .vscode/
+
+# Project-local Codex conversation configuration
+.codex/config.toml

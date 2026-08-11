@@ -10,10 +10,10 @@ All business features must access API, Vault, providers, credentials, MCP, and b
 
 | Task | Branch | Worktree |
 |---|---|---|
-| Knowledge Base | `codex/knowledge-base` | `D:\research_agent-worktree\codex\knowledge-base` |
-| Research Core | `codex/research-core` | `D:\research_agent-worktree\codex\research-core` |
-| Research Web UI | `codex/research-web-ui` | `D:\research_agent-worktree\codex\research-web-ui` |
-| Web Runtime | `codex/web-runtime` | `D:\research_agent-worktree\codex\web-runtime` |
+| Knowledge Base | `codex/round5-retrieval-contracts` | `D:\research_agent-worktree\round5\knowledge-base` |
+| Research Core | `codex/round5-hybrid-retrieval` | `D:\research_agent-worktree\round5\research-core` |
+| Research Web UI | `codex/round5-retrieval-ui` | `D:\research_agent-worktree\round5\research-web-ui` |
+| Web Runtime | `codex/round5-siliconflow-runtime` | `D:\research_agent-worktree\round5\web-runtime` |
 | Web Integration | `integration/web` | `D:\research_agent-worktree\integration\web` |
 
 The formal baseline is recorded in `D:\research_agent-worktree\.coordination\shared\current-baseline.json`. All worktrees must be created from the same formal baseline.
@@ -78,12 +78,12 @@ Integration checks status files and independently verifies each worktree using G
 
 Integration merges one feature branch at a time, runs targeted tests after each merge, and runs the complete suite only after all eligible branches are integrated. A functional defect is returned to the owning feature task. Integration owns cross-module wiring and mechanical merge conflicts, not silent rewrites of feature logic.
 
-The preferred merge order is:
+The Round 5 dependency and merge order is:
 
-1. `codex/web-runtime`
-2. `codex/knowledge-base`
-3. `codex/research-core`
-4. `codex/research-web-ui`
+1. `codex/round5-retrieval-contracts`
+2. `codex/round5-siliconflow-runtime`
+3. `codex/round5-hybrid-retrieval`
+4. `codex/round5-retrieval-ui`
 
 The order may change when explicit dependencies require it.
 
