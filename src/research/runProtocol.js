@@ -1,4 +1,5 @@
 export const RESEARCH_RUN_SCHEMA_VERSION = 1
+export const MAX_RESEARCH_RUN_ACTION_OUTPUT_BYTES = 64 * 1024
 
 export const RESEARCH_RUN_STATUS = Object.freeze({
   CREATED: 'created',
@@ -87,6 +88,23 @@ export function validateResearchRunEvent(event) {
   }
   if (event.type === RESEARCH_RUN_EVENT.TOOL_EXECUTION_COMPLETED && !String(event.requestId || '').trim()) {
     return 'Tool execution completions require a requestId.'
+  }
+  const actionOutput = event.type === RESEARCH_RUN_EVENT.RUN_COMPLETED ? event.output : event.result
+  const carriesActionOutput = event.type === RESEARCH_RUN_EVENT.RUN_COMPLETED
+    ? event.output !== undefined
+    : [RESEARCH_RUN_EVENT.RUN_FAILED, RESEARCH_RUN_EVENT.RUN_CANCELLED].includes(event.type)
+      && event.result !== undefined
+  if (carriesActionOutput) {
+    if (!actionOutput || typeof actionOutput !== 'object' || Array.isArray(actionOutput)) {
+      return 'Research run Action terminal output evidence must be an object.'
+    }
+    try {
+      if (new TextEncoder().encode(JSON.stringify(actionOutput)).length > MAX_RESEARCH_RUN_ACTION_OUTPUT_BYTES) {
+        return `Research run Action terminal output evidence exceeds ${MAX_RESEARCH_RUN_ACTION_OUTPUT_BYTES} UTF-8 bytes.`
+      }
+    } catch {
+      return 'Research run Action terminal output evidence must be JSON serializable.'
+    }
   }
   return null
 }

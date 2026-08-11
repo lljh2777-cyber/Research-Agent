@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "request": {
+    "schemaVersion": 1,
+    "toolId": "knowledge.synthesis.write",
+    "requestId": "archive-request-1",
+    "runId": "archive-run-1",
+    "sessionId": "knowledge-session-1",
+    "context": {
+      "schemaVersion": 1,
+      "surface": "knowledge-sidebar",
+      "vault": {
+        "id": "vault-1",
+        "name": "Lab Vault",
+        "revision": "vault-rev-9"
+      },
+      "activeNote": null,
+      "selection": null,
+      "attachments": [],
+      "contextRevision": "context-rev-4"
+    },
+    "scope": {
+      "vaultId": "vault-1",
+      "target": {
+        "kind": "folder",
+        "id": "knowledge"
+      },
+      "expectedRevision": "archive-root-rev-3"
+    },
+    "idempotencyKey": "archive:annotation-cjk-1:annotation-rev-7:knowledge",
+    "input": {
+      "operation": "archive-annotation",
+      "sourceAnnotation": {
+        "id": "annotation-cjk-1",
+        "path": "wiki/annotations/annotation-cjk-1.MD",
+        "revision": "annotation-rev-7"
+      },
+      "targets": [
+        "knowledge/findings.md",
+        "知识/证据汇总.md"
+      ]
+    }
+  },
+  "completed": {
+    "schemaVersion": 1,
+    "toolId": "knowledge.synthesis.write",
+    "requestId": "archive-request-1",
+    "runId": "archive-run-1",
+    "status": "completed",
+    "effect": "write",
+    "summary": "正式知识归档完成。",
+    "data": {
+      "schemaVersion": 1,
+      "kind": "knowledge-archive-result",
+      "sourceAnnotation": {
+        "id": "annotation-cjk-1",
+        "path": "wiki/annotations/annotation-cjk-1.MD",
+        "revision": "annotation-rev-7"
+      },
+      "targets": [
+        {
+          "path": "knowledge/findings.md",
+          "status": "updated",
+          "revision": "target-rev-8"
+        },
+        {
+          "path": "知识/证据汇总.md",
+          "status": "created",
+          "revision": "target-rev-1"
+        }
+      ]
+    },
+    "artifacts": [],
+    "error": null
+  },
+  "failedPartial": {
+    "schemaVersion": 1,
+    "toolId": "knowledge.synthesis.write",
+    "requestId": "archive-request-1",
+    "runId": "archive-run-1",
+    "status": "failed",
+    "effect": "write",
+    "summary": "第二个归档目标写入失败。",
+    "data": {
+      "schemaVersion": 1,
+      "kind": "knowledge-archive-result",
+      "sourceAnnotation": {
+        "id": "annotation-cjk-1",
+        "path": "wiki/annotations/annotation-cjk-1.MD",
+        "revision": "annotation-rev-7"
+      },
+      "targets": [
+        {
+          "path": "knowledge/findings.md",
+          "status": "updated",
+          "revision": "target-rev-8"
+        }
+      ]
+    },
+    "artifacts": [],
+    "error": {
+      "code": "archive_failed",
+      "message": "Second archive target failed."
+    }
+  },
+  "cancelledPartial": {
+    "schemaVersion": 1,
+    "toolId": "knowledge.synthesis.write",
+    "requestId": "archive-request-1",
+    "runId": "archive-run-1",
+    "status": "cancelled",
+    "effect": "write",
+    "summary": "归档已取消。",
+    "data": {
+      "schemaVersion": 1,
+      "kind": "knowledge-archive-result",
+      "sourceAnnotation": {
+        "id": "annotation-cjk-1",
+        "path": "wiki/annotations/annotation-cjk-1.MD",
+        "revision": "annotation-rev-7"
+      },
+      "targets": [
+        {
+          "path": "knowledge/findings.md",
+          "status": "unchanged",
+          "revision": "target-rev-8"
+        }
+      ]
+    },
+    "artifacts": [],
+    "error": {
+      "code": "archive_cancelled",
+      "message": "Archive run was cancelled."
+    }
+  }
+}

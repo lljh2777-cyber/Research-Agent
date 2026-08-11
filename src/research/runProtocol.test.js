@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  MAX_RESEARCH_RUN_ACTION_OUTPUT_BYTES,
   RESEARCH_RUN_EVENT,
   RESEARCH_RUN_STATUS,
   applyResearchRunEvent,
   createResearchRunRecord,
   normalizeResearchRunPolicy,
+  validateResearchRunEvent,
 } from './runProtocol.js'
 
 test('normalizes bounded run policies without hard-coding a preset policy', () => {
@@ -80,4 +82,16 @@ test('rejects illegal transitions and preserves a terminal record', () => {
 
   assert.equal(completed.status, RESEARCH_RUN_STATUS.COMPLETED)
   assert.equal(afterTerminal, completed)
+})
+
+test('freezes bounded Action terminal placement without changing legacy terminal events', () => {
+  const output = { schemaVersion: 1, status: 'completed', summary: 'done' }
+  assert.equal(validateResearchRunEvent({ type: RESEARCH_RUN_EVENT.RUN_COMPLETED, output }), null)
+  assert.equal(validateResearchRunEvent({ type: RESEARCH_RUN_EVENT.RUN_FAILED, result: output }), null)
+  assert.equal(validateResearchRunEvent({ type: RESEARCH_RUN_EVENT.RUN_CANCELLED, result: output }), null)
+  assert.equal(validateResearchRunEvent({ type: RESEARCH_RUN_EVENT.RUN_FAILED }), null)
+  assert.match(validateResearchRunEvent({ type: RESEARCH_RUN_EVENT.RUN_CANCELLED, result: 'not-an-output' }), /must be an object/)
+
+  const oversized = { text: 'x'.repeat(MAX_RESEARCH_RUN_ACTION_OUTPUT_BYTES) }
+  assert.match(validateResearchRunEvent({ type: RESEARCH_RUN_EVENT.RUN_FAILED, result: oversized }), /exceeds 65536 UTF-8 bytes/)
 })
