@@ -1,0 +1,122 @@
+{
+  "index": {
+    "schemaVersion": 2,
+    "kind": "retrieval-index",
+    "identity": {
+      "schemaVersion": 2,
+      "vault": {
+        "id": "vault-lab",
+        "revision": "vault-rev-7"
+      },
+      "chunking": {
+        "algorithm": "section-window-v1",
+        "size": 900,
+        "overlap": 120
+      },
+      "embedding": {
+        "providerId": "siliconflow",
+        "modelId": "BAAI/bge-m3",
+        "dimensions": 1024
+      }
+    },
+    "status": "ready",
+    "staleReason": null,
+    "chunks": [
+      {
+        "id": "methods/CellChat.md::0",
+        "noteId": "methods/CellChat.md",
+        "sourceId": "source:methods/CellChat.md",
+        "path": "methods/CellChat.md",
+        "ordinal": 0,
+        "heading": "CellChat"
+      }
+    ]
+  },
+  "packet": {
+    "schemaVersion": 2,
+    "kind": "evidence-packet",
+    "question": "How does CellChat infer ligand-receptor communication?",
+    "retrieval": {
+      "mode": "hybrid",
+      "topK": 1,
+      "candidateCount": 1,
+      "directCount": 1,
+      "graphExpanded": 0,
+      "indexStatus": "ready"
+    },
+    "index": {
+      "status": "ready",
+      "identity": {
+        "schemaVersion": 2,
+        "vault": {
+          "id": "vault-lab",
+          "revision": "vault-rev-7"
+        },
+        "chunking": {
+          "algorithm": "section-window-v1",
+          "size": 900,
+          "overlap": 120
+        },
+        "embedding": {
+          "providerId": "siliconflow",
+          "modelId": "BAAI/bge-m3",
+          "dimensions": 1024
+        }
+      },
+      "staleReason": null
+    },
+    "evidence": [
+      {
+        "id": "citation:methods/CellChat.md::0",
+        "noteId": "methods/CellChat.md",
+        "chunkId": "methods/CellChat.md::0",
+        "sourceId": "source:methods/CellChat.md",
+        "source": {
+          "id": "source:methods/CellChat.md",
+          "noteId": "methods/CellChat.md",
+          "path": "methods/CellChat.md"
+        },
+        "chunk": {
+          "id": "methods/CellChat.md::0",
+          "noteId": "methods/CellChat.md",
+          "sourceId": "source:methods/CellChat.md",
+          "path": "methods/CellChat.md",
+          "ordinal": 0,
+          "heading": "CellChat"
+        },
+        "citation": {
+          "id": "citation:methods/CellChat.md::0",
+          "sourceId": "source:methods/CellChat.md",
+          "chunkId": "methods/CellChat.md::0",
+          "noteId": "methods/CellChat.md",
+          "path": "methods/CellChat.md",
+          "heading": "CellChat"
+        },
+        "excerpt": "CellChat infers ligand-receptor communication between cell populations.",
+        "scoreProvenance": {
+          "lexical": 0.8,
+          "vector": 0.75,
+          "graph": null,
+          "fusion": 0.82,
+          "rerank": null,
+          "final": 0.82
+        },
+        "relationship": "direct",
+        "relatedFrom": null
+      }
+    ],
+    "sources": [
+      {
+        "id": "source:methods/CellChat.md",
+        "noteId": "methods/CellChat.md",
+        "path": "methods/CellChat.md",
+        "title": "CellChat",
+        "kind": "method",
+        "chunkIds": [
+          "methods/CellChat.md::0"
+        ]
+      }
+    ],
+    "error": null
+  }
+}
