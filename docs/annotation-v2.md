@@ -1,6 +1,6 @@
 # Annotation v2 provenance and archive contract
 
-Status: frozen for Round 4 (KB4-01). Annotation v1 remains frozen and supported. Knowledge Base owns normalization, migration, Markdown representation, anchoring, relocation, fixtures, and pure reference validation.
+Status: frozen for Round 4 (KB4-02). Annotation v1 remains frozen and supported. Knowledge Base owns normalization, migration, Markdown representation, anchoring, relocation, fixtures, and pure reference validation.
 
 The implementation is runtime-neutral. It performs no React, Runtime I/O, Provider or credential access, approval execution, Core run execution, Obsidian access, source Markdown rewrite, or wikilink insertion.
 
@@ -74,9 +74,11 @@ Legacy v1 migration is exact:
 
 `archive.targets` is an ordered, duplicate-free array of relative Vault Markdown paths. Paths use forward slashes, contain no control character or empty, `.` or `..` segment, have no drive/root prefix, and end in `.md` case-insensitively. Knowledge Base does not resolve, create, rewrite, or check these paths. Limits are 32 targets, 1,024 UTF-8 bytes per path, and 16,384 UTF-8 bytes for the serialized target array.
 
-The typed fragment required in Core formal archive input is exactly `{operation:"archive-annotation", sourceAnnotation:{id,revision}, targets:string[]}`. A new request has 1–32 targets normalized by the same rules. `normalizeArchiveAnnotationInput` validates this fragment. The existing Knowledge Action scope remains the authorization root; approval must display both that root scope and the exact ordered target list. Generic instruction/free text cannot encode target identity.
+The typed fragment required in Core formal archive input is exactly `{operation:"archive-annotation", sourceAnnotation:{id,path,revision}, targets:string[]}`. A new request has 1–32 targets normalized by the same rules. `normalizeArchiveAnnotationInput` validates this fragment and rejects extra keys at both fragment and source-reference levels. The existing Knowledge Action scope remains the authorization root; approval must display both that root scope and the exact ordered target list. Generic instruction/free text cannot encode target identity.
 
-`sourceAnnotation.id` must equal `AnnotationV1|V2.id`; `sourceAnnotation.revision` is the non-empty opaque Runtime annotation revision captured for approval/concurrency, not `annotation.source.revision` (the source note revision) and not any archive-target expected/result revision. `archive.targets` records requested normalized paths. It is not proof that every path committed. Core result per-target status/revision is execution evidence; failed/cancelled results may enumerate partial commits, and consumers must not infer success for every requested path. The authoritative typed-input fixture is `docs/contracts/annotation-archive-v1.fixture.json`.
+`sourceAnnotation.id` is the bounded logical `AnnotationV1|V2.id`. `sourceAnnotation.path` is the exact Runtime annotation record path used for `annotations.read`: a normalized relative forward-slash `.md` path under `wiki/annotations/`, with no root/drive prefix, backslash, control character, empty segment, `.` segment, or `..` segment, and at most 1,024 UTF-8 bytes. KB validates but does not derive or rewrite this path. `sourceAnnotation.revision` is the non-empty opaque Runtime content revision for that exact path captured for approval/concurrency, not `annotation.source.revision` (the source note revision) and not any archive-target expected/result revision; it is limited to 256 UTF-8 bytes.
+
+Runtime re-reads `sourceAnnotation.path` and requires its current revision to equal `sourceAnnotation.revision` before archive execution. Runtime does not parse Annotation Markdown to recover the logical id. UI must carry `id`, `path`, and `revision` from the same loaded Runtime record and must never derive or sanitize the path in React. `archive.targets` records requested normalized paths. It is not proof that every path committed. Core result per-target status/revision is execution evidence; failed/cancelled results may enumerate partial commits, and consumers must not infer success for every requested path. The authoritative typed-input fixture is `docs/contracts/annotation-archive-v1.fixture.json`.
 
 ## Deterministic Markdown and bounds
 
@@ -100,7 +102,7 @@ A persistable record has a stricter total ceiling. `createAnnotationPatchIntent`
 
 Runtime independently owns the final raw JSON request ceiling of 131,072 bytes, including JSON escaping, approval, and idempotency. KB does not assemble or validate that Runtime envelope, and UI must not duplicate the logic in React. `docs/contracts/annotation-write-boundary-v1.fixture.json` freezes the exact content-boundary recipe and an escaping-heavy consumer case for Runtime4 parity tests.
 
-Annotation/source reference IDs are limited to 256 UTF-8 bytes; source paths to 4,096; run IDs and annotation revisions to 256. Reserved section markers remain rejected. LF is canonical; CRLF parses to the same normalized record.
+Annotation/source reference IDs are limited to 256 UTF-8 bytes; Annotation note-source paths to 4,096; archive source-record paths to 1,024; annotation revisions to 256. `ANNOTATION_ARCHIVE_RUN_ID_MAX_BYTES` remains exactly 256 UTF-8 bytes. Reserved section markers remain rejected. LF is canonical; CRLF parses to the same normalized record.
 
 The required byte-level invariant is:
 
@@ -113,7 +115,7 @@ The enriched authoritative record is `docs/contracts/annotation-v2.fixture.json`
 
 ## Consumer boundary
 
-- Core validates/authenticates provenance inputs and embeds the frozen typed archive fragment in its existing scoped/approved Action contract. New pending/completed execution requires non-empty targets and a run ID.
-- Runtime persists serialized Annotation Markdown opaquely through the existing Annotation Adapter and unchanged patch intent. Runtime4 owns final-envelope preflight at 131,072 bytes and service parity for the escaping adversary; it does not reinterpret v2 fields.
-- UI renders and edits through the KB normalizer/serializer, uses the KB patch-intent guard before save, and does not hard-code Runtime envelope logic. It treats only `archived === true` (therefore only completed archive) as the legacy hidden projection.
+- Core validates/authenticates provenance inputs and embeds the frozen typed archive fragment, including the exact source record path, in its existing scoped/approved Action contract. New pending/completed execution requires non-empty targets and a run ID.
+- Runtime persists serialized Annotation Markdown opaquely through the existing Annotation Adapter and unchanged patch intent. Before archive execution it re-reads the exact source record path and compares the opaque revision without parsing KB Markdown. Runtime4 owns final-envelope preflight at 131,072 bytes and service parity for the escaping adversary; it does not reinterpret v2 fields.
+- UI renders and edits through the KB normalizer/serializer, carries source annotation id/path/revision from the same loaded Runtime record, uses the KB patch-intent guard before save, and does not derive record paths or hard-code Runtime envelope logic in React. It treats only `archived === true` (therefore only completed archive) as the legacy hidden projection.
 - Archive execution and result atomicity remain Core/Runtime responsibilities. Knowledge Base performs no archive action.

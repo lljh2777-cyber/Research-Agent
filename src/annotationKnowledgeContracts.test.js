@@ -53,6 +53,8 @@ test('authoritative source annotation and archive target fixture matches Core co
   assert.equal(fixture.schemaVersion, 1)
   assert.deepEqual(normalizeArchiveAnnotationInput(fixture.archiveInput), fixture.archiveInput)
   assert.deepEqual(normalizeSourceAnnotationReference(fixture.archiveInput.sourceAnnotation), fixture.archiveInput.sourceAnnotation)
+  assert.deepEqual(Object.keys(fixture.archiveInput.sourceAnnotation), ['id', 'path', 'revision'])
+  assert.deepEqual(JSON.parse(JSON.stringify(normalizeArchiveAnnotationInput(fixture.archiveInput))), fixture.archiveInput)
   assert.deepEqual(normalizeAnnotationArchiveTargets(fixture.archiveInput.targets), fixture.archiveInput.targets)
   assert.deepEqual(createArchiveCancellationError(), fixture.cancellationError)
   assert.deepEqual(fixture.bounds, {

@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest'
 
 import {
   ANNOTATION_ARCHIVE_MAX_TARGETS,
+  ANNOTATION_ARCHIVE_RUN_ID_MAX_BYTES,
   ANNOTATION_MARKDOWN_MAX_BYTES,
   ANNOTATION_PATCH_CONTENT_MAX_BYTES,
+  ANNOTATION_RECORD_PATH_MAX_BYTES,
   ANNOTATION_SECTION_MAX_BYTES,
   ANNOTATION_V2_SCHEMA_VERSION,
   createAnnotationPatchIntent,
@@ -54,8 +56,12 @@ describe('Annotation v2 owner contract', () => {
     const value = await fixture('annotation-archive-v1.fixture.json')
     expect(normalizeArchiveAnnotationInput(value.archiveInput)).toEqual(value.archiveInput)
     expect(normalizeSourceAnnotationReference(value.archiveInput.sourceAnnotation)).toEqual(value.archiveInput.sourceAnnotation)
+    expect(Object.keys(value.archiveInput.sourceAnnotation)).toEqual(['id', 'path', 'revision'])
+    expect(JSON.parse(JSON.stringify(normalizeArchiveAnnotationInput(value.archiveInput)))).toEqual(value.archiveInput)
     expect(normalizeAnnotationArchiveTargets(value.archiveInput.targets)).toEqual(value.archiveInput.targets)
     expect(ANNOTATION_ARCHIVE_MAX_TARGETS).toBe(32)
+    expect(ANNOTATION_ARCHIVE_RUN_ID_MAX_BYTES).toBe(256)
+    expect(ANNOTATION_RECORD_PATH_MAX_BYTES).toBe(1024)
     expect(ANNOTATION_SECTION_MAX_BYTES).toBe(65_536)
     expect(ANNOTATION_PATCH_CONTENT_MAX_BYTES).toBe(RUNTIME_ANNOTATION_CONTENT_MAX_BYTES)
     expect(value.bounds).toEqual({

@@ -6,6 +6,7 @@ import {
   ANNOTATION_MARKDOWN_MAX_BYTES,
   ANNOTATION_PATCH_CONTENT_MAX_BYTES,
   ANNOTATION_PATCH_SCHEMA_VERSION,
+  ANNOTATION_RECORD_PATH_MAX_BYTES,
   ANNOTATION_SECTION_MAX_BYTES,
   ANNOTATION_SCHEMA_VERSION,
   ANNOTATION_V2_SCHEMA_VERSION,
@@ -267,11 +268,61 @@ test('Annotation v2 migration and archive lifecycle preserve Web anchoring and r
   assert.equal(original.slice(migrated.anchor.position.start, migrated.anchor.position.end), migrated.anchor.quote.exact)
 })
 
-test('Annotation v2 freezes opaque source revision and normalized archive target semantics', () => {
-  assert.deepEqual(normalizeSourceAnnotationReference({ id: 'annotation-1', revision: 'annotation-rev-7' }), {
+test('Annotation v2 freezes exact source record identity and normalized archive target semantics', () => {
+  const sourceAnnotation = {
     id: 'annotation-1',
+    path: 'wiki/annotations/annotation-1.md',
     revision: 'annotation-rev-7',
-  })
+  }
+  assert.deepEqual(normalizeSourceAnnotationReference(sourceAnnotation), sourceAnnotation)
+  assert.deepEqual(JSON.parse(JSON.stringify(normalizeSourceAnnotationReference(sourceAnnotation))), sourceAnnotation)
+  assert.throws(
+    () => normalizeSourceAnnotationReference({ ...sourceAnnotation, sourcePath: 'papers/findings.md' }),
+    /must contain exactly/,
+  )
+  assert.throws(
+    () => normalizeSourceAnnotationReference({ ...sourceAnnotation, path: 'wiki/annotations/../escape.md' }),
+    /normalized relative Vault path/,
+  )
+  assert.throws(
+    () => normalizeSourceAnnotationReference({ ...sourceAnnotation, path: 'wiki/annotations/folder' }),
+    /\.md file/,
+  )
+  assert.throws(
+    () => normalizeSourceAnnotationReference({ ...sourceAnnotation, path: 'wiki/annotations/folder/' }),
+    /normalized relative Vault path/,
+  )
+  assert.throws(
+    () => normalizeSourceAnnotationReference({ ...sourceAnnotation, path: 'wiki/annotations/annotation-1.txt' }),
+    /\.md file/,
+  )
+  assert.throws(
+    () => normalizeSourceAnnotationReference({ ...sourceAnnotation, path: 'wiki/annotations/annotation-1.MD' }),
+    /\.md file/,
+  )
+  assert.throws(
+    () => normalizeSourceAnnotationReference({ ...sourceAnnotation, path: '/wiki/annotations/annotation-1.md' }),
+    /relative Vault path/,
+  )
+  assert.throws(
+    () => normalizeSourceAnnotationReference({ ...sourceAnnotation, path: 'annotations/annotation-1.md' }),
+    /under wiki\/annotations/,
+  )
+  assert.throws(
+    () => normalizeSourceAnnotationReference({ ...sourceAnnotation, path: 'wiki/annotations/bad\nname.md' }),
+    /control characters/,
+  )
+  assert.throws(
+    () => normalizeSourceAnnotationReference({ ...sourceAnnotation, path: 'wiki\\annotations\\annotation-1.md' }),
+    /forward slashes/,
+  )
+  assert.throws(
+    () => normalizeSourceAnnotationReference({
+      ...sourceAnnotation,
+      path: 'wiki/annotations/' + '界'.repeat(ANNOTATION_RECORD_PATH_MAX_BYTES) + '.md',
+    }),
+    /1024 UTF-8 bytes/,
+  )
   assert.deepEqual(normalizeAnnotationArchiveTargets(['knowledge/findings.md', '知识/证据.md']), [
     'knowledge/findings.md',
     '知识/证据.md',
@@ -283,18 +334,24 @@ test('Annotation v2 freezes opaque source revision and normalized archive target
   assert.throws(() => normalizeAnnotationArchiveTargets(['knowledge/findings.txt']), /Markdown file/)
   assert.deepEqual(normalizeArchiveAnnotationInput({
     operation: 'archive-annotation',
-    sourceAnnotation: { id: 'annotation-1', revision: 'annotation-rev-7' },
+    sourceAnnotation,
     targets: ['knowledge/findings.md'],
   }), {
     operation: 'archive-annotation',
-    sourceAnnotation: { id: 'annotation-1', revision: 'annotation-rev-7' },
+    sourceAnnotation,
     targets: ['knowledge/findings.md'],
   })
   assert.throws(() => normalizeArchiveAnnotationInput({
     operation: 'archive-annotation',
-    sourceAnnotation: { id: 'annotation-1', revision: 'annotation-rev-7' },
+    sourceAnnotation,
     targets: [],
   }), /must not be empty/)
+  assert.throws(() => normalizeArchiveAnnotationInput({
+    operation: 'archive-annotation',
+    sourceAnnotation,
+    targets: ['knowledge/findings.md'],
+    instruction: 'archive this path',
+  }), /must contain exactly/)
 })
 
 test('Annotation v2 enforces safe provenance and UTF-8 section bounds', () => {

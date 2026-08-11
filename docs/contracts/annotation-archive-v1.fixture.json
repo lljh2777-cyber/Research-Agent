@@ -4,6 +4,7 @@
     "operation": "archive-annotation",
     "sourceAnnotation": {
       "id": "annotation-cjk-1",
+      "path": "wiki/annotations/annotation-cjk-1.md",
       "revision": "annotation-rev-7"
     },
     "targets": [

@@ -9,6 +9,7 @@ export const ANNOTATION_PATCH_CONTENT_MAX_BYTES = 64 * 1024
 export const ANNOTATION_SECTION_MAX_BYTES = 64 * 1024
 export const ANNOTATION_ID_MAX_BYTES = 256
 export const ANNOTATION_REVISION_MAX_BYTES = 256
+export const ANNOTATION_RECORD_PATH_MAX_BYTES = 1024
 export const ANNOTATION_SOURCE_PATH_MAX_BYTES = 4 * 1024
 export const ANNOTATION_ARCHIVE_MAX_TARGETS = 32
 export const ANNOTATION_ARCHIVE_TARGET_MAX_BYTES = 1024
@@ -59,6 +60,16 @@ function requireTimestamp(value, label) {
   const timestamp = requireString(value, label)
   if (!Number.isFinite(Date.parse(timestamp))) throw new TypeError(label + ' must be an ISO-compatible timestamp.')
   return timestamp
+}
+
+function requireExactKeys(value, keys, label) {
+  const record = requireRecord(value, label)
+  const actual = Object.keys(record).sort()
+  const expected = [...keys].sort()
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+    throw new TypeError(label + ' must contain exactly: ' + keys.join(', ') + '.')
+  }
+  return record
 }
 
 export function utf8ByteLength(value) {
@@ -210,15 +221,32 @@ export function normalizeAnnotationSource(value) {
 }
 
 export function normalizeSourceAnnotationReference(value) {
-  const reference = requireRecord(value, 'source annotation reference')
+  const reference = requireExactKeys(value, ['id', 'path', 'revision'], 'source annotation reference')
   return {
     id: requireBoundedString(reference.id, 'source annotation reference.id', ANNOTATION_ID_MAX_BYTES),
+    path: normalizeAnnotationRecordPath(reference.path),
     revision: requireBoundedString(reference.revision, 'source annotation reference.revision', ANNOTATION_REVISION_MAX_BYTES),
   }
 }
 
+export function normalizeAnnotationRecordPath(value) {
+  const label = 'source annotation reference.path'
+  const path = requireBoundedString(value, label, ANNOTATION_RECORD_PATH_MAX_BYTES)
+  if (path.startsWith('/') || path.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(path) || path.includes('\\')) {
+    throw new TypeError(label + ' must be a relative Vault path using forward slashes.')
+  }
+  if (/[\u0000-\u001f\u007f]/.test(path)) throw new TypeError(label + ' must not contain control characters.')
+  const segments = path.split('/')
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
+    throw new TypeError(label + ' must be a normalized relative Vault path.')
+  }
+  if (!path.startsWith('wiki/annotations/')) throw new TypeError(label + ' must be under wiki/annotations/.')
+  if (!path.endsWith('.md')) throw new TypeError(label + ' must identify a .md file.')
+  return path
+}
+
 export function normalizeArchiveAnnotationInput(value) {
-  const input = requireRecord(value, 'archive annotation input')
+  const input = requireExactKeys(value, ['operation', 'sourceAnnotation', 'targets'], 'archive annotation input')
   if (input.operation !== 'archive-annotation') throw new TypeError('archive annotation input.operation must be archive-annotation.')
   const targets = normalizeAnnotationArchiveTargets(input.targets)
   if (!targets.length) throw new TypeError('archive annotation input.targets must not be empty.')
