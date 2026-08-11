@@ -204,8 +204,9 @@ test('captures a real Explain result, approves the same file-backed annotation, 
     const url = new URL(request.url())
     if (request.method() === 'GET' && url.searchParams.has('path')) {
       annotationCalls.read += 1
-      const entry = persisted.get(url.searchParams.get('path'))
-      return route.fulfill({ status: entry ? 200 : 404, json: entry ? { ok: true, schemaVersion: 1, ...entry } : { ok: false, code: 'not_found', error: 'Missing annotation.' } })
+      const path = url.searchParams.get('path')
+      const entry = persisted.get(path)
+      return route.fulfill({ status: entry ? 200 : 404, json: entry ? { ok: true, schemaVersion: 1, path, ...entry } : { ok: false, code: 'not_found', error: 'Missing annotation.' } })
     }
     if (request.method() === 'GET') {
       annotationCalls.list += 1
@@ -215,7 +216,7 @@ test('captures a real Explain result, approves the same file-backed annotation, 
     annotationCalls.writes.push(body)
     const revision = `annotation-rev-${annotationCalls.writes.length}`
     persisted.set(body.intent.target.path, { content: body.intent.content, revision })
-    return route.fulfill({ json: { ok: true, schemaVersion: 1, revision, replayed: false } })
+    return route.fulfill({ json: { ok: true, schemaVersion: 1, annotationId: body.intent.annotationId, path: body.intent.target.path, revision, replayed: false } })
   })
 
   await page.goto('/')
@@ -277,7 +278,7 @@ test('captures a real Explain result, approves the same file-backed annotation, 
   await expect(approval).toContainText('saved-vault / wiki/annotations/')
   await expect(approval).toContainText(/annotation-findings-note-.*:save/)
   await approval.getByRole('button', { name: 'Approve once' }).click()
-  await expect(compactPanel.getByText(/Annotate completed for saved-vault/)).toBeVisible()
+  await expect(compactPanel.getByText(/Save completed for saved-vault/)).toBeVisible()
   expect(annotationCalls.writes).toHaveLength(1)
   const write = annotationCalls.writes[0]
   expect(write.approval).toEqual({ status: 'approved' })
@@ -324,7 +325,7 @@ test('captures a real Explain result, approves the same file-backed annotation, 
   const fullPanel = page.locator('.agent-conversation-panel.full')
   await expect(fullPanel).toBeVisible()
   await expect(fullPanel).toHaveAttribute('data-session-id', sessionId)
-  await expect(fullPanel.getByText(/Annotate completed for saved-vault/)).toHaveCount(2)
+  await expect(fullPanel.getByText(/Save completed for saved-vault/)).toHaveCount(2)
   await expect(fullPanel.getByText('Current note')).toBeVisible()
   await expect(fullPanel.getByText('Selection')).toBeVisible()
 
@@ -376,12 +377,16 @@ test('runs a separately approved formal archive with exact source identity, targ
   }))
   const persisted = new Map()
   const writes = []
+  const readPaths = []
+  let runtimePath = null
   await page.route('**/api/runtime/annotations*', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
     if (request.method() === 'GET' && url.searchParams.has('path')) {
-      const entry = persisted.get(url.searchParams.get('path'))
-      return route.fulfill({ status: entry ? 200 : 404, json: entry ? { ok: true, schemaVersion: 1, ...entry } : { ok: false, error: 'Missing annotation.' } })
+      const path = url.searchParams.get('path')
+      readPaths.push(path)
+      const entry = persisted.get(path)
+      return route.fulfill({ status: entry ? 200 : 404, json: entry ? { ok: true, schemaVersion: 1, path, ...entry } : { ok: false, error: 'Missing annotation.' } })
     }
     if (request.method() === 'GET') {
       return route.fulfill({ json: { ok: true, schemaVersion: 1, vaultId: 'saved-vault', annotations: [...persisted.entries()].map(([path, entry]) => ({ path, revision: entry.revision })) } })
@@ -389,8 +394,9 @@ test('runs a separately approved formal archive with exact source identity, targ
     const body = request.postDataJSON()
     writes.push(body)
     const revision = `annotation-revision-${writes.length}`
-    persisted.set(body.intent.target.path, { content: body.intent.content, revision })
-    return route.fulfill({ json: { ok: true, schemaVersion: 1, revision, replayed: false } })
+    runtimePath ||= body.intent.target.path.replace(/\.md$/i, '.MD')
+    persisted.set(runtimePath, { content: body.intent.content, revision })
+    return route.fulfill({ json: { ok: true, schemaVersion: 1, annotationId: body.intent.annotationId, path: runtimePath, revision, replayed: false } })
   })
   await installKnowledgeReadTransport(page)
   const archiveCalls = await installArchiveTransport(page)
@@ -411,24 +417,41 @@ test('runs a separately approved formal archive with exact source identity, targ
   await page.getByRole('textbox', { name: 'Formal archive targets (one Vault .md path per line)' }).fill('synthesis/findings.md\nsynthesis/methods.md')
   await page.getByRole('button', { name: 'Archive knowledge with approval' }).click()
   const approval = page.getByRole('dialog', { name: 'Approval required' })
+  await expect(approval).toContainText('persist pending archive lifecycle')
+  await expect(approval).toContainText('wiki/annotations/annotation-findings-note-')
+  await approval.getByRole('button', { name: 'Approve once' }).click()
+  await expect.poll(() => writes.length).toBe(2)
+  const pendingRecord = parseAnnotationMarkdown(writes[1].intent.content)
+  expect(pendingRecord.archive).toMatchObject({ state: 'pending', targets: ['synthesis/findings.md', 'synthesis/methods.md'], runId: expect.any(String) })
+  expect(writes[1].intent.target.expectedRevision).toBe('annotation-revision-1')
+  expect(writes[1].intent.target.path).toBe(runtimePath)
+
   await expect(approval).toContainText('saved-vault (Vault root)')
   await expect(approval).toContainText('saved-vault · vault:saved-vault')
-  await expect(approval).toContainText('wiki/annotations/annotation-findings-note-')
-  await expect(approval).toContainText('annotation-revision-1')
+  await expect(approval).toContainText('annotation-revision-2')
   await expect(approval).toContainText('synthesis/findings.md')
   await expect(approval).toContainText('synthesis/methods.md')
   await approval.getByRole('button', { name: 'Approve once' }).click()
   await expect.poll(() => archiveCalls.starts.length).toBe(1)
-  await expect.poll(() => writes.length).toBe(2)
+  await expect(approval).toContainText('persist completed archive lifecycle')
+  expect(writes).toHaveLength(2)
+  await approval.getByRole('button', { name: 'Approve once' }).click()
+  await expect.poll(() => writes.length).toBe(3)
+  await expect.poll(() => readPaths.length).toBe(3)
+  expect(writes.map((entry) => entry.approval)).toEqual([{ status: 'approved' }, { status: 'approved' }, { status: 'approved' }])
+  expect(new Set(writes.map((entry) => entry.idempotencyKey)).size).toBe(3)
+  expect(readPaths).toEqual([runtimePath, runtimePath, runtimePath])
+  expect(runtimePath).toMatch(/\.MD$/)
 
   const action = archiveCalls.starts[0]
   expect(action.input).toEqual({
     operation: 'archive-annotation',
-    sourceAnnotation: { id: expect.any(String), path: writes[0].intent.target.path, revision: 'annotation-revision-1' },
+    sourceAnnotation: { id: expect.any(String), path: runtimePath, revision: 'annotation-revision-2' },
     targets: ['synthesis/findings.md', 'synthesis/methods.md'],
   })
   expect(action.approval).toEqual({ status: 'approved', scope: action.scope, sourceAnnotation: action.input.sourceAnnotation, targets: action.input.targets })
-  const terminalRecord = parseAnnotationMarkdown(writes[1].intent.content)
+  expect(writes[2].intent.target.expectedRevision).toBe('annotation-revision-2')
+  const terminalRecord = parseAnnotationMarkdown(writes[2].intent.content)
   expect(terminalRecord.archive).toMatchObject({ state: 'completed', targets: action.input.targets, runId: action.runId, error: null })
   expect(terminalRecord.archived).toBe(true)
   await expect(page.getByRole('region', { name: 'Formal archive status' })).toContainText('completed')
@@ -448,6 +471,10 @@ test('runs a separately approved formal archive with exact source identity, targ
 
 for (const archiveStatus of ['failed', 'cancelled']) {
   test(`keeps a ${archiveStatus} formal archive visible with truthful partial evidence`, async ({ page }) => {
+    const pageErrors = []
+    const consoleErrors = []
+    page.on('pageerror', (error) => pageErrors.push(error.message))
+    page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()) })
     await page.route('**/api/runtime', (route) => route.fulfill({
       json: createRuntimeManifest({ buildMode: 'test', target: 'local-web', services: { annotations: true, actions: ARCHIVE_ACTION_SERVICE } }),
     }))
@@ -457,15 +484,16 @@ for (const archiveStatus of ['failed', 'cancelled']) {
       const request = route.request()
       const url = new URL(request.url())
       if (request.method() === 'GET' && url.searchParams.has('path')) {
-        const entry = persisted.get(url.searchParams.get('path'))
-        return route.fulfill({ status: entry ? 200 : 404, json: entry ? { ok: true, schemaVersion: 1, ...entry } : { ok: false, error: 'Missing annotation.' } })
+        const path = url.searchParams.get('path')
+        const entry = persisted.get(path)
+        return route.fulfill({ status: entry ? 200 : 404, json: entry ? { ok: true, schemaVersion: 1, path, ...entry } : { ok: false, error: 'Missing annotation.' } })
       }
-      if (request.method() === 'GET') return route.fulfill({ json: { ok: true, schemaVersion: 1, vaultId: 'saved-vault', annotations: [] } })
+      if (request.method() === 'GET') return route.fulfill({ json: { ok: true, schemaVersion: 1, vaultId: 'saved-vault', annotations: [...persisted.entries()].map(([path, entry]) => ({ path, revision: entry.revision })) } })
       const body = request.postDataJSON()
       writes.push(body)
       const revision = `annotation-revision-${writes.length}`
       persisted.set(body.intent.target.path, { content: body.intent.content, revision })
-      return route.fulfill({ json: { ok: true, schemaVersion: 1, revision } })
+      return route.fulfill({ json: { ok: true, schemaVersion: 1, annotationId: body.intent.annotationId, path: body.intent.target.path, revision } })
     })
     await installArchiveTransport(page, { status: archiveStatus })
     await page.goto('/')
@@ -482,9 +510,17 @@ for (const archiveStatus of ['failed', 'cancelled']) {
     await expect.poll(() => writes.length).toBe(1)
     await page.getByRole('textbox', { name: 'Formal archive targets (one Vault .md path per line)' }).fill('synthesis/first.md\nsynthesis/second.md')
     await page.getByRole('button', { name: 'Archive knowledge with approval' }).click()
-    await page.getByRole('dialog', { name: 'Approval required' }).getByRole('button', { name: 'Approve once' }).click()
+    const approval = page.getByRole('dialog', { name: 'Approval required' })
+    await expect(approval).toContainText('persist pending archive lifecycle')
+    await approval.getByRole('button', { name: 'Approve once' }).click()
     await expect.poll(() => writes.length).toBe(2)
-    const terminal = parseAnnotationMarkdown(writes[1].intent.content)
+    expect(parseAnnotationMarkdown(writes[1].intent.content).archive.state).toBe('pending')
+    await expect(approval).toContainText('saved-vault (Vault root)')
+    await approval.getByRole('button', { name: 'Approve once' }).click()
+    await expect(approval).toContainText(`persist ${archiveStatus} archive lifecycle`)
+    await approval.getByRole('button', { name: 'Approve once' }).click()
+    await expect.poll(() => writes.length).toBe(3)
+    const terminal = parseAnnotationMarkdown(writes[2].intent.content)
     expect(terminal.archive).toMatchObject({
       state: 'failed',
       targets: ['synthesis/first.md', 'synthesis/second.md'],
@@ -498,6 +534,104 @@ for (const archiveStatus of ['failed', 'cancelled']) {
     await expect(status).toContainText('created')
     await expect(status).not.toContainText('completed')
     await expect(page.getByRole('button', { name: /Open annotation for Selected evidence/ }).first()).toBeVisible()
+    await page.reload()
+    await page.locator('.main-nav').getByRole('button', { name: 'Knowledge Graph' }).click()
+    await page.getByRole('button', { name: 'Show annotations workbench (1)' }).click()
+    await page.locator('.annotation-record').filter({ hasText: 'Archive failed' }).click()
+    await expect(page.getByRole('region', { name: 'Formal archive status' })).toContainText('failed')
+    expect(pageErrors).toEqual([])
+    expect(consoleErrors).toEqual([])
+  })
+}
+
+for (const persistenceCase of ['pending-declined', 'pending-conflict', 'tuple-mismatch', 'terminal-declined', 'terminal-conflict']) {
+  test(`fails closed for ${persistenceCase} without reusing archive approval`, async ({ page }) => {
+    const pageErrors = []
+    const consoleErrors = []
+    page.on('pageerror', (error) => pageErrors.push(error.message))
+    page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()) })
+    await page.route('**/api/runtime', (route) => route.fulfill({
+      json: createRuntimeManifest({ buildMode: 'test', target: 'local-web', services: { annotations: true, actions: ARCHIVE_ACTION_SERVICE } }),
+    }))
+    const persisted = new Map()
+    const writes = []
+    let writeAttempts = 0
+    await page.route('**/api/runtime/annotations*', async (route) => {
+      const request = route.request()
+      const url = new URL(request.url())
+      if (request.method() === 'GET' && url.searchParams.has('path')) {
+        const path = url.searchParams.get('path')
+        if (persistenceCase === 'tuple-mismatch' && writeAttempts === 2) {
+          return route.fulfill({ json: { ok: false, schemaVersion: 1, code: 'not_found', error: 'Exact Runtime path mismatch.' } })
+        }
+        const entry = persisted.get(path)
+        return route.fulfill({ json: entry ? { ok: true, schemaVersion: 1, path, ...entry } : { ok: false, schemaVersion: 1, error: 'Missing annotation.' } })
+      }
+      if (request.method() === 'GET') {
+        return route.fulfill({ json: { ok: true, schemaVersion: 1, vaultId: 'saved-vault', annotations: [...persisted.entries()].map(([path, entry]) => ({ path, revision: entry.revision })) } })
+      }
+      writeAttempts += 1
+      const body = request.postDataJSON()
+      if ((persistenceCase === 'pending-conflict' && writeAttempts === 2) || (persistenceCase === 'terminal-conflict' && writeAttempts === 3)) {
+        return route.fulfill({ json: { ok: false, schemaVersion: 1, code: 'revision_conflict', error: 'Annotation revision conflict.' } })
+      }
+      const revision = `annotation-revision-${writeAttempts}`
+      writes.push(body)
+      persisted.set(body.intent.target.path, { content: body.intent.content, revision })
+      const path = persistenceCase === 'tuple-mismatch' && writeAttempts === 2 ? `${body.intent.target.path}.mismatch` : body.intent.target.path
+      return route.fulfill({ json: { ok: true, schemaVersion: 1, annotationId: body.intent.annotationId, path, revision } })
+    })
+    const archiveCalls = await installArchiveTransport(page)
+    await page.goto('/')
+    await installVaultSnapshot(page)
+    await page.reload()
+    await page.locator('.main-nav').getByRole('button', { name: 'Knowledge Graph' }).click()
+    const markdown = '# Findings\n\nSelected evidence is reproducible with [[findings#Methods|inline evidence]] and\ncontinues across a second rendered line.\n\n## Methods\n\nThe assay was repeated in three cohorts.\n\n```js\nconst protectedValue = true\n```'
+    const start = markdown.indexOf('Selected evidence')
+    await selectMarkdownRange(page, start, start + 'Selected evidence'.length)
+    await page.getByRole('menuitem', { name: '手工批注' }).click()
+    await page.getByRole('textbox', { name: 'Your annotation' }).fill('Body remains saved.')
+    await page.getByRole('button', { name: 'Save with approval' }).click()
+    const approval = page.getByRole('dialog', { name: 'Approval required' })
+    await approval.getByRole('button', { name: 'Approve once' }).click()
+    await expect.poll(() => writes.length).toBe(1)
+    await page.getByRole('textbox', { name: 'Formal archive targets (one Vault .md path per line)' }).fill('synthesis/guard.md')
+    await page.getByRole('button', { name: 'Archive knowledge with approval' }).click()
+    await expect(approval).toContainText('persist pending archive lifecycle')
+
+    if (persistenceCase === 'pending-declined') {
+      await approval.getByRole('button', { name: 'Cancel' }).click()
+      await expect(page.getByRole('alert').filter({ hasText: 'No Action started' })).toBeVisible()
+      expect(archiveCalls.starts).toHaveLength(0)
+      expect(writes).toHaveLength(1)
+    } else {
+      await approval.getByRole('button', { name: 'Approve once' }).click()
+      if (['pending-conflict', 'tuple-mismatch'].includes(persistenceCase)) {
+        await expect(page.getByRole('alert').filter({ hasText: /revision conflict|path mismatch/ })).toBeVisible()
+        expect(archiveCalls.starts).toHaveLength(0)
+        expect(writes).toHaveLength(persistenceCase === 'tuple-mismatch' ? 2 : 1)
+      } else {
+        await expect(approval).toContainText('saved-vault (Vault root)')
+        await approval.getByRole('button', { name: 'Approve once' }).click()
+        await expect.poll(() => archiveCalls.starts.length).toBe(1)
+        await expect(approval).toContainText('persist completed archive lifecycle')
+        if (persistenceCase === 'terminal-declined') {
+          await approval.getByRole('button', { name: 'Cancel' }).click()
+          await expect(page.getByRole('status').filter({ hasText: 'write was declined' })).toBeVisible()
+        } else {
+          await approval.getByRole('button', { name: 'Approve once' }).click()
+          await expect(page.getByRole('status').filter({ hasText: 'write failed' })).toBeVisible()
+        }
+        await expect(page.locator('.annotation-rendered')).toContainText('Body remains saved.')
+        expect(parseAnnotationMarkdown([...persisted.values()][0].content).archive.state).toBe('pending')
+        await page.reload()
+        await page.locator('.main-nav').getByRole('button', { name: 'Knowledge Graph' }).click()
+        await page.getByRole('button', { name: 'Show annotations workbench (1)' }).click()
+        await expect(page.locator('.annotation-record').filter({ hasText: 'Archive pending' })).toBeVisible()
+      }
+    }
+    expect(pageErrors).toEqual([])
+    expect(consoleErrors).toEqual([])
   })
 }
 

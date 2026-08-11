@@ -40,9 +40,11 @@ import { executeKnowledgeArchiveAction } from './features/knowledge/archiveActio
 
 const LAYOUT_KEY = 'bioresearch-os:knowledge-dock-layout'
 
-function annotationPath(annotationId) {
-  const safeId = String(annotationId).replace(/[^a-zA-Z0-9._-]/g, '-')
-  return `wiki/annotations/${safeId}.md`
+function newAnnotationWriteTarget(annotationId) {
+  if (!/^annotation-[a-zA-Z0-9._-]+$/.test(annotationId)) {
+    throw new TypeError('A new annotation needs a generated safe id before its first save.')
+  }
+  return `wiki/annotations/${annotationId}.md`
 }
 
 const PANEL_META = {
@@ -470,6 +472,8 @@ export default function KnowledgeGraphSection({
   const [annotationCloseGuard, setAnnotationCloseGuard] = useState(false)
   const [annotationArchiveTargets, setAnnotationArchiveTargets] = useState('')
   const [annotationArchiveEvidence, setAnnotationArchiveEvidence] = useState([])
+  const [annotationArchiveOutcome, setAnnotationArchiveOutcome] = useState(null)
+  const [annotationArchiveRunning, setAnnotationArchiveRunning] = useState(false)
   const pendingExplainIdRef = useRef(null)
   const explainControllerRef = useRef(null)
   const archiveControllerRef = useRef(null)
@@ -488,6 +492,8 @@ export default function KnowledgeGraphSection({
     setAnnotationCloseGuard(false)
     setAnnotationArchiveTargets('')
     setAnnotationArchiveEvidence([])
+    setAnnotationArchiveOutcome(null)
+    setAnnotationArchiveRunning(false)
   }
 
   const discardAnnotationWorkbench = () => {
@@ -689,32 +695,62 @@ export default function KnowledgeGraphSection({
     return migrated
   }
 
-  const commitAnnotationWrite = async (nextAnnotation, verb, approval = { status: 'approved' }) => {
-    if (!annotationRuntime?.available) throw new Error(annotationRuntime?.reason || 'Annotation persistence is unavailable.')
-    const metadata = annotationMeta[nextAnnotation.id] || {}
-    const path = metadata.path || annotationPath(nextAnnotation.id)
-    const intent = createAnnotationPatchIntent(nextAnnotation, { path, expectedRevision: metadata.revision || null })
-    const idempotencyKey = `${nextAnnotation.id}:${nextAnnotation.timestamps.updatedAt}:${verb.toLocaleLowerCase()}`
-    const result = await annotationRuntime.write({ intent, approval, idempotencyKey })
-    if (!result?.ok) throw new Error(result?.error || result?.reason || 'The annotation could not be saved.')
-    const nextMetadata = { path, revision: result.revision || metadata.revision || null }
-    setAnnotations((current) => [...current.filter((item) => item.id !== nextAnnotation.id), nextAnnotation])
-    setAnnotationMeta((current) => ({ ...current, [nextAnnotation.id]: nextMetadata }))
-    setActiveAnnotation(nextAnnotation)
-    setAnnotationWorkbenchOpen(true)
-    setAnnotationDraft({ ...nextAnnotation.sections })
-    setAnnotationInitialDraft({ ...nextAnnotation.sections })
-    setAnnotationProvenance(nextAnnotation.aiProvenance)
-    setAnnotationStage('view')
-    setAnnotationPersistenceMessage('')
-    return { result, metadata: nextMetadata }
+  const requireExactWrittenAnnotation = async (nextAnnotation, result) => {
+    if (typeof result?.path !== 'string' || !result.path || typeof result?.revision !== 'string' || !result.revision) {
+      throw new Error('Runtime saved the annotation without returning its exact path and revision; formal archive is disabled.')
+    }
+    if (result.annotationId !== nextAnnotation.id) {
+      throw new Error('Runtime returned a mismatched annotation identity; formal archive is disabled.')
+    }
+    const loaded = await annotationRuntime.read({ path: result.path })
+    if (!loaded?.ok || typeof loaded.content !== 'string') {
+      throw new Error(loaded?.error || 'Runtime saved the annotation, but its exact record could not be reread.')
+    }
+    if (loaded.path !== result.path || loaded.revision !== result.revision) {
+      throw new Error('Runtime write/read identity did not match exactly; formal archive is disabled.')
+    }
+    const record = normalizeAnnotation(parseAnnotationMarkdown(loaded.content))
+    if (record.id !== result.annotationId) {
+      throw new Error('The reread annotation id did not match the Runtime write result; formal archive is disabled.')
+    }
+    return { record, metadata: { path: loaded.path, revision: loaded.revision } }
   }
 
-  const requestAnnotationWrite = (nextAnnotation, verb) => {
+  const commitAnnotationWrite = async (nextAnnotation, verb, metadataOverride = null) => {
+    if (!annotationRuntime?.available) throw new Error(annotationRuntime?.reason || 'Annotation persistence is unavailable.')
+    const metadata = metadataOverride || annotationMeta[nextAnnotation.id] || {}
+    const path = metadata.path || newAnnotationWriteTarget(nextAnnotation.id)
+    const intent = createAnnotationPatchIntent(nextAnnotation, { path, expectedRevision: metadata.revision || null })
+    const idempotencyKey = `${nextAnnotation.id}:${nextAnnotation.timestamps.updatedAt}:${verb.toLocaleLowerCase()}`
+    const result = await annotationRuntime.write({ intent, approval: { status: 'approved' }, idempotencyKey })
+    if (!result?.ok) throw new Error(result?.error || result?.reason || 'The annotation could not be saved.')
+    const confirmed = await requireExactWrittenAnnotation(nextAnnotation, result)
+    const nextMetadata = confirmed.metadata
+    setAnnotations((current) => [...current.filter((item) => item.id !== confirmed.record.id), confirmed.record])
+    setAnnotationMeta((current) => ({ ...current, [confirmed.record.id]: nextMetadata }))
+    setActiveAnnotation(confirmed.record)
+    setAnnotationWorkbenchOpen(true)
+    setAnnotationDraft({ ...confirmed.record.sections })
+    setAnnotationInitialDraft({ ...confirmed.record.sections })
+    setAnnotationProvenance(confirmed.record.aiProvenance)
+    setAnnotationStage('view')
+    setAnnotationPersistenceMessage('')
+    return { result, record: confirmed.record, metadata: nextMetadata }
+  }
+
+  const scheduleAnnotationStep = (callback) => {
+    window.setTimeout(() => {
+      Promise.resolve().then(callback).catch((error) => {
+        setAnnotationPersistenceMessage(error?.message || 'The next annotation step could not be prepared.')
+      })
+    }, 0)
+  }
+
+  const requestAnnotationWrite = (nextAnnotation, verb, options = {}) => {
     const descriptor = knowledgeToolDescriptors.find((item) => item.id === 'annotation')
     if (!descriptor?.available || !annotationRuntime?.available) return
-    const metadata = annotationMeta[nextAnnotation.id] || {}
-    const path = metadata.path || annotationPath(nextAnnotation.id)
+    const metadata = options.metadata || annotationMeta[nextAnnotation.id] || {}
+    const path = metadata.path || newAnnotationWriteTarget(nextAnnotation.id)
     const intent = createAnnotationPatchIntent(nextAnnotation, {
       path,
       expectedRevision: metadata.revision || null,
@@ -723,16 +759,24 @@ export default function KnowledgeGraphSection({
     const targetScope = `${knowledgeContext.vault.name} / ${path}`
     onKnowledgeAction(descriptor, {
       prompt: `${verb} annotation for ${knowledgeContext.activeNote.title}`,
+      actionTitle: verb,
       targetScope,
       idempotencyKey,
       payload: intent,
+      declinedMessage: options.declinedMessage,
       onApproved: async () => {
         try {
-          return await commitAnnotationWrite(nextAnnotation, verb)
+          const persisted = await commitAnnotationWrite(nextAnnotation, verb, metadata)
+          if (options.onPersisted) scheduleAnnotationStep(() => options.onPersisted(persisted))
+          return persisted
         } catch (error) {
           setAnnotationPersistenceMessage(error?.message || 'The annotation could not be saved.')
+          options.onFailed?.(error)
           throw error
         }
+      },
+      onDeclined: () => {
+        options.onDeclined?.()
       },
     })
   }
@@ -805,40 +849,29 @@ export default function KnowledgeGraphSection({
     setAnnotationWorkbenchOpen(false)
   }
 
-  const handleRequestArchive = (annotation) => {
+  const requestFormalArchiveAction = (pendingAnnotation, pendingMetadata) => {
     const descriptor = knowledgeToolDescriptors.find((item) => item.id === 'synthesis')
     if (!descriptor?.available || !actionRuntime?.available) return
-    const metadata = annotationMeta[annotation.id]
-    if (!metadata?.path || !metadata?.revision) {
-      setAnnotationPersistenceMessage('Reload this saved annotation before starting a formal archive so its exact Runtime path and revision are available.')
-      return
-    }
-    let targets
-    try {
-      targets = normalizeAnnotationArchiveTargets(annotationArchiveTargets.split(/\r?\n/).filter((value) => value.length > 0))
-    } catch (error) {
-      setAnnotationPersistenceMessage(error.message)
-      return
-    }
-    const sourceAnnotation = { id: annotation.id, path: metadata.path, revision: metadata.revision }
-    const sequence = Date.now().toString(36)
+    const targets = pendingAnnotation.archive.targets
+    const sourceAnnotation = { id: pendingAnnotation.id, path: pendingMetadata.path, revision: pendingMetadata.revision }
     const scope = {
       vaultId: knowledgeContext.vault.id,
       target: { kind: 'vault', id: knowledgeContext.vault.id },
       expectedRevision: null,
     }
     const request = createKnowledgeArchiveActionInput({
-      requestId: `${knowledgeSession.sessionId}:archive:request:${sequence}`,
-      runId: `${knowledgeSession.sessionId}:archive:run:${sequence}`,
+      requestId: `${pendingAnnotation.archive.runId}:request`,
+      runId: pendingAnnotation.archive.runId,
       sessionId: knowledgeSession.sessionId,
       context: knowledgeContext,
       scope,
-      idempotencyKey: `${annotation.id}:${metadata.revision}:archive:${sequence}`,
+      idempotencyKey: `${pendingAnnotation.id}:${pendingMetadata.revision}:archive:${pendingAnnotation.archive.runId}`,
       input: { operation: 'archive-annotation', sourceAnnotation, targets },
     })
     const approval = { status: 'approved', scope: request.scope, sourceAnnotation, targets }
     onKnowledgeAction(descriptor, {
       prompt: `Archive saved annotation into ${targets.length} requested knowledge target${targets.length === 1 ? '' : 's'}.`,
+      actionTitle: 'Formal archive Action',
       targetScope: `${knowledgeContext.vault.name} (Vault root)`,
       idempotencyKey: request.idempotencyKey,
       payload: request,
@@ -846,13 +879,8 @@ export default function KnowledgeGraphSection({
       onApproved: async () => {
         const controller = new AbortController()
         archiveControllerRef.current = controller
-        const pending = normalizeAnnotation({
-          ...migrateAnnotationToV2(annotation),
-          archive: { state: 'pending', targets, runId: request.runId, error: null },
-          timestamps: { ...annotation.timestamps, updatedAt: new Date().toISOString(), archivedAt: null },
-        })
-        setActiveAnnotation(pending)
-        setAnnotations((current) => [...current.filter((item) => item.id !== pending.id), pending])
+        setAnnotationArchiveRunning(true)
+        setAnnotationArchiveOutcome(null)
         setAnnotationArchiveEvidence([])
         let result
         try {
@@ -866,19 +894,67 @@ export default function KnowledgeGraphSection({
           })
         } finally {
           if (archiveControllerRef.current === controller) archiveControllerRef.current = null
+          setAnnotationArchiveRunning(false)
         }
         const archive = knowledgeArchiveResultToAnnotationArchive(request, result)
         const timestamp = new Date().toISOString()
         const terminal = normalizeAnnotation({
-          ...migrateAnnotationToV2(annotation),
+          ...pendingAnnotation,
           archive,
-          timestamps: { ...annotation.timestamps, updatedAt: timestamp, archivedAt: archive.state === 'completed' ? timestamp : null },
+          timestamps: { ...pendingAnnotation.timestamps, updatedAt: timestamp, archivedAt: archive.state === 'completed' ? timestamp : null },
         })
         setAnnotationArchiveEvidence(result.data.targets)
-        await commitAnnotationWrite(terminal, `Archive-${result.status}`, { status: 'approved' })
+        setAnnotationArchiveOutcome({ status: result.status, archive, persistence: 'awaiting-approval' })
+        scheduleAnnotationStep(() => requestAnnotationWrite(terminal, `Persist ${result.status} archive lifecycle`, {
+          metadata: pendingMetadata,
+          declinedMessage: 'Terminal lifecycle persistence was cancelled. The Action result remains visible and the Annotation remains pending.',
+          onPersisted: () => setAnnotationArchiveOutcome(null),
+          onDeclined: () => {
+            setAnnotationArchiveOutcome((current) => current && { ...current, persistence: 'declined' })
+            setAnnotationPersistenceMessage('The Action result remains visible, but its terminal lifecycle write was declined. The saved annotation remains pending.')
+          },
+          onFailed: (error) => {
+            setAnnotationArchiveOutcome((current) => current && { ...current, persistence: 'failed' })
+            setAnnotationPersistenceMessage(`The Action result remains visible, but its terminal lifecycle was not persisted: ${error?.message || 'Annotation write failed.'}`)
+          },
+        }))
         if (result.status !== 'completed') throw new Error(result.error?.message || result.summary)
         return result
       },
+      onDeclined: () => {
+        setAnnotationPersistenceMessage('Formal archive Action approval was declined. No Action started; the persisted pending lifecycle remains visible.')
+      },
+      declinedMessage: 'Formal archive Action was cancelled. No Action started; the persisted pending lifecycle remains visible.',
+    })
+  }
+
+  const handleRequestArchive = (annotation) => {
+    const metadata = annotationMeta[annotation.id]
+    if (!metadata?.path || !metadata?.revision) {
+      setAnnotationPersistenceMessage('Reload this saved annotation before starting a formal archive so its exact Runtime path and revision are available.')
+      return
+    }
+    let targets
+    try {
+      targets = normalizeAnnotationArchiveTargets(annotationArchiveTargets.split(/\r?\n/).filter((value) => value.length > 0))
+    } catch (error) {
+      setAnnotationPersistenceMessage(error.message)
+      return
+    }
+    const sequence = Date.now().toString(36)
+    const pending = normalizeAnnotation({
+      ...migrateAnnotationToV2(annotation),
+      archive: { state: 'pending', targets, runId: `${knowledgeSession.sessionId}:archive:run:${sequence}`, error: null },
+      timestamps: { ...annotation.timestamps, updatedAt: new Date().toISOString(), archivedAt: null },
+    })
+    setAnnotationArchiveOutcome(null)
+    setAnnotationPersistenceMessage('')
+    requestAnnotationWrite(pending, 'Persist pending archive lifecycle', {
+      metadata,
+      declinedMessage: 'Pending archive persistence was cancelled. No Action started.',
+      onPersisted: ({ record, metadata: confirmedMetadata }) => requestFormalArchiveAction(record, confirmedMetadata),
+      onDeclined: () => setAnnotationPersistenceMessage('Pending archive persistence was declined. No Action started.'),
+      onFailed: () => setAnnotationArchiveRunning(false),
     })
   }
 
@@ -911,6 +987,8 @@ export default function KnowledgeGraphSection({
     setAnnotationPosition({ x: Math.max(8, window.innerWidth - 370), y: 72 })
     setAnnotationArchiveTargets(migrated.archive.targets.join('\n'))
     setAnnotationArchiveEvidence([])
+    setAnnotationArchiveOutcome(null)
+    setAnnotationArchiveRunning(false)
     setAnnotationPersistenceMessage('')
     setAnnotationCloseGuard(false)
     setAnnotationWorkbenchOpen(true)
@@ -993,6 +1071,8 @@ export default function KnowledgeGraphSection({
         archiveTargets={annotationArchiveTargets}
         onArchiveTargetsChange={setAnnotationArchiveTargets}
         archiveEvidence={annotationArchiveEvidence}
+        archiveOutcome={annotationArchiveOutcome}
+        archiveRunning={annotationArchiveRunning}
         closeGuard={annotationCloseGuard}
         onConfirmDiscard={discardAnnotationWorkbench}
         onKeepEditing={() => setAnnotationCloseGuard(false)}

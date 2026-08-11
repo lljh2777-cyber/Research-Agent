@@ -58,11 +58,12 @@ function relocationMessage(relocation) {
   return `Located with ${relocation.strategy}.`
 }
 
-function ArchiveEvidence({ archiveState, evidence = [] }) {
+function ArchiveEvidence({ archiveState, evidence = [], outcome = null }) {
   if (!archiveState || archiveState.state === 'none') return null
   return <section className={`annotation-archive-state ${archiveState.state}`} aria-label="Formal archive status">
     <strong>Formal archive: {archiveState.state}</strong>
     {archiveState.error?.message && <p role="alert">{archiveState.error.message}</p>}
+    {outcome && <p className={`annotation-archive-outcome ${outcome.persistence}`} role="status">Action {outcome.status}; terminal lifecycle {outcome.persistence === 'awaiting-approval' ? 'awaits a separate Annotation write approval' : outcome.persistence === 'declined' ? 'write was declined' : 'write failed'}.</p>}
     {evidence.length > 0 && <ul>{evidence.map((entry) => <li key={entry.path}><span>{entry.path}</span><small>{entry.status}{entry.revision ? ` · ${entry.revision}` : ''}</small></li>)}</ul>}
     {archiveState.targets?.length > 0 && evidence.length === 0 && <p>{archiveState.targets.length} requested target{archiveState.targets.length === 1 ? '' : 's'}; requested paths are not commit evidence.</p>}
   </section>
@@ -95,6 +96,8 @@ export function AnnotationEditor({
   archiveTargets = '',
   onArchiveTargetsChange,
   archiveEvidence = [],
+  archiveOutcome = null,
+  archiveRunning = false,
   closeGuard = false,
   onConfirmDiscard,
   onKeepEditing,
@@ -165,11 +168,13 @@ export function AnnotationEditor({
         </div>
       </> : <>
         <div className="annotation-rendered"><section><span>Manual</span><p>{annotation.sections?.manual || 'No manual contribution.'}</p></section><section><span>AI</span><p>{annotation.sections?.ai || 'No AI contribution.'}</p>{annotation.aiProvenance && <small>{annotation.aiProvenance.providerId} · {annotation.aiProvenance.modelId} · {new Date(annotation.aiProvenance.generatedAt).toLocaleString()}</small>}</section></div>
-        <ArchiveEvidence archiveState={annotation.archive} evidence={archiveEvidence} />
+        <ArchiveEvidence archiveState={annotation.archive} evidence={archiveEvidence} outcome={archiveOutcome} />
         <div className="annotation-editor-actions"><button type="button" onClick={onEdit}><PencilLine size={13} />Edit</button><button type="button" onClick={onRegenerate} disabled={!provider}><RotateCw size={13} />Regenerate</button></div>
         <label className="annotation-archive-targets"><span>Formal archive targets (one Vault .md path per line)</span><textarea value={archiveTargets} onChange={(event) => onArchiveTargetsChange(event.target.value)} placeholder="synthesis/findings.md" /></label>
         {annotation.archive?.state === 'pending'
-          ? <button type="button" className="annotation-archive-button danger" onClick={onCancelArchive}><Square size={12} />Cancel archive run</button>
+          ? archiveRunning
+            ? <button type="button" className="annotation-archive-button danger" onClick={onCancelArchive}><Square size={12} />Cancel archive run</button>
+            : <button type="button" className="annotation-archive-button" disabled>Archive lifecycle pending</button>
           : <button type="button" className="annotation-archive-button" onClick={() => onRequestArchive(annotation)} disabled={!archiveAvailable || !archiveTargets.trim()} title={!archiveAvailable ? archiveUnavailableReason : undefined}><Archive size={13} />Archive knowledge with approval</button>}
       </>}
       <p className="annotation-approval-hint">Saving and formal archive are distinct scoped operations. Neither runs without per-call approval.</p>

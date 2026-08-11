@@ -375,6 +375,7 @@ function App() {
   const mockRunTimersRef = useRef(new Map())
   const toolApprovalResolverRef = useRef(null)
   const knowledgeApprovalCallbackRef = useRef(null)
+  const knowledgeApprovalDeclineCallbackRef = useRef(null)
   const knowledgeApprovalResolvingRef = useRef(false)
   const reattachedResearchRunsRef = useRef(new Set())
   const researchToolRegistryRef = useRef(null)
@@ -1123,14 +1124,16 @@ function App() {
     const targetScope = options.targetScope || `${currentContext.vault.name} / ${currentContext.activeNote.path}`
     const idempotencyKey = options.idempotencyKey || `${knowledgeAgentSession.sessionId}:${descriptor.toolId}:${knowledgeAgentSession.cursor + 1}`
     knowledgeApprovalCallbackRef.current = options.onApproved || null
+    knowledgeApprovalDeclineCallbackRef.current = options.onDeclined || null
     setKnowledgeApproval({
       toolId: descriptor.toolId,
-      actionTitle: descriptor.title,
+      actionTitle: options.actionTitle || descriptor.title,
       targetScope,
       idempotencyKey,
       prompt,
       payload: options.payload || null,
       approvalDetails: options.approvalDetails || null,
+      declinedMessage: options.declinedMessage || null,
     })
     setKnowledgeAgentSession((current) => ({ ...current, runId: current.runId || `knowledge-run-${current.cursor + 1}`, runStatus: 'waiting-approval' }))
   }, [executeKnowledgeRead, knowledgeAgentSession])
@@ -1139,7 +1142,9 @@ function App() {
     if (!knowledgeApproval || knowledgeApprovalResolvingRef.current) return
     knowledgeApprovalResolvingRef.current = true
     const callback = knowledgeApprovalCallbackRef.current
+    const declineCallback = knowledgeApprovalDeclineCallbackRef.current
     knowledgeApprovalCallbackRef.current = null
+    knowledgeApprovalDeclineCallbackRef.current = null
     let completed = approved
     let failureMessage = ''
     if (approved) {
@@ -1148,6 +1153,12 @@ function App() {
       } catch (error) {
         completed = false
         failureMessage = error?.message || 'The approved write failed.'
+      }
+    } else {
+      try {
+        await declineCallback?.()
+      } catch (error) {
+        failureMessage = error?.message || 'The cancellation callback failed.'
       }
     }
     setKnowledgeAgentSession((current) => {
@@ -1159,7 +1170,7 @@ function App() {
         messages: [
           ...current.messages,
           { id: `knowledge-user-${cursor}`, role: 'user', text: knowledgeApproval.prompt },
-          { id: `knowledge-assistant-${cursor}`, role: 'assistant', text: completed ? `${knowledgeApproval.actionTitle} completed for ${knowledgeApproval.targetScope}.` : approved ? `${knowledgeApproval.actionTitle} failed: ${failureMessage}` : `${knowledgeApproval.actionTitle} was cancelled. No Vault changes were made.` },
+          { id: `knowledge-assistant-${cursor}`, role: 'assistant', text: completed ? `${knowledgeApproval.actionTitle} completed for ${knowledgeApproval.targetScope}.` : approved ? `${knowledgeApproval.actionTitle} failed: ${failureMessage}` : knowledgeApproval.declinedMessage || `${knowledgeApproval.actionTitle} was cancelled. No Vault changes were made.` },
         ],
       }
     })
