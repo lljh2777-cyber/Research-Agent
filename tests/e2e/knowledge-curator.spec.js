@@ -276,7 +276,7 @@ test('captures a real Explain result, approves the same file-backed annotation, 
 
   const approval = page.getByRole('dialog', { name: 'Approval required' })
   await expect(approval).toContainText('saved-vault / wiki/annotations/')
-  await expect(approval).toContainText(/annotation-findings-note-.*:save/)
+  await expect(approval).toContainText(/annotation\.write\.body\.[a-f0-9]{64}/)
   await approval.getByRole('button', { name: 'Approve once' }).click()
   await expect(compactPanel.getByText(/Save completed for saved-vault/)).toBeVisible()
   expect(annotationCalls.writes).toHaveLength(1)
@@ -392,6 +392,9 @@ test('runs a separately approved formal archive with exact source identity, targ
       return route.fulfill({ json: { ok: true, schemaVersion: 1, vaultId: 'saved-vault', annotations: [...persisted.entries()].map(([path, entry]) => ({ path, revision: entry.revision })) } })
     }
     const body = request.postDataJSON()
+    if (!/^[A-Za-z0-9._:-]{8,160}$/.test(body.idempotencyKey)) {
+      return route.fulfill({ json: { ok: false, schemaVersion: 1, error: 'Annotation writes require a valid idempotencyKey.' } })
+    }
     writes.push(body)
     const revision = `annotation-revision-${writes.length}`
     runtimePath ||= body.intent.target.path.replace(/\.md$/i, '.MD')
@@ -417,7 +420,7 @@ test('runs a separately approved formal archive with exact source identity, targ
   await page.getByRole('textbox', { name: 'Formal archive targets (one Vault .md path per line)' }).fill('synthesis/findings.md\nsynthesis/methods.md')
   await page.getByRole('button', { name: 'Archive knowledge with approval' }).click()
   const approval = page.getByRole('dialog', { name: 'Approval required' })
-  await expect(approval).toContainText('persist pending archive lifecycle')
+  await expect(approval).toContainText('Persist pending archive lifecycle')
   await expect(approval).toContainText('wiki/annotations/annotation-findings-note-')
   await approval.getByRole('button', { name: 'Approve once' }).click()
   await expect.poll(() => writes.length).toBe(2)
@@ -433,13 +436,14 @@ test('runs a separately approved formal archive with exact source identity, targ
   await expect(approval).toContainText('synthesis/methods.md')
   await approval.getByRole('button', { name: 'Approve once' }).click()
   await expect.poll(() => archiveCalls.starts.length).toBe(1)
-  await expect(approval).toContainText('persist completed archive lifecycle')
+  await expect(approval).toContainText('Persist completed archive lifecycle')
   expect(writes).toHaveLength(2)
   await approval.getByRole('button', { name: 'Approve once' }).click()
   await expect.poll(() => writes.length).toBe(3)
   await expect.poll(() => readPaths.length).toBe(3)
   expect(writes.map((entry) => entry.approval)).toEqual([{ status: 'approved' }, { status: 'approved' }, { status: 'approved' }])
   expect(new Set(writes.map((entry) => entry.idempotencyKey)).size).toBe(3)
+  writes.forEach((entry) => expect(entry.idempotencyKey).toMatch(/^[A-Za-z0-9._:-]{8,160}$/))
   expect(readPaths).toEqual([runtimePath, runtimePath, runtimePath])
   expect(runtimePath).toMatch(/\.MD$/)
 
@@ -450,6 +454,7 @@ test('runs a separately approved formal archive with exact source identity, targ
     targets: ['synthesis/findings.md', 'synthesis/methods.md'],
   })
   expect(action.approval).toEqual({ status: 'approved', scope: action.scope, sourceAnnotation: action.input.sourceAnnotation, targets: action.input.targets })
+  expect(writes.map((entry) => entry.idempotencyKey)).not.toContain(action.idempotencyKey)
   expect(writes[2].intent.target.expectedRevision).toBe('annotation-revision-2')
   const terminalRecord = parseAnnotationMarkdown(writes[2].intent.content)
   expect(terminalRecord.archive).toMatchObject({ state: 'completed', targets: action.input.targets, runId: action.runId, error: null })
@@ -511,13 +516,13 @@ for (const archiveStatus of ['failed', 'cancelled']) {
     await page.getByRole('textbox', { name: 'Formal archive targets (one Vault .md path per line)' }).fill('synthesis/first.md\nsynthesis/second.md')
     await page.getByRole('button', { name: 'Archive knowledge with approval' }).click()
     const approval = page.getByRole('dialog', { name: 'Approval required' })
-    await expect(approval).toContainText('persist pending archive lifecycle')
+    await expect(approval).toContainText('Persist pending archive lifecycle')
     await approval.getByRole('button', { name: 'Approve once' }).click()
     await expect.poll(() => writes.length).toBe(2)
     expect(parseAnnotationMarkdown(writes[1].intent.content).archive.state).toBe('pending')
     await expect(approval).toContainText('saved-vault (Vault root)')
     await approval.getByRole('button', { name: 'Approve once' }).click()
-    await expect(approval).toContainText(`persist ${archiveStatus} archive lifecycle`)
+    await expect(approval).toContainText(`Persist ${archiveStatus} archive lifecycle`)
     await approval.getByRole('button', { name: 'Approve once' }).click()
     await expect.poll(() => writes.length).toBe(3)
     const terminal = parseAnnotationMarkdown(writes[2].intent.content)
@@ -597,7 +602,7 @@ for (const persistenceCase of ['pending-declined', 'pending-conflict', 'tuple-mi
     await expect.poll(() => writes.length).toBe(1)
     await page.getByRole('textbox', { name: 'Formal archive targets (one Vault .md path per line)' }).fill('synthesis/guard.md')
     await page.getByRole('button', { name: 'Archive knowledge with approval' }).click()
-    await expect(approval).toContainText('persist pending archive lifecycle')
+    await expect(approval).toContainText('Persist pending archive lifecycle')
 
     if (persistenceCase === 'pending-declined') {
       await approval.getByRole('button', { name: 'Cancel' }).click()
@@ -614,7 +619,7 @@ for (const persistenceCase of ['pending-declined', 'pending-conflict', 'tuple-mi
         await expect(approval).toContainText('saved-vault (Vault root)')
         await approval.getByRole('button', { name: 'Approve once' }).click()
         await expect.poll(() => archiveCalls.starts.length).toBe(1)
-        await expect(approval).toContainText('persist completed archive lifecycle')
+        await expect(approval).toContainText('Persist completed archive lifecycle')
         if (persistenceCase === 'terminal-declined') {
           await approval.getByRole('button', { name: 'Cancel' }).click()
           await expect(page.getByRole('status').filter({ hasText: 'write was declined' })).toBeVisible()
