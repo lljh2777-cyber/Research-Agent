@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import { DEEPSEEK_ENDPOINT_TYPES, getDeepSeekModelProfile, isDeepSeekEndpointType } from '../shared/deepseek-provider.mjs'
 import { BAILIAN_ENDPOINT_TYPES, getBailianModelProfile, isBailianEndpointType } from '../shared/bailian-provider.mjs'
+import { SILICONFLOW_PROVIDER_DESCRIPTOR } from '../shared/siliconflow-provider.mjs'
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 4096
 const REQUEST_TIMEOUT_MS = 120_000
@@ -12,6 +13,7 @@ export const PROVIDER_REGISTRY = Object.freeze({
   gemini: { protocol: 'gemini-generate-content', auth: 'gemini', chatRoute: 'v1beta/models' },
   deepseek: { protocol: 'openai-chat-completions', auth: 'bearer', chatRoute: 'chat/completions' },
   bailian: { protocol: 'dashscope-generation', auth: 'bearer', chatRoute: 'services/aigc/multimodal-generation/generation' },
+  siliconflow: { protocol: SILICONFLOW_PROVIDER_DESCRIPTOR.protocol, auth: 'bearer', chatRoute: 'chat/completions' },
   openrouter: { protocol: 'openai-chat-completions', auth: 'bearer', chatRoute: 'chat/completions' },
   compatible: { protocol: 'openai-chat-completions', auth: 'optional-bearer', chatRoute: 'chat/completions' },
 })

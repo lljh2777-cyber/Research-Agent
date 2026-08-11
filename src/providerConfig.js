@@ -16,6 +16,7 @@ import {
   resolveBailianEndpoint,
   withBailianModelProfile,
 } from '../shared/bailian-provider.mjs'
+import { SILICONFLOW_PROVIDER_DESCRIPTOR } from '../shared/siliconflow-provider.mjs'
 import { getRuntimeAdapter } from './runtime/adapter.js'
 
 export const PROVIDER_PRESETS = [
@@ -24,6 +25,7 @@ export const PROVIDER_PRESETS = [
   { id: 'gemini', name: 'Google Gemini', protocol: 'Generative Language', endpoint: 'https://generativelanguage.googleapis.com', tone: 'violet', keyWebsite: 'https://aistudio.google.com/app/apikey', requiresKey: true },
   { id: 'deepseek', name: 'DeepSeek', protocol: 'Native / compatibility endpoints', endpoint: 'https://api.deepseek.com', tone: 'blue', keyWebsite: 'https://platform.deepseek.com/api_keys', requiresKey: true },
   { id: 'bailian', name: 'Alibaba Cloud Model Studio', protocol: 'DashScope / OpenAI Chat / Responses / Anthropic', endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1', tone: 'cyan', keyWebsite: 'https://bailian.console.aliyun.com/?tab=model#/api-key', requiresKey: true },
+  { id: SILICONFLOW_PROVIDER_DESCRIPTOR.id, name: SILICONFLOW_PROVIDER_DESCRIPTOR.name, protocol: SILICONFLOW_PROVIDER_DESCRIPTOR.protocolLabel, endpoint: SILICONFLOW_PROVIDER_DESCRIPTOR.defaultBaseUrl, tone: 'violet', keyWebsite: 'https://cloud.siliconflow.cn/account/ak', requiresKey: true },
   { id: 'openrouter', name: 'OpenRouter', protocol: 'Multi-provider gateway', endpoint: 'https://openrouter.ai/api/v1', tone: 'mint', keyWebsite: 'https://openrouter.ai/settings/keys', requiresKey: true },
   { id: 'compatible', name: 'OpenAI Compatible', protocol: 'Custom endpoint', endpoint: 'http://127.0.0.1:1234/v1', tone: 'slate', keyWebsite: '', requiresKey: false },
 ]

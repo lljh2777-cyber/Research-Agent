@@ -63,6 +63,16 @@ test('builds provider-native Anthropic and Gemini requests', () => {
   assert.equal(gemini.url.includes('g-key'), false)
 })
 
+test('builds SiliconFlow chat requests through the shared Runtime Provider boundary', () => {
+  const request = buildProviderChatRequest({
+    providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'Qwen/Qwen3-8B', messages,
+  })
+  assert.equal(request.url, 'https://api.siliconflow.cn/v1/chat/completions')
+  assert.equal(request.protocol, 'openai-chat-completions')
+  assert.equal(request.headers.Authorization, 'Bearer secret')
+  assert.deepEqual(request.body.messages, messages)
+})
+
 test('normalizes OpenAI-compatible streaming into runtime lifecycle events', async () => {
   let captured
   const events = []

@@ -38,6 +38,7 @@ test('derives endpoint scopes from provider configuration profiles', () => {
   assert.deepEqual(providerCredentialEndpoints('openai', configs.openai), ['https://api.openai.com/v1'])
   assert(providerCredentialEndpoints('deepseek', configs.deepseek).includes('https://api.deepseek.com'))
   assert(providerCredentialEndpoints('bailian', configs.bailian).length >= 3)
+  assert.deepEqual(providerCredentialEndpoints('siliconflow', configs.siliconflow), ['https://api.siliconflow.cn/v1'])
 })
 
 test('normalizes persisted provider settings without accepting stale selections', () => {
