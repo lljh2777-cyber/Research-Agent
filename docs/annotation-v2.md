@@ -57,7 +57,7 @@ Annotation v2 has these exact normalized top-level keys in order:
 
 - `none`: `targets` is empty and `runId`/`error` are null.
 - `pending`: has at least one target and a non-empty `runId`; `error` is null.
-- `completed`: `error` is null. A new completed execution has non-empty targets and a non-null `runId`. Empty targets plus null `runId` is reserved exclusively for the v1 `archived=true` migration representation and cannot authorize or describe a new execution.
+- `completed`: `error` is null. A new completed execution has non-empty targets and a non-null `runId`. Empty targets plus null `runId` is reserved exclusively for the v1 `archived=true` migration representation and cannot authorize or describe a new execution. The two forms are paired invariants: empty targets with a run ID and non-empty targets with a null run ID are invalid and fail normalize/parse/serialize.
 - `failed`: has a typed `error`; targets and `runId` preserve whatever bounded lifecycle identity is known.
 
 `error` is null or exactly `{code, message}`. `code` is `archive_cancelled` or `archive_failed`, limited to 64 UTF-8 bytes; `message` is non-empty and limited to 1,024 UTF-8 bytes. Cancellation is `failed` with `code: "archive_cancelled"`. `createArchiveCancellationError()` returns the authoritative default error fixture.

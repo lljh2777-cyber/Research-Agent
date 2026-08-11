@@ -219,6 +219,37 @@ test('Annotation v2 projects archived only for completed archive state', () => {
   assert.equal(completed.archived, true)
 })
 
+test('Annotation v2 rejects completed archive target/runId half-states through normalize, serialize, and parse', () => {
+  const base = migrateAnnotationToV2(annotationFixture())
+  const invalidArchives = [
+    { state: 'completed', targets: [], runId: 'run-invalid', error: null },
+    { state: 'completed', targets: ['knowledge/result.md'], runId: null, error: null },
+  ]
+  for (const archive of invalidArchives) {
+    const invalid = {
+      ...base,
+      archive,
+      timestamps: {
+        ...base.timestamps,
+        updatedAt: '2026-08-09T12:07:00.000Z',
+        archivedAt: '2026-08-09T12:07:00.000Z',
+      },
+    }
+    assert.throws(() => normalizeAnnotation(invalid), /paired empty targets\/null runId/)
+    assert.throws(() => serializeAnnotationMarkdown(invalid), /paired empty targets\/null runId/)
+
+    const validLegacy = serializeAnnotationMarkdown({
+      ...invalid,
+      archive: { state: 'completed', targets: [], runId: null, error: null },
+    })
+    const invalidMarkdown = validLegacy.replace(
+      'archive: ' + JSON.stringify({ state: 'completed', targets: [], runId: null, error: null }),
+      'archive: ' + JSON.stringify(archive),
+    )
+    assert.throws(() => parseAnnotationMarkdown(invalidMarkdown), /paired empty targets\/null runId/)
+  }
+})
+
 test('Annotation v2 migration and archive lifecycle preserve Web anchoring and relocation semantics', () => {
   const original = '# Findings\nA durable evidence statement.\n'
   const revised = '# Findings\nA newly durable evidence statement.\n'

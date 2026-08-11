@@ -63,6 +63,19 @@ describe('Annotation v2 owner contract', () => {
       persistenceContentBytes: RUNTIME_ANNOTATION_CONTENT_MAX_BYTES,
       runtimeRequestBytes: RUNTIME_ANNOTATION_REQUEST_MAX_BYTES,
     })
+
+    const completed = normalizeAnnotation(await fixture('annotation-v2.fixture.json'))
+    const validMarkdown = serializeAnnotationMarkdown(completed)
+    for (const archive of value.invalidCompletedHalfStates) {
+      const invalid = { ...completed, archive }
+      expect(() => normalizeAnnotation(invalid)).toThrow(/paired empty targets\/null runId/)
+      expect(() => serializeAnnotationMarkdown(invalid)).toThrow(/paired empty targets\/null runId/)
+      const invalidMarkdown = validMarkdown.replace(
+        'archive: ' + JSON.stringify(completed.archive),
+        'archive: ' + JSON.stringify(archive),
+      )
+      expect(() => parseAnnotationMarkdown(invalidMarkdown)).toThrow(/paired empty targets\/null runId/)
+    }
   })
 
   it('keeps v1 migration explicit and AnnotationPatchIntentV1 opaque and unchanged', async () => {

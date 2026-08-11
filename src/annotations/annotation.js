@@ -291,6 +291,13 @@ function normalizeArchive(value) {
   if (state === 'completed' && error) {
     throw new TypeError('annotation.archive completed state requires null error.')
   }
+  if (state === 'completed') {
+    const legacyMigration = targets.length === 0 && runId === null
+    const completedExecution = targets.length > 0 && runId !== null
+    if (!legacyMigration && !completedExecution) {
+      throw new TypeError('annotation.archive completed state requires paired empty targets/null runId for legacy migration or non-empty targets/non-null runId for execution.')
+    }
+  }
   if (state === 'failed' && !error) {
     throw new TypeError('annotation.archive failed state requires a typed error.')
   }
