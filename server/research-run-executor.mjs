@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto'
 
 import { runResearchAgent } from '../src/research/agentEngine.js'
+import {
+  consumeKnowledgeReadRunRequest,
+  createKnowledgeReadRunMessages,
+  normalizeKnowledgeReadCompletedResult,
+} from '../src/research/knowledgeReadRun.js'
 import { isTerminalResearchRunStatus, RESEARCH_RUN_EVENT, RESEARCH_RUN_STATUS } from '../src/research/runProtocol.js'
 import { normalizeProviderError } from './provider-errors.mjs'
 import { streamProviderChat } from './provider-runtime.mjs'
@@ -29,8 +34,21 @@ function validateProviderExecution(value) {
   if (!PROVIDER_ID_PATTERN.test(String(value.providerId || ''))) throw Object.assign(new Error('Invalid provider identifier.'), { statusCode: 400 })
   if (typeof value.endpoint !== 'string' || !value.endpoint.trim() || value.endpoint.length > 2_048) throw Object.assign(new Error('Invalid provider endpoint.'), { statusCode: 400 })
   if (typeof value.model !== 'string' || !value.model.trim() || value.model.length > 256) throw Object.assign(new Error('Invalid provider model.'), { statusCode: 400 })
-  if (!Array.isArray(value.messages) || value.messages.length < 1 || value.messages.length > 100) throw Object.assign(new Error('A provider run requires 1 to 100 messages.'), { statusCode: 400 })
-  if (!Array.isArray(value.tools) || value.tools.length > 64) throw Object.assign(new Error('A provider run accepts at most 64 tools.'), { statusCode: 400 })
+  let knowledgeRead = null
+  let messages = value.messages
+  let tools = value.tools
+  try {
+    knowledgeRead = value.knowledgeRead ? consumeKnowledgeReadRunRequest(value.knowledgeRead) : null
+    if (knowledgeRead && value.tools !== undefined && (!Array.isArray(value.tools) || value.tools.length)) {
+      throw new Error('Knowledge read runs cannot expose provider tools.')
+    }
+    messages = knowledgeRead ? createKnowledgeReadRunMessages(knowledgeRead) : value.messages
+    tools = knowledgeRead ? [] : value.tools
+  } catch (error) {
+    throw Object.assign(new Error(error.message), { statusCode: 400 })
+  }
+  if (!Array.isArray(messages) || messages.length < 1 || messages.length > 100) throw Object.assign(new Error('A provider run requires 1 to 100 messages.'), { statusCode: 400 })
+  if (!Array.isArray(tools) || tools.length > 64) throw Object.assign(new Error('A provider run accepts at most 64 tools.'), { statusCode: 400 })
   return cloneJson({
     kind: 'provider',
     providerId: value.providerId,
@@ -38,8 +56,9 @@ function validateProviderExecution(value) {
     endpointType: value.endpointType,
     apiKey: String(value.apiKey || ''),
     model: value.model,
-    messages: value.messages,
-    tools: value.tools,
+    messages,
+    tools,
+    knowledgeRead,
     options: value.options || {},
     policy: value.policy || {},
     evidenceCount: value.evidenceCount || 0,
@@ -85,6 +104,12 @@ export class ResearchRunExecutor {
     }
     if (this.#active.size >= MAX_ACTIVE_RUNS) throw Object.assign(new Error('Too many Research Runs are active.'), { statusCode: 429 })
     const input = validateProviderExecution(rawInput)
+    if (input.knowledgeRead && (
+      input.knowledgeRead.runId !== id
+      || input.knowledgeRead.sessionId !== snapshot.run.sessionId
+    )) {
+      throw Object.assign(new Error('Knowledge read request identity does not match the Research Run.'), { statusCode: 409 })
+    }
     const active = {
       controller: new AbortController(),
       pendingTools: new Map(),
@@ -167,7 +192,9 @@ export class ResearchRunExecutor {
         }
       }
       if (!completed) throw new Error('Provider stream ended before completion.')
-      return completed
+      return input.knowledgeRead
+        ? normalizeKnowledgeReadCompletedResult(input.knowledgeRead, completed)
+        : completed
     }
     const executeTool = (call, context) => new Promise((resolve, reject) => {
       if (active.controller.signal.aborted) return reject(abortError())

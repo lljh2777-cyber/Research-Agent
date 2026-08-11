@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "request": {
+    "schemaVersion": 1,
+    "kind": "knowledge-read-run",
+    "agentId": "knowledge-curator",
+    "toolId": "knowledge.explain",
+    "requestId": "explain-request-1",
+    "sessionId": "knowledge-session-1",
+    "runId": "knowledge-run-1",
+    "context": {
+      "schemaVersion": 1,
+      "surface": "knowledge-sidebar",
+      "vault": {
+        "id": "vault-1",
+        "name": "Lab Vault",
+        "revision": "vault-rev-9"
+      },
+      "activeNote": {
+        "id": "note-1",
+        "path": "papers/findings.md",
+        "title": "Findings",
+        "revision": "note-rev-4"
+      },
+      "selection": {
+        "noteId": "note-1",
+        "anchor": {
+          "schemaVersion": 1,
+          "quote": {
+            "exact": "selected evidence",
+            "prefix": "# Findings\nThe ",
+            "suffix": " is reproducible.\n"
+          },
+          "position": { "start": 15, "end": 32 },
+          "heading": {
+            "text": "Findings",
+            "level": 1,
+            "line": 1,
+            "relativeStartLine": 1,
+            "relativeEndLine": 1
+          },
+          "line": { "start": 2, "end": 2 }
+        }
+      },
+      "attachments": [
+        {
+          "id": "attachment-1",
+          "name": "Dataset",
+          "kind": "artifact",
+          "reference": "artifact://dataset-7",
+          "mediaType": "text/csv"
+        }
+      ],
+      "contextRevision": "context-rev-3",
+      "ownerExtension": { "opaque": true }
+    },
+    "input": {
+      "question": "请解释所选证据。"
+    }
+  },
+  "result": {
+    "schemaVersion": 1,
+    "toolId": "knowledge.explain",
+    "requestId": "explain-request-1",
+    "runId": "knowledge-run-1",
+    "status": "completed",
+    "effect": "read",
+    "summary": "解释完成。",
+    "data": {
+      "schemaVersion": 1,
+      "kind": "knowledge-read-result",
+      "agentId": "knowledge-curator",
+      "sessionId": "knowledge-session-1",
+      "runId": "knowledge-run-1",
+      "text": "该段证据说明 TP53 参与 DNA 损伤反应。"
+    },
+    "artifacts": [],
+    "error": null
+  }
+}

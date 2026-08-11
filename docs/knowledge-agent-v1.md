@@ -129,3 +129,7 @@ The serialized handoff is bounded and contains references rather than content:
 ```
 
 Consumption chooses the target surface while preserving session, run, cursor, and the detached Knowledge Context object. Runtime persistence and UI navigation are consumers of this value; Core performs neither.
+
+## Executable Knowledge reads
+
+`knowledge.query` and `knowledge.explain` execute through the existing Research Run v1 Provider boundary using the Core contract in `docs/knowledge-read-result-v1.md`. A real completed model result is normalized into KnowledgeActionOutputV1 with nested `data.kind: "knowledge-read-result"`; only its guarded non-empty `data.text` may become AI-authored annotation text. Empty, failed, cancelled, oversized, or tool-calling results never qualify as completed. Runtime advertises the fail-closed `knowledgeReads` capability with transport `research-run`; no Action Runner mapping or new endpoint is used.
