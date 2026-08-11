@@ -4,16 +4,26 @@ import { createActionApiMiddleware } from './server/action-api.mjs'
 import { createAnnotationApiMiddleware } from './server/annotation-api.mjs'
 import { createProviderApiMiddleware } from './server/provider-api.mjs'
 import { createMcpApiMiddleware } from './server/mcp-api.mjs'
-import { createLocalWebRuntimeManifest, createRuntimeApiMiddleware, createViteWebRuntimeManifest } from './server/runtime-api.mjs'
+import { createKnowledgeReadServiceEvidence, createLocalWebRuntimeManifest, createRuntimeApiMiddleware, createViteWebRuntimeManifest } from './server/runtime-api.mjs'
 import { createResearchRunApiMiddleware } from './server/research-run-api.mjs'
 
 export default defineConfig(({ mode }) => {
   const localRuntime = mode === 'local-runtime'
+  const researchRunApi = createResearchRunApiMiddleware()
   const runtimeManifest = localRuntime
-    ? createLocalWebRuntimeManifest()
+    ? createLocalWebRuntimeManifest({
+        services: {
+          knowledgeReads: createKnowledgeReadServiceEvidence({
+            providerId: process.env.BIORESEARCH_KNOWLEDGE_PROVIDER_ID,
+            endpoint: process.env.BIORESEARCH_KNOWLEDGE_PROVIDER_ENDPOINT,
+            model: process.env.BIORESEARCH_KNOWLEDGE_PROVIDER_MODEL,
+            credential: process.env.BIORESEARCH_KNOWLEDGE_PROVIDER_CREDENTIAL,
+            researchRunExecutable: Boolean(researchRunApi),
+          }),
+        },
+      })
     : createViteWebRuntimeManifest()
   const mcpApi = createMcpApiMiddleware()
-  const researchRunApi = createResearchRunApiMiddleware()
   const localServicesAvailable = localRuntime && runtimeManifest.capabilities.annotations.available
   const annotationApi = localServicesAvailable ? createAnnotationApiMiddleware() : null
   const actionApi = localServicesAvailable ? createActionApiMiddleware() : null

@@ -22,6 +22,9 @@ export const RUNTIME_TARGETS = Object.freeze({
 
 const BUILD_MODE_VALUES = new Set(Object.values(BUILD_MODES))
 const RUNTIME_TARGET_VALUES = new Set(Object.values(RUNTIME_TARGETS))
+const KNOWLEDGE_READ_CAPABILITIES = Object.freeze(['knowledge.query', 'knowledge.explain'])
+const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/
+const KNOWLEDGE_READ_PROVIDER_IDS = new Set(['openai', 'anthropic', 'gemini', 'deepseek', 'bailian', 'openrouter', 'compatible'])
 
 const CAPABILITY_PROFILES = Object.freeze({
   [RUNTIME_TARGETS.LOCAL_WEB]: Object.freeze({
@@ -97,11 +100,51 @@ function unavailableReason(target, surface) {
   return 'Hosted Web does not expose local ' + surface + '.'
 }
 
+function isHttpEndpoint(value) {
+  try {
+    const url = new URL(value)
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password
+  } catch {
+    return false
+  }
+}
+
+function hasExecutableKnowledgeReadService(value) {
+  const provider = value?.provider
+  const researchRun = value?.researchRun
+  return Boolean(
+    provider?.selected === true
+    && PROVIDER_ID_PATTERN.test(provider.providerId || '')
+    && KNOWLEDGE_READ_PROVIDER_IDS.has(provider.providerId)
+    && typeof provider.model === 'string'
+    && provider.model.trim()
+    && provider.model.length <= 256
+    && isHttpEndpoint(provider.endpoint)
+    && (provider.credential === 'available'
+      || (provider.providerId === 'compatible' && provider.credential === 'not-required'))
+    && researchRun?.executable === true
+    && researchRun.transport === 'research-run',
+  )
+}
+
 function optionalRuntimeServices(target, services = {}) {
   const local = target === RUNTIME_TARGETS.LOCAL_WEB
   const annotationsAvailable = local && services.annotations === true
   const actionsAvailable = local && services.actions === true
+  const knowledgeReadsAvailable = local && hasExecutableKnowledgeReadService(services.knowledgeReads)
   return {
+    knowledgeReads: Object.freeze({
+      available: knowledgeReadsAvailable,
+      transport: knowledgeReadsAvailable ? 'research-run' : false,
+      capabilities: Object.freeze(Object.fromEntries(
+        KNOWLEDGE_READ_CAPABILITIES.map((capability) => [capability, knowledgeReadsAvailable]),
+      )),
+      reason: knowledgeReadsAvailable
+        ? null
+        : local
+          ? 'No executable selected Provider and Research Run service path is configured.'
+          : unavailableReason(target, 'Knowledge read execution'),
+    }),
     annotations: Object.freeze({
       available: annotationsAvailable,
       transport: annotationsAvailable ? 'same-origin' : false,
@@ -186,6 +229,17 @@ export function isRuntimeManifest(value) {
     && capabilities.researchRuns === expected.researchRuns
     && capabilities.researchExecution === expected.researchExecution
     && capabilities.mcp === expected.mcp
+    && sameOptionalService(
+      capabilities.knowledgeReads,
+      optionalRuntimeServices(value.target, capabilities.knowledgeReads?.available === true
+        ? {
+            knowledgeReads: {
+              provider: { selected: true, providerId: 'compatible', endpoint: 'https://runtime.invalid/v1', model: 'validated', credential: 'available' },
+              researchRun: { executable: true, transport: 'research-run' },
+            },
+          }
+        : {}).knowledgeReads,
+    )
     && sameOptionalService(
       capabilities.annotations,
       optionalRuntimeServices(value.target, { annotations: capabilities.annotations?.available === true }).annotations,

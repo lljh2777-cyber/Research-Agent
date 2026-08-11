@@ -36,7 +36,7 @@ async function installVaultSnapshot(page) {
   })
 }
 
-test('configured full local Runtime advertises owned loopback and optional services', async ({ request }) => {
+test('configured full local Runtime advertises explicitly executable services', async ({ request }) => {
   const response = await request.get('/api/runtime')
   const manifest = await response.json()
 
@@ -52,6 +52,15 @@ test('configured full local Runtime advertises owned loopback and optional servi
       mcp: 'loopback',
       researchRuns: 'loopback-event-buffer',
       researchExecution: 'loopback-provider',
+      knowledgeReads: {
+        available: true,
+        transport: 'research-run',
+        capabilities: {
+          'knowledge.query': true,
+          'knowledge.explain': true,
+        },
+        reason: null,
+      },
       annotations: {
         available: true,
         transport: 'same-origin',
@@ -68,6 +77,8 @@ test('configured full local Runtime advertises owned loopback and optional servi
       },
     },
   })
+  expect(JSON.stringify(manifest)).not.toContain('127.0.0.1:1234')
+  expect(JSON.stringify(manifest)).not.toContain('local-e2e-model')
 
   const actions = await request.get('/api/runtime/actions')
   expect(actions.ok()).toBe(true)

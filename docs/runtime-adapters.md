@@ -97,3 +97,32 @@ The local Action runner maps those five IDs to the existing Research Vault lint,
 ### Capability behavior
 
 A configured full `local-web` manifest advertises same-origin Annotation and Action services plus their exact byte limits and per-Action capability map. `vite-web`, hosted Web, unconfigured local Web, and desktop fail closed without loopback probes. Browser directory selection and Vite-hosted Provider, MCP, Research Run, and research-execution capabilities are unchanged. Desktop compatibility is preserved without adding Electron IPC.
+
+
+## Knowledge Read execution v1
+
+Research Core owns the surface-neutral `knowledge.query` / `knowledge.explain` request and normalization contract. Runtime does not add another endpoint or map these reads to the Action Runner. Core calls the existing Research Run v1 adapter with `tools: []`; local Web executes `kind: 'provider'` through `/api/research/runs` and normalizes Provider HTTP/SSE into model deltas and a terminal event.
+
+The request includes `schemaVersion`, `kind: 'knowledge-read-run'`, `agentId`, `toolId`, `requestId`, `sessionId`, `runId`, opaque KnowledgeContext v1, and descriptor-validated input. Context remains bounded to 65,536 UTF-8 bytes and the whole request to 131,072 bytes.
+
+A successful Provider `result.text` is normalized by Core before `run.completed` into the existing KnowledgeActionOutput v1 shape. Its `data` is `{ schemaVersion: 1, kind: 'knowledge-read-result', agentId: 'knowledge-curator', sessionId, runId, text }`; the top level retains `toolId`, `requestId`, `status: 'completed'`, `effect: 'read'`, a non-empty summary, `artifacts: []`, and `error: null`. Failed and cancelled outcomes retain the same top-level envelope with `data: null` and a bounded error. The whole output remains bounded to 65,536 bytes. Empty, oversize, or tool-calling Provider output fails before completion.
+
+The Runtime manifest publishes this exact fail-closed surface:
+
+```js
+capabilities.knowledgeReads = {
+  available: true,
+  transport: 'research-run',
+  capabilities: {
+    'knowledge.query': true,
+    'knowledge.explain': true,
+  },
+  reason: null,
+}
+```
+
+The `local-web` target name alone does not advertise this surface. The trusted Runtime service composition must provide both a concrete selected Provider path (`providerId`, HTTP(S) `endpoint`, `model`, and credential state) and an executable Research Run service using the exact `research-run` transport. Missing, incomplete, or malformed evidence fails closed with a reason and performs no network probe. `vite-web`, desktop, hosted Web, unknown targets, and absent surfaces also publish `available: false`, `transport: false`, false capability values, and a reason.
+
+The local launcher accepts the selected Provider evidence from the server-side `BIORESEARCH_KNOWLEDGE_PROVIDER_ID`, `BIORESEARCH_KNOWLEDGE_PROVIDER_ENDPOINT`, `BIORESEARCH_KNOWLEDGE_PROVIDER_MODEL`, and `BIORESEARCH_KNOWLEDGE_PROVIDER_CREDENTIAL` composition inputs. The credential state is `available` or `not-required`; no credential value is placed in the manifest. Consumers must still verify the concrete selected Provider request at invocation and must not infer availability from the target name, probe a loopback service, or fabricate a read result.
+
+Provider credential access and transport remain behind Runtime adapters and the local service boundary. Credentials are forwarded only to the upstream Provider request, cleared from active execution state, and never recorded in Research Run events. With `tools: []`, Knowledge Read execution cannot request browser tools or reach Vault/Annotation persistence.
