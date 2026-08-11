@@ -1,12 +1,29 @@
 export const ANNOTATION_SCHEMA_VERSION = 1
+export const ANNOTATION_V2_SCHEMA_VERSION = 2
+export const ANNOTATION_LATEST_SCHEMA_VERSION = ANNOTATION_V2_SCHEMA_VERSION
 export const TEXT_ANCHOR_SCHEMA_VERSION = 1
 export const RELOCATION_SCHEMA_VERSION = 1
 export const ANNOTATION_PATCH_SCHEMA_VERSION = 1
+export const ANNOTATION_MARKDOWN_MAX_BYTES = 256 * 1024
+export const ANNOTATION_PATCH_CONTENT_MAX_BYTES = 64 * 1024
+export const ANNOTATION_SECTION_MAX_BYTES = 64 * 1024
+export const ANNOTATION_ID_MAX_BYTES = 256
+export const ANNOTATION_REVISION_MAX_BYTES = 256
+export const ANNOTATION_SOURCE_PATH_MAX_BYTES = 4 * 1024
+export const ANNOTATION_ARCHIVE_MAX_TARGETS = 32
+export const ANNOTATION_ARCHIVE_TARGET_MAX_BYTES = 1024
+export const ANNOTATION_ARCHIVE_TARGETS_MAX_BYTES = 16 * 1024
+export const ANNOTATION_PROVENANCE_ID_MAX_BYTES = 256
+export const ANNOTATION_ARCHIVE_RUN_ID_MAX_BYTES = 256
+export const ANNOTATION_ARCHIVE_ERROR_CODE_MAX_BYTES = 64
+export const ANNOTATION_ARCHIVE_ERROR_MESSAGE_MAX_BYTES = 1024
 
 const DEFAULT_CONTEXT_CHARACTERS = 48
 const BACKTICK = String.fromCharCode(96)
 const RELOCATION_STATUSES = new Set(['anchored', 'relocated', 'stale', 'ambiguous', 'missing'])
 const RELOCATION_STRATEGIES = new Set(['position', 'quote_context', 'quote', 'heading_line', 'line', 'none'])
+const ARCHIVE_STATES = new Set(['none', 'pending', 'completed', 'failed'])
+const ARCHIVE_ERROR_CODES = new Set(['archive_cancelled', 'archive_failed'])
 const SECTION_MARKERS = Object.freeze({
   manual: Object.freeze({
     start: '<!-- annotation:manual:start -->',
@@ -42,6 +59,30 @@ function requireTimestamp(value, label) {
   const timestamp = requireString(value, label)
   if (!Number.isFinite(Date.parse(timestamp))) throw new TypeError(label + ' must be an ISO-compatible timestamp.')
   return timestamp
+}
+
+export function utf8ByteLength(value) {
+  let bytes = 0
+  for (const character of String(value)) {
+    const point = character.codePointAt(0)
+    if (point <= 0x7f) bytes += 1
+    else if (point <= 0x7ff) bytes += 2
+    else if (point <= 0xffff) bytes += 3
+    else bytes += 4
+  }
+  return bytes
+}
+
+function requireBoundedString(value, label, maximumBytes, options) {
+  const string = requireString(value, label, options)
+  const bytes = utf8ByteLength(string)
+  if (bytes > maximumBytes) throw new RangeError(label + ' exceeds ' + maximumBytes + ' UTF-8 bytes.')
+  return string
+}
+
+function optionalBoundedString(value, label, maximumBytes) {
+  if (value === null || value === undefined) return null
+  return requireBoundedString(value, label, maximumBytes)
 }
 
 function lineRecords(markdown) {
@@ -158,13 +199,111 @@ function protectedMarkdownRanges(markdown) {
   return ranges.sort((left, right) => left.start - right.start || left.end - right.end)
 }
 
-function normalizeSourceReference(value) {
+export function normalizeAnnotationSource(value) {
   const source = requireRecord(value, 'annotation.source')
   return {
     vaultId: requireString(source.vaultId, 'annotation.source.vaultId'),
     noteId: requireString(source.noteId, 'annotation.source.noteId'),
-    path: requireString(source.path, 'annotation.source.path'),
+    path: requireBoundedString(source.path, 'annotation.source.path', ANNOTATION_SOURCE_PATH_MAX_BYTES),
     revision: requireString(source.revision, 'annotation.source.revision', { allowEmpty: true }),
+  }
+}
+
+export function normalizeSourceAnnotationReference(value) {
+  const reference = requireRecord(value, 'source annotation reference')
+  return {
+    id: requireBoundedString(reference.id, 'source annotation reference.id', ANNOTATION_ID_MAX_BYTES),
+    revision: requireBoundedString(reference.revision, 'source annotation reference.revision', ANNOTATION_REVISION_MAX_BYTES),
+  }
+}
+
+export function normalizeArchiveAnnotationInput(value) {
+  const input = requireRecord(value, 'archive annotation input')
+  if (input.operation !== 'archive-annotation') throw new TypeError('archive annotation input.operation must be archive-annotation.')
+  const targets = normalizeAnnotationArchiveTargets(input.targets)
+  if (!targets.length) throw new TypeError('archive annotation input.targets must not be empty.')
+  return {
+    operation: 'archive-annotation',
+    sourceAnnotation: normalizeSourceAnnotationReference(input.sourceAnnotation),
+    targets,
+  }
+}
+
+export function normalizeAnnotationArchiveTargets(value) {
+  if (!Array.isArray(value)) throw new TypeError('annotation.archive.targets must be an array.')
+  if (value.length > ANNOTATION_ARCHIVE_MAX_TARGETS) {
+    throw new RangeError('annotation.archive.targets exceeds ' + ANNOTATION_ARCHIVE_MAX_TARGETS + ' targets.')
+  }
+  const seen = new Set()
+  const targets = value.map((entry, index) => {
+    const path = requireBoundedString(entry, 'annotation.archive.targets[' + index + ']', ANNOTATION_ARCHIVE_TARGET_MAX_BYTES)
+    if (path.startsWith('/') || path.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(path) || path.includes('\\')) {
+      throw new TypeError('annotation.archive.targets[' + index + '] must be a relative Vault path using forward slashes.')
+    }
+    if (/[\u0000-\u001f\u007f]/.test(path)) {
+      throw new TypeError('annotation.archive.targets[' + index + '] must not contain control characters.')
+    }
+    const segments = path.split('/')
+    if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
+      throw new TypeError('annotation.archive.targets[' + index + '] must be a normalized relative Vault path.')
+    }
+    if (!path.toLowerCase().endsWith('.md')) {
+      throw new TypeError('annotation.archive.targets[' + index + '] must identify a Markdown file.')
+    }
+    if (seen.has(path)) throw new TypeError('annotation.archive.targets must not contain duplicate paths.')
+    seen.add(path)
+    return path
+  })
+  if (utf8ByteLength(JSON.stringify(targets)) > ANNOTATION_ARCHIVE_TARGETS_MAX_BYTES) {
+    throw new RangeError('annotation.archive.targets exceeds ' + ANNOTATION_ARCHIVE_TARGETS_MAX_BYTES + ' serialized UTF-8 bytes.')
+  }
+  return targets
+}
+
+export function normalizeAnnotationArchiveError(value) {
+  if (value === null || value === undefined) return null
+  const error = requireRecord(value, 'annotation.archive.error')
+  const code = requireBoundedString(error.code, 'annotation.archive.error.code', ANNOTATION_ARCHIVE_ERROR_CODE_MAX_BYTES)
+  if (!ARCHIVE_ERROR_CODES.has(code)) throw new TypeError('Unsupported annotation.archive.error.code.')
+  return {
+    code,
+    message: requireBoundedString(error.message, 'annotation.archive.error.message', ANNOTATION_ARCHIVE_ERROR_MESSAGE_MAX_BYTES),
+  }
+}
+
+export function createArchiveCancellationError(message = 'Archive run was cancelled.') {
+  return normalizeAnnotationArchiveError({ code: 'archive_cancelled', message })
+}
+
+function normalizeArchive(value) {
+  const archive = requireRecord(value, 'annotation.archive')
+  const state = requireString(archive.state, 'annotation.archive.state')
+  if (!ARCHIVE_STATES.has(state)) throw new TypeError('Unsupported annotation.archive.state.')
+  const targets = normalizeAnnotationArchiveTargets(archive.targets)
+  const runId = optionalBoundedString(archive.runId, 'annotation.archive.runId', ANNOTATION_ARCHIVE_RUN_ID_MAX_BYTES)
+  const error = normalizeAnnotationArchiveError(archive.error)
+  if (state === 'none' && (targets.length || runId || error)) {
+    throw new TypeError('annotation.archive none state requires empty targets and null runId/error.')
+  }
+  if (state === 'pending' && (!targets.length || !runId || error)) {
+    throw new TypeError('annotation.archive pending state requires targets and runId with null error.')
+  }
+  if (state === 'completed' && error) {
+    throw new TypeError('annotation.archive completed state requires null error.')
+  }
+  if (state === 'failed' && !error) {
+    throw new TypeError('annotation.archive failed state requires a typed error.')
+  }
+  return { state, targets, runId, error }
+}
+
+function normalizeAiProvenance(value) {
+  if (value === null || value === undefined) return null
+  const provenance = requireRecord(value, 'annotation.aiProvenance')
+  return {
+    providerId: requireBoundedString(provenance.providerId, 'annotation.aiProvenance.providerId', ANNOTATION_PROVENANCE_ID_MAX_BYTES),
+    modelId: requireBoundedString(provenance.modelId, 'annotation.aiProvenance.modelId', ANNOTATION_PROVENANCE_ID_MAX_BYTES),
+    generatedAt: requireTimestamp(provenance.generatedAt, 'annotation.aiProvenance.generatedAt'),
   }
 }
 
@@ -370,15 +509,10 @@ function normalizeRelocation(value) {
   )
 }
 
-export function normalizeAnnotation(value) {
-  const annotation = requireRecord(value, 'annotation')
-  if (annotation.schemaVersion !== ANNOTATION_SCHEMA_VERSION) throw new TypeError('Unsupported annotation schemaVersion.')
+function normalizeAnnotationBase(annotation) {
   const sections = requireRecord(annotation.sections, 'annotation.sections')
   const timestamps = requireRecord(annotation.timestamps, 'annotation.timestamps')
-  const archived = annotation.archived === true
   const archivedAt = optionalString(timestamps.archivedAt, 'annotation.timestamps.archivedAt')
-  if (archived && !archivedAt) throw new TypeError('Archived annotations require timestamps.archivedAt.')
-  if (!archived && archivedAt) throw new TypeError('Active annotations require timestamps.archivedAt to be null.')
   const createdAt = requireTimestamp(timestamps.createdAt, 'annotation.timestamps.createdAt')
   const updatedAt = requireTimestamp(timestamps.updatedAt, 'annotation.timestamps.updatedAt')
   const normalizedArchivedAt = archivedAt ? requireTimestamp(archivedAt, 'annotation.timestamps.archivedAt') : null
@@ -386,16 +520,15 @@ export function normalizeAnnotation(value) {
   if (normalizedArchivedAt && Date.parse(normalizedArchivedAt) < Date.parse(createdAt)) {
     throw new TypeError('annotation.timestamps.archivedAt must not precede createdAt.')
   }
+  const normalizedSections = {
+    manual: requireBoundedString(sections.manual ?? '', 'annotation.sections.manual', ANNOTATION_SECTION_MAX_BYTES, { allowEmpty: true }),
+    ai: requireBoundedString(sections.ai ?? '', 'annotation.sections.ai', ANNOTATION_SECTION_MAX_BYTES, { allowEmpty: true }),
+  }
   return {
-    schemaVersion: ANNOTATION_SCHEMA_VERSION,
-    id: requireString(annotation.id, 'annotation.id'),
-    source: normalizeSourceReference(annotation.source),
+    id: requireBoundedString(annotation.id, 'annotation.id', ANNOTATION_ID_MAX_BYTES),
+    source: normalizeAnnotationSource(annotation.source),
     anchor: normalizeTextAnchor(annotation.anchor),
-    sections: {
-      manual: requireString(sections.manual ?? '', 'annotation.sections.manual', { allowEmpty: true }),
-      ai: requireString(sections.ai ?? '', 'annotation.sections.ai', { allowEmpty: true }),
-    },
-    archived,
+    sections: normalizedSections,
     timestamps: {
       createdAt,
       updatedAt,
@@ -403,6 +536,75 @@ export function normalizeAnnotation(value) {
     },
     relocation: normalizeRelocation(annotation.relocation),
   }
+}
+
+function normalizeAnnotationV1(annotation) {
+  const normalized = normalizeAnnotationBase(annotation)
+  const archived = annotation.archived === true
+  if (archived && !normalized.timestamps.archivedAt) throw new TypeError('Archived annotations require timestamps.archivedAt.')
+  if (!archived && normalized.timestamps.archivedAt) throw new TypeError('Active annotations require timestamps.archivedAt to be null.')
+  return {
+    schemaVersion: ANNOTATION_SCHEMA_VERSION,
+    id: normalized.id,
+    source: normalized.source,
+    anchor: normalized.anchor,
+    sections: normalized.sections,
+    archived,
+    timestamps: normalized.timestamps,
+    relocation: normalized.relocation,
+  }
+}
+
+function normalizeAnnotationV2(annotation) {
+  const normalized = normalizeAnnotationBase(annotation)
+  const aiProvenance = normalizeAiProvenance(annotation.aiProvenance)
+  const archive = normalizeArchive(annotation.archive)
+  const archived = archive.state === 'completed'
+  if (archived && !normalized.timestamps.archivedAt) throw new TypeError('Completed annotation archives require timestamps.archivedAt.')
+  if (!archived && normalized.timestamps.archivedAt) {
+    throw new TypeError('Non-completed annotation archives require timestamps.archivedAt to be null.')
+  }
+  if (aiProvenance && !normalized.sections.ai.trim()) {
+    throw new TypeError('annotation.aiProvenance requires non-empty annotation.sections.ai.')
+  }
+  if (aiProvenance && Date.parse(aiProvenance.generatedAt) > Date.parse(normalized.timestamps.updatedAt)) {
+    throw new TypeError('annotation.aiProvenance.generatedAt must not follow timestamps.updatedAt.')
+  }
+  if (aiProvenance && Date.parse(aiProvenance.generatedAt) < Date.parse(normalized.timestamps.createdAt)) {
+    throw new TypeError('annotation.aiProvenance.generatedAt must not precede timestamps.createdAt.')
+  }
+  return {
+    schemaVersion: ANNOTATION_V2_SCHEMA_VERSION,
+    id: normalized.id,
+    source: normalized.source,
+    anchor: normalized.anchor,
+    sections: normalized.sections,
+    aiProvenance,
+    archive,
+    archived,
+    timestamps: normalized.timestamps,
+    relocation: normalized.relocation,
+  }
+}
+
+export function normalizeAnnotation(value) {
+  const annotation = requireRecord(value, 'annotation')
+  if (annotation.schemaVersion === ANNOTATION_SCHEMA_VERSION) return normalizeAnnotationV1(annotation)
+  if (annotation.schemaVersion === ANNOTATION_V2_SCHEMA_VERSION) return normalizeAnnotationV2(annotation)
+  throw new TypeError('Unsupported annotation schemaVersion.')
+}
+
+export function migrateAnnotationToV2(value) {
+  const annotation = normalizeAnnotation(value)
+  if (annotation.schemaVersion === ANNOTATION_V2_SCHEMA_VERSION) return annotation
+  return normalizeAnnotationV2({
+    ...annotation,
+    schemaVersion: ANNOTATION_V2_SCHEMA_VERSION,
+    aiProvenance: null,
+    archive: annotation.archived
+      ? { state: 'completed', targets: [], runId: null, error: null }
+      : { state: 'none', targets: [], runId: null, error: null },
+  })
 }
 
 function sectionBody(markdown, name) {
@@ -444,6 +646,10 @@ export function serializeAnnotationMarkdown(value) {
     ['id', annotation.id],
     ['source', annotation.source],
     ['anchor', annotation.anchor],
+    ...(annotation.schemaVersion === ANNOTATION_V2_SCHEMA_VERSION ? [
+      ['ai_provenance', annotation.aiProvenance],
+      ['archive', annotation.archive],
+    ] : []),
     ['archived', annotation.archived],
     ['created_at', annotation.timestamps.createdAt],
     ['updated_at', annotation.timestamps.updatedAt],
@@ -451,7 +657,7 @@ export function serializeAnnotationMarkdown(value) {
     ['relocation', annotation.relocation],
   ].map(([key, value]) => key + ': ' + JSON.stringify(value))
 
-  return [
+  const markdown = [
     '---',
     ...metadata,
     '---',
@@ -468,10 +674,20 @@ export function serializeAnnotationMarkdown(value) {
     SECTION_MARKERS.ai.end,
     '',
   ].join('\n')
+  const bytes = utf8ByteLength(markdown)
+  if (bytes > ANNOTATION_MARKDOWN_MAX_BYTES) {
+    throw new RangeError('Serialized Annotation Markdown exceeds ' + ANNOTATION_MARKDOWN_MAX_BYTES + ' UTF-8 bytes.')
+  }
+  return markdown
 }
 
 export function parseAnnotationMarkdown(markdown) {
-  const text = String(markdown || '').replace(/\r\n/g, '\n')
+  const raw = String(markdown || '')
+  const bytes = utf8ByteLength(raw)
+  if (bytes > ANNOTATION_MARKDOWN_MAX_BYTES) {
+    throw new RangeError('Annotation Markdown exceeds ' + ANNOTATION_MARKDOWN_MAX_BYTES + ' UTF-8 bytes.')
+  }
+  const text = raw.replace(/\r\n/g, '\n')
   const metadata = parseMetadata(text)
   return normalizeAnnotation({
     schemaVersion: metadata.annotation_schema,
@@ -482,6 +698,10 @@ export function parseAnnotationMarkdown(markdown) {
       manual: sectionBody(text, 'manual'),
       ai: sectionBody(text, 'ai'),
     },
+    ...(metadata.annotation_schema === ANNOTATION_V2_SCHEMA_VERSION ? {
+      aiProvenance: metadata.ai_provenance,
+      archive: metadata.archive,
+    } : {}),
     archived: metadata.archived,
     timestamps: {
       createdAt: metadata.created_at,
@@ -495,6 +715,11 @@ export function parseAnnotationMarkdown(markdown) {
 export function createAnnotationPatchIntent(value, options = {}) {
   const annotation = normalizeAnnotation(value)
   const input = requireRecord(options, 'annotation patch options')
+  const content = serializeAnnotationMarkdown(annotation)
+  const contentBytes = utf8ByteLength(content)
+  if (contentBytes > ANNOTATION_PATCH_CONTENT_MAX_BYTES) {
+    throw new RangeError('AnnotationPatchIntentV1 content exceeds the 65536-byte Runtime write ceiling: ' + contentBytes + ' bytes.')
+  }
   return {
     schemaVersion: ANNOTATION_PATCH_SCHEMA_VERSION,
     kind: 'annotation.upsert',
@@ -505,6 +730,6 @@ export function createAnnotationPatchIntent(value, options = {}) {
       expectedRevision: optionalString(input.expectedRevision, 'annotation patch options.expectedRevision'),
     },
     contentType: 'text/markdown',
-    content: serializeAnnotationMarkdown(annotation),
+    content,
   }
 }
