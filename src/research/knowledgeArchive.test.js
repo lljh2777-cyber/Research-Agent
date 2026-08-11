@@ -354,6 +354,66 @@ test('consumes replay cursors and rejects stale run or result identity', () => {
   assert.deepEqual(failedAtCompletedTerminal.data.targets, [])
 })
 
+test('accepts only absent or full exact failed/cancelled terminal result evidence', () => {
+  const action = request()
+  const legacyFailed = consumeKnowledgeArchiveTerminalEvent(action, {
+    type: RESEARCH_RUN_EVENT.RUN_FAILED,
+    runId: action.runId,
+    error: { message: 'Legacy failure without structured evidence.' },
+  })
+  const legacyCancelled = consumeKnowledgeArchiveTerminalEvent(action, {
+    type: RESEARCH_RUN_EVENT.RUN_CANCELLED,
+    runId: action.runId,
+    error: { message: 'Legacy cancellation without structured evidence.' },
+  })
+  assert.deepEqual(legacyFailed.data.targets, [])
+  assert.deepEqual(legacyCancelled.data.targets, [])
+  assert.deepEqual(consumeKnowledgeArchiveTerminalEvent(action, {
+    type: RESEARCH_RUN_EVENT.RUN_FAILED,
+    runId: action.runId,
+    result: fixture.failedPartial,
+  }), fixture.failedPartial)
+  assert.deepEqual(consumeKnowledgeArchiveTerminalEvent(action, {
+    type: RESEARCH_RUN_EVENT.RUN_CANCELLED,
+    runId: action.runId,
+    result: fixture.cancelledPartial,
+  }), fixture.cancelledPartial)
+
+  const malformedResults = [
+    { targets: fixture.failedPartial.data.targets },
+    { data: { targets: fixture.failedPartial.data.targets } },
+    { ...fixture.failedPartial, schemaVersion: 2 },
+    { ...fixture.failedPartial, requestId: 'wrong-request' },
+    { ...fixture.failedPartial, status: KNOWLEDGE_ACTION_STATUS.CANCELLED, error: fixture.cancelledPartial.error },
+    { ...fixture.failedPartial, artifacts: [{}] },
+  ]
+  for (const result of malformedResults) {
+    assert.throws(() => consumeKnowledgeArchiveTerminalEvent(action, {
+      type: RESEARCH_RUN_EVENT.RUN_FAILED,
+      runId: action.runId,
+      result,
+    }))
+    assert.throws(() => consumeKnowledgeArchiveReplay(action, [{
+      cursor: 9,
+      event: { type: RESEARCH_RUN_EVENT.RUN_FAILED, runId: action.runId, result },
+    }]))
+  }
+
+  assert.throws(() => consumeKnowledgeArchiveTerminalEvent(action, {
+    type: RESEARCH_RUN_EVENT.RUN_CANCELLED,
+    runId: action.runId,
+    result: fixture.failedPartial,
+  }), /status does not match/)
+  assert.throws(() => consumeKnowledgeArchiveReplay(action, [{
+    cursor: 10,
+    event: {
+      type: RESEARCH_RUN_EVENT.RUN_CANCELLED,
+      runId: action.runId,
+      result: fixture.failedPartial,
+    },
+  }]), /status does not match/)
+})
+
 test('enforces owner target-count/path bounds and the existing bounded Action output', () => {
   const maximumPath = `${'a'.repeat(1_021)}.md`
   const targets = Array.from({ length: 32 }, (_, index) => index === 0 ? maximumPath : `knowledge/target-${index}.md`)

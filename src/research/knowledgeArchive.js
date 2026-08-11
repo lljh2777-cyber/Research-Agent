@@ -347,16 +347,15 @@ export function consumeKnowledgeArchiveTerminalEvent(requestValue, eventValue) {
     const status = event.type === RESEARCH_RUN_EVENT.RUN_CANCELLED
       ? KNOWLEDGE_ACTION_STATUS.CANCELLED
       : KNOWLEDGE_ACTION_STATUS.FAILED
-    if (event.result?.schemaVersion === KNOWLEDGE_ACTION_SCHEMA_VERSION) {
+    if (event.result !== undefined) {
       const result = consumeKnowledgeArchiveResult(request, event.result)
       if (result.status !== status) throw new Error('Knowledge archive terminal event status does not match its result.')
       return result
     }
-    const partial = event.result?.data?.targets ?? event.result?.targets ?? []
     return createKnowledgeArchiveResult(request, {
       status,
       summary: event.error?.message,
-      targets: partial,
+      targets: [],
       error: {
         code: status === KNOWLEDGE_ACTION_STATUS.CANCELLED ? 'archive_cancelled' : 'archive_failed',
         message: event.error?.message || (status === KNOWLEDGE_ACTION_STATUS.CANCELLED
