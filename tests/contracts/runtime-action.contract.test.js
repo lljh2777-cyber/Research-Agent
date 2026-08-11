@@ -10,6 +10,7 @@ import {
   RUNTIME_ANNOTATION_CONTENT_MAX_BYTES,
   RUNTIME_ANNOTATION_REQUEST_MAX_BYTES,
 } from '../../shared/runtime-action-contracts.mjs'
+import { getKnowledgeActionToolDescriptor } from '../../src/research/knowledgeAgent.js'
 
 const REQUIRED_DESCRIPTOR_FIELDS = [
   'schemaVersion',
@@ -66,6 +67,10 @@ describe('Runtime Action/Annotation v1 contract', () => {
       { id: 'knowledge.synthesis.write', name: 'knowledge_synthesis_write', title: 'Write synthesis', description: 'Create an approved synthesis artifact inside an explicit target scope.' },
     ])
     expect(Object.keys(RUNTIME_ACTION_DESCRIPTORS[0].inputSchema.properties.input.properties)).toEqual(['rules'])
+    expect(RUNTIME_ACTION_DESCRIPTORS.at(-1)).toEqual(getKnowledgeActionToolDescriptor('knowledge.synthesis.write'))
+    expect(Object.keys(RUNTIME_ACTION_DESCRIPTORS.at(-1).inputSchema.properties.input.properties)).toEqual([
+      'operation', 'sourceAnnotation', 'targets',
+    ])
     expect(RUNTIME_ACTION_DESCRIPTORS.slice(1).map((entry) => entry.inputSchema.required)).toEqual([
       ['input', 'scope', 'idempotencyKey'],
       ['input', 'scope', 'idempotencyKey'],

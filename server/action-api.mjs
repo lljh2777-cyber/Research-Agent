@@ -1,7 +1,9 @@
 import { MAX_KNOWLEDGE_ACTION_INPUT_BYTES } from '../shared/runtime-action-contracts.mjs'
 import { isTerminalResearchRunStatus } from '../src/research/runProtocol.js'
-import { CodexActionRunner } from './action-runner.mjs'
+import { CodexActionRunner, CodexArchivePlanner } from './action-runner.mjs'
 import { ActionService } from './action-service.mjs'
+import { AnnotationStore } from './annotation-store.mjs'
+import { ArchiveRealizationService } from './archive-realization.mjs'
 
 async function readJsonBody(request) {
   let total = 0
@@ -96,9 +98,29 @@ export function createActionApiMiddleware({
   root = process.env.BIORESEARCH_VAULT_ROOT,
   service,
   runner,
+  annotationStore,
+  archiveRealizer,
+  archivePlanner,
+  authenticityStateRoot,
 } = {}) {
+  const resolvedAnnotationStore = annotationStore || (root ? new AnnotationStore({ root }) : null)
+  let resolvedArchiveRealizer = archiveRealizer || null
+  if (!resolvedArchiveRealizer && root && resolvedAnnotationStore) {
+    try {
+      resolvedArchiveRealizer = new ArchiveRealizationService({
+        root,
+        annotationStore: resolvedAnnotationStore,
+        planner: archivePlanner || new CodexArchivePlanner({ root }),
+        authenticityStateRoot,
+      })
+    } catch {
+      // A missing/changed Runtime-private authenticity key keeps formal archive fail-closed.
+      resolvedArchiveRealizer = null
+    }
+  }
   const actionService = service || (root ? new ActionService({
     runner: runner || new CodexActionRunner({ root }),
+    archiveRealizer: resolvedArchiveRealizer,
   }) : null)
   const middleware = async function actionApiMiddleware(request, response, next) {
     const route = routeFor(request)
@@ -110,12 +132,12 @@ export function createActionApiMiddleware({
       if (!actionService) return unavailable(response)
       if (route.kind === 'collection') {
         if (request.method === 'GET') return sendJson(response, 200, actionService.list())
-        if (request.method === 'POST') return sendJson(response, 202, actionService.start(await readJsonBody(request)))
+        if (request.method === 'POST') return sendJson(response, 202, await actionService.start(await readJsonBody(request)))
         return sendJson(response, 405, { ok: false, code: 'method_not_allowed', error: 'Method not allowed.' }, { Allow: 'GET, POST' })
       }
       if (route.kind === 'run') {
         if (request.method === 'GET') return sendJson(response, 200, actionService.get(route.runId))
-        if (request.method === 'DELETE') return sendJson(response, 200, actionService.cancel(route.runId))
+        if (request.method === 'DELETE') return sendJson(response, 200, await actionService.cancel(route.runId))
         return sendJson(response, 405, { ok: false, code: 'method_not_allowed', error: 'Method not allowed.' }, { Allow: 'GET, DELETE' })
       }
       if (route.kind === 'events' && request.method === 'GET') {

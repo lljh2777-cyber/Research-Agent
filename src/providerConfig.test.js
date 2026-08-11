@@ -194,6 +194,13 @@ test('normalizes Bailian interfaces and exposes selected Qwen models through nat
   assert.equal(configs.bailian.enableWebSearch, true)
   const [model] = providerConfigsToModels(configs)
   assert.equal(model.providerId, 'bailian')
+  assert.equal(model.apiModelId, 'qwen3.5-plus')
+  assert.deepEqual({ providerId: model.providerId, modelId: model.apiModelId }, {
+    providerId: 'bailian',
+    modelId: 'qwen3.5-plus',
+  })
+  assert.equal('apiKey' in model, false)
+  assert.equal('credential' in model, false)
   assert.equal(model.endpointType, 'dashscope-generation')
   assert.equal(model.endpoint, 'https://dashscope.aliyuncs.com/api/v1')
   assert.equal(model.capabilities.vision, true)

@@ -1,11 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { readFile } from 'node:fs/promises'
 
 import { createRuntimeManifest, RUNTIME_TARGETS } from '../../shared/runtime-capabilities.mjs'
+import {
+  createAnnotationPatchIntent,
+  normalizeAnnotation,
+} from '../../src/annotations/annotation.js'
 import {
   createDesktopRuntimeAdapter,
   createWebRuntimeAdapter,
   getRuntimeAdapter,
   resetRuntimeAdapterForTests,
+  runtimeAdapterInternals,
 } from '../../src/runtime/adapter.js'
 
 function memoryStorage() {
@@ -225,5 +231,45 @@ describe('runtime adapters', () => {
       '/api/runtime/actions/run-1',
       expect.objectContaining({ method: 'DELETE', signal: controller.signal }),
     )
+  })
+
+  it('preflights the exact serialized Annotation request bytes and rejects the KB escaping adversary before fetch', async () => {
+    const fixture = async (name) => JSON.parse(await readFile(new URL(`../../docs/contracts/${name}`, import.meta.url), 'utf8'))
+    const recipe = await fixture('annotation-write-boundary-v1.fixture.json')
+    const source = normalizeAnnotation(await fixture(recipe.baseAnnotationFixture))
+    const adversarial = normalizeAnnotation({
+      ...source,
+      sections: {
+        ...source.sections,
+        manual: recipe.runtimeEnvelopeAdversary.manualCharacter.repeat(recipe.runtimeEnvelopeAdversary.repeat),
+      },
+    })
+    const intent = createAnnotationPatchIntent(adversarial, {
+      path: 'wiki/annotations/adversarial.md',
+      expectedRevision: null,
+    })
+    const request = { intent, idempotencyKey: 'fixture-key', approval: { status: 'approved' } }
+    expect(new TextEncoder().encode(intent.content).length).toBeLessThanOrEqual(65_536)
+    expect(runtimeAdapterInternals.serializeAnnotationRequest(request)).toEqual({
+      ok: false,
+      code: 'limit_exceeded',
+      error: 'Annotation request exceeds the 131,072-byte limit.',
+    })
+
+    const fetchImpl = vi.fn()
+    const adapter = createWebRuntimeAdapter({
+      fetchImpl,
+      env: {},
+      windowRef: { setTimeout, clearTimeout },
+    })
+    adapter.runtime.setManifest(createRuntimeManifest({
+      target: RUNTIME_TARGETS.LOCAL_WEB,
+      services: { annotations: true },
+    }))
+    await expect(adapter.annotations.write(request)).resolves.toMatchObject({
+      ok: false,
+      code: 'limit_exceeded',
+    })
+    expect(fetchImpl).not.toHaveBeenCalled()
   })
 })

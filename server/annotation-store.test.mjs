@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rmdir, unlink } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rmdir, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import test from 'node:test'
 
 import { RUNTIME_ANNOTATION_CONTENT_MAX_BYTES } from '../shared/runtime-action-contracts.mjs'
+import { normalizeAnnotation, serializeAnnotationMarkdown } from '../src/annotations/annotation.js'
 import { AnnotationStore } from './annotation-store.mjs'
 
 test('AnnotationStore writes atomically with approval, scope, revision, and idempotency checks', async () => {
@@ -81,6 +82,49 @@ test('AnnotationStore writes atomically with approval, scope, revision, and idem
     })
     assert.notEqual(updated.revision, created.revision)
     assert.equal((await store.read(createInput.intent.target.path)).content, '# Updated\n')
+  } finally {
+    await unlink(target).catch(() => {})
+    await rmdir(annotationsDirectory).catch(() => {})
+    await rmdir(join(root, 'wiki')).catch(() => {})
+    await rmdir(root).catch(() => {})
+  }
+})
+
+test('AnnotationStore preserves enriched Annotation v2 Markdown opaquely with case-preserved path and exact revision', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'bioresearch-annotations-v2-'))
+  const annotationsDirectory = join(root, 'wiki', 'annotations')
+  const path = 'wiki/annotations/enriched.MD'
+  const target = join(annotationsDirectory, 'enriched.MD')
+  await mkdir(join(root, 'wiki'))
+  const fixture = normalizeAnnotation(JSON.parse(await readFile(
+    new URL('../docs/contracts/annotation-v2.fixture.json', import.meta.url),
+    'utf8',
+  )))
+  const content = serializeAnnotationMarkdown(fixture)
+  const store = new AnnotationStore({ root })
+  try {
+    const written = await store.write({
+      intent: {
+        schemaVersion: 1,
+        kind: 'annotation.upsert',
+        annotationId: fixture.id,
+        target: { vaultId: basename(root), path, expectedRevision: null },
+        contentType: 'text/markdown',
+        content,
+      },
+      idempotencyKey: 'annotation-v2-opaque-1',
+      approval: { status: 'approved' },
+    })
+    const loaded = await store.read(path)
+    assert.equal(loaded.path, path)
+    assert.equal(loaded.content, content)
+    assert.equal(loaded.revision, written.revision)
+    assert.equal(Buffer.byteLength(loaded.content), Buffer.byteLength(content))
+    assert.deepEqual((await store.list()).annotations, [{
+      path,
+      revision: written.revision,
+      bytes: Buffer.byteLength(content),
+    }])
   } finally {
     await unlink(target).catch(() => {})
     await rmdir(annotationsDirectory).catch(() => {})

@@ -1,13 +1,15 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 
-import { MAX_KNOWLEDGE_ACTION_OUTPUT_BYTES } from '../shared/runtime-action-contracts.mjs'
+import {
+  MAX_KNOWLEDGE_ACTION_OUTPUT_BYTES,
+  RUNTIME_ARCHIVE_PLAN_MAX_BYTES,
+} from '../shared/runtime-action-contracts.mjs'
 
 const SKILL_BY_ACTION = Object.freeze({
   'knowledge.lint': 'research-vault-lint',
   'knowledge.paper.ingest': 'research-vault-ingest',
   'knowledge.xray': 'research-vault-xray',
   'knowledge.code.analyze': 'research-vault-code',
-  'knowledge.synthesis.write': 'research-vault-synthesis',
 })
 
 function abortError() {
@@ -67,6 +69,11 @@ export class CodexActionRunner {
   }
 
   run({ descriptor, input, context, scope, signal, onProgress = () => {} }) {
+    if (descriptor.id === 'knowledge.synthesis.write') {
+      throw Object.assign(new Error('Formal archive requires the Runtime realization service.'), {
+        code: 'runtime_unavailable',
+      })
+    }
     if (!SKILL_BY_ACTION[descriptor.id]) throw new Error('No Research Vault runner is registered for this action.')
     if (signal?.aborted) return Promise.reject(abortError())
     const sandbox = descriptor.effect === 'read' ? 'read-only' : 'workspace-write'
@@ -142,4 +149,126 @@ export class CodexActionRunner {
   }
 }
 
-export const actionRunnerInternals = Object.freeze({ skillByAction: SKILL_BY_ACTION, buildPrompt })
+function archivePlanPrompt({ request, sourceRecord }) {
+  return [
+    'Use $research-vault-synthesis in planning-only mode.',
+    'The filesystem is read-only. Do not create, modify, rename, or delete any file.',
+    'Treat the source Annotation Markdown as opaque reviewed source material; do not rewrite the source record.',
+    'Return only strict JSON with exact shape {"targets":[{"path":"<requested path>","content":"<complete Markdown>"}]}.',
+    'Return every requested target exactly once and in the requested order. Do not add fields or paths.',
+    JSON.stringify({
+      schemaVersion: 1,
+      operation: request.input.operation,
+      sourceAnnotation: request.input.sourceAnnotation,
+      requestedTargets: request.input.targets,
+      knowledgeContext: request.context,
+      sourceMarkdown: sourceRecord.content,
+    }),
+  ].join(String.fromCharCode(10))
+}
+
+export class CodexArchivePlanner {
+  #root
+  #command
+  #spawn
+  #executable
+
+  constructor({
+    root,
+    command = process.env.BIORESEARCH_CODEX_EXECUTABLE || (process.platform === 'win32' ? 'codex.cmd' : 'codex'),
+    spawnProcess = spawn,
+    probeExecutable = (value) => {
+      const result = process.platform === 'win32'
+        ? spawnSync('where.exe', [value], { windowsHide: true, stdio: 'ignore', timeout: 5_000 })
+        : spawnSync(value, ['--version'], { stdio: 'ignore', timeout: 5_000 })
+      return !result.error && result.status === 0
+    },
+  } = {}) {
+    if (!root) throw new Error('CodexArchivePlanner requires a Vault root.')
+    this.#root = root
+    this.#command = command
+    this.#spawn = spawnProcess
+    this.#executable = probeExecutable(command) === true
+  }
+
+  capabilityEvidence() {
+    return { executable: this.#executable, sandbox: 'read-only', output: 'strict-json' }
+  }
+
+  plan({ request, sourceRecord, signal, onProgress = () => {} }) {
+    if (!this.#executable) {
+      return Promise.reject(Object.assign(new Error('Archive planner executable is unavailable.'), {
+        code: 'runtime_unavailable',
+      }))
+    }
+    if (signal?.aborted) return Promise.reject(abortError())
+    const args = [
+      'exec', '--json', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only', '-C', this.#root, '-',
+    ]
+    return new Promise((resolvePlan, rejectPlan) => {
+      const child = this.#spawn(this.#command, args, {
+        cwd: this.#root,
+        env: process.env,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+      let buffer = ''
+      let finalText = ''
+      let stderr = ''
+      let settled = false
+      const finish = (callback, value) => {
+        if (settled) return
+        settled = true
+        signal?.removeEventListener('abort', onAbort)
+        callback(value)
+      }
+      const onAbort = () => {
+        child.kill()
+        finish(rejectPlan, abortError())
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
+      child.once('error', (error) => finish(rejectPlan, error))
+      child.stderr.on('data', (chunk) => {
+        stderr = boundedText(stderr + chunk.toString(), 8192)
+      })
+      child.stdout.on('data', (chunk) => {
+        buffer += chunk.toString()
+        if (Buffer.byteLength(buffer) > RUNTIME_ARCHIVE_PLAN_MAX_BYTES) {
+          child.kill()
+          return finish(rejectPlan, Object.assign(new Error('Archive plan exceeds the 4,194,304-byte limit.'), { code: 'limit_exceeded' }))
+        }
+        const newline = String.fromCharCode(10)
+        let index
+        while ((index = buffer.indexOf(newline)) >= 0) {
+          const line = buffer.slice(0, index).trim()
+          buffer = buffer.slice(index + 1)
+          if (!line) continue
+          try {
+            const event = JSON.parse(line)
+            const text = finalTextFromEvent(event)
+            if (text) finalText = boundedText(text, RUNTIME_ARCHIVE_PLAN_MAX_BYTES)
+            onProgress({ type: event.type || 'archive.planner.event' })
+          } catch {
+            onProgress({ type: 'archive.planner.output' })
+          }
+        }
+      })
+      child.once('close', (code) => {
+        if (settled) return
+        if (signal?.aborted) return finish(rejectPlan, abortError())
+        if (code !== 0) {
+          return finish(rejectPlan, new Error(boundedText(stderr || `Archive planner exited with code ${code}.`, 8192)))
+        }
+        const output = finalText || buffer.trim()
+        try {
+          return finish(resolvePlan, JSON.parse(output))
+        } catch {
+          return finish(rejectPlan, Object.assign(new Error('Archive planner did not return strict JSON.'), { code: 'invalid_archive_plan' }))
+        }
+      })
+      child.stdin.end(archivePlanPrompt({ request, sourceRecord }))
+    })
+  }
+}
+
+export const actionRunnerInternals = Object.freeze({ skillByAction: SKILL_BY_ACTION, buildPrompt, archivePlanPrompt })

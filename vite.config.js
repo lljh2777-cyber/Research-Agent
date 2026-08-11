@@ -10,9 +10,13 @@ import { createResearchRunApiMiddleware } from './server/research-run-api.mjs'
 export default defineConfig(({ mode }) => {
   const localRuntime = mode === 'local-runtime'
   const researchRunApi = createResearchRunApiMiddleware()
+  const annotationApi = localRuntime ? createAnnotationApiMiddleware() : null
+  const actionApi = localRuntime ? createActionApiMiddleware({ annotationStore: annotationApi?.store }) : null
   const runtimeManifest = localRuntime
     ? createLocalWebRuntimeManifest({
         services: {
+          annotations: Boolean(annotationApi?.store),
+          actions: actionApi?.service?.capabilityEvidence(),
           knowledgeReads: createKnowledgeReadServiceEvidence({
             providerId: process.env.BIORESEARCH_KNOWLEDGE_PROVIDER_ID,
             endpoint: process.env.BIORESEARCH_KNOWLEDGE_PROVIDER_ENDPOINT,
@@ -24,9 +28,6 @@ export default defineConfig(({ mode }) => {
       })
     : createViteWebRuntimeManifest()
   const mcpApi = createMcpApiMiddleware()
-  const localServicesAvailable = localRuntime && runtimeManifest.capabilities.annotations.available
-  const annotationApi = localServicesAvailable ? createAnnotationApiMiddleware() : null
-  const actionApi = localServicesAvailable ? createActionApiMiddleware() : null
 
   return {
     plugins: [{

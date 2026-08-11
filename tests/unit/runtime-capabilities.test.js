@@ -127,10 +127,53 @@ describe('runtime capability matrix', () => {
         'actions.paperIngest': true,
         'actions.xray': true,
         'actions.codeAnalysis': true,
-        'actions.synthesis': true,
+        'actions.synthesis': false,
       },
     })
     expect(isRuntimeManifest(manifest)).toBe(true)
+  })
+
+  it('publishes formal archive only with concrete durable realization composition evidence', () => {
+    const services = {
+      actions: {
+        executable: true,
+        capabilities: {
+          'knowledge.lint': true,
+          'actions.paperIngest': true,
+          'actions.xray': true,
+          'actions.codeAnalysis': true,
+          'actions.synthesis': true,
+        },
+        archive: {
+          executable: true,
+          transport: 'research-run',
+          journal: 'atomic-json-v1',
+          crashRecovery: true,
+          authenticity: 'hmac-sha256-v1',
+          planner: { executable: true, sandbox: 'read-only', output: 'strict-json' },
+        },
+      },
+    }
+    const manifest = createRuntimeManifest({ target: RUNTIME_TARGETS.LOCAL_WEB, services })
+    expect(manifest.capabilities.actions.capabilities['actions.synthesis']).toBe(true)
+    expect(isRuntimeManifest(manifest)).toBe(true)
+
+    for (const archive of [
+      undefined,
+      { ...services.actions.archive, transport: 'action-runner' },
+      { ...services.actions.archive, journal: 'memory' },
+      { ...services.actions.archive, crashRecovery: false },
+      { ...services.actions.archive, authenticity: 'sha256' },
+      { ...services.actions.archive, planner: { sandbox: 'workspace-write', output: 'strict-json' } },
+      { ...services.actions.archive, planner: { sandbox: 'read-only', output: 'summary' } },
+    ]) {
+      const unavailable = createRuntimeManifest({
+        target: RUNTIME_TARGETS.LOCAL_WEB,
+        services: { actions: { ...services.actions, archive } },
+      })
+      expect(unavailable.capabilities.actions.capabilities['actions.synthesis']).toBe(false)
+      expect(isRuntimeManifest(unavailable)).toBe(true)
+    }
   })
 
   it('fails unknown targets closed as hosted Web', () => {
