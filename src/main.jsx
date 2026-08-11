@@ -370,6 +370,7 @@ function App() {
   const mockRunTimersRef = useRef(new Map())
   const toolApprovalResolverRef = useRef(null)
   const knowledgeApprovalCallbackRef = useRef(null)
+  const knowledgeApprovalResolvingRef = useRef(false)
   const reattachedResearchRunsRef = useRef(new Set())
   const researchToolRegistryRef = useRef(null)
 
@@ -1055,25 +1056,36 @@ function App() {
     setKnowledgeAgentSession((current) => ({ ...current, runId: current.runId || `knowledge-run-${current.cursor + 1}`, runStatus: 'waiting-approval' }))
   }, [completeKnowledgeRead, knowledgeAgentSession])
 
-  const resolveKnowledgeApproval = useCallback((approved) => {
-    if (!knowledgeApproval) return
+  const resolveKnowledgeApproval = useCallback(async (approved) => {
+    if (!knowledgeApproval || knowledgeApprovalResolvingRef.current) return
+    knowledgeApprovalResolvingRef.current = true
     const callback = knowledgeApprovalCallbackRef.current
     knowledgeApprovalCallbackRef.current = null
-    if (approved) callback?.()
+    let completed = approved
+    let failureMessage = ''
+    if (approved) {
+      try {
+        await callback?.()
+      } catch (error) {
+        completed = false
+        failureMessage = error?.message || 'The approved write failed.'
+      }
+    }
     setKnowledgeAgentSession((current) => {
       const cursor = current.cursor + 1
       return {
         ...current,
         cursor,
-        runStatus: approved ? 'completed' : 'cancelled',
+        runStatus: completed ? 'completed' : approved ? 'failed' : 'cancelled',
         messages: [
           ...current.messages,
           { id: `knowledge-user-${cursor}`, role: 'user', text: knowledgeApproval.prompt },
-          { id: `knowledge-assistant-${cursor}`, role: 'assistant', text: approved ? `${knowledgeApproval.actionTitle} completed for ${knowledgeApproval.targetScope}.` : `${knowledgeApproval.actionTitle} was cancelled. No Vault changes were made.` },
+          { id: `knowledge-assistant-${cursor}`, role: 'assistant', text: completed ? `${knowledgeApproval.actionTitle} completed for ${knowledgeApproval.targetScope}.` : approved ? `${knowledgeApproval.actionTitle} failed: ${failureMessage}` : `${knowledgeApproval.actionTitle} was cancelled. No Vault changes were made.` },
         ],
       }
     })
     setKnowledgeApproval(null)
+    knowledgeApprovalResolvingRef.current = false
   }, [knowledgeApproval])
 
   const submitKnowledgeQuestion = useCallback((question) => {
@@ -1643,6 +1655,7 @@ function App() {
           onResolveKnowledgeApproval={resolveKnowledgeApproval}
           onContinueInResearch={continueKnowledgeInResearch}
           onKnowledgeContextChange={handleKnowledgeContextChange}
+          annotationRuntime={runtimeAdapter.annotations}
         /> : activeSection === 'pipelines' ? (
           <PipelinesSection vaultName={vaultName} noteCount={vaultNotes.length} runs={pipelineRuns} runningPipelineId={pipelineRunningId} onRun={handleRunPipeline} onViewRun={handleViewPipelineRun} onConnectVault={handleConnectVault} />
         ) : activeSection === 'runs' ? (

@@ -1,23 +1,44 @@
+import { useEffect, useRef } from 'react'
 import {
   Archive,
   Check,
   ChevronRight,
   Highlighter,
-  MessageSquare,
   PencilLine,
   Sparkles,
   X,
 } from 'lucide-react'
 
-export function SelectionActionBar({ selection, onAction, onClear }) {
-  const exact = selection?.anchor?.quote?.exact
-  if (!exact) return null
-  return <div className="selection-action-bar" role="toolbar" aria-label="Selected text actions">
-    <span className="selection-action-context" title={exact}><Highlighter size={13} />{exact}</span>
-    <button type="button" onClick={() => onAction('query')}><MessageSquare size={13} />Ask</button>
-    <button type="button" onClick={() => onAction('explain')}><Sparkles size={13} />Explain</button>
-    <button type="button" className="annotation-action" onClick={() => onAction('annotation')}><PencilLine size={13} />Annotate</button>
-    <button type="button" className="selection-action-close" onClick={onClear} aria-label="Clear selected passage"><X size={13} /></button>
+export function SelectionChooser({ selection, position, onAction, onDismiss }) {
+  const chooserRef = useRef(null)
+  useEffect(() => {
+    const dismissOutside = (event) => {
+      if (!chooserRef.current?.contains(event.target)) onDismiss()
+    }
+    const dismissEscape = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onDismiss()
+      }
+    }
+    document.addEventListener('pointerdown', dismissOutside)
+    document.addEventListener('keydown', dismissEscape)
+    return () => {
+      document.removeEventListener('pointerdown', dismissOutside)
+      document.removeEventListener('keydown', dismissEscape)
+    }
+  }, [onDismiss])
+
+  if (!selection?.anchor?.quote?.exact || !position) return null
+  return <div
+    className="selection-chooser"
+    role="menu"
+    aria-label="选中文本操作"
+    ref={chooserRef}
+    style={{ left: position.x, top: position.y }}
+  >
+    <button type="button" role="menuitem" autoFocus onClick={() => onAction('manual')}><PencilLine size={14} />手工批注</button>
+    <button type="button" role="menuitem" onClick={() => onAction('ai')}><Sparkles size={14} />AI 解释</button>
   </div>
 }
 
@@ -45,6 +66,8 @@ export function AnnotationEditor({
   onArchive,
   onDismiss,
   onReopen,
+  focusSection = 'manual',
+  persistenceMessage = '',
 }) {
   if (!annotation && annotations.length === 0) return null
   const relocationNeedsAttention = annotation && ['ambiguous', 'stale', 'missing'].includes(annotation.relocation.status)
@@ -63,13 +86,14 @@ export function AnnotationEditor({
         <blockquote>{annotation.anchor?.quote?.exact}</blockquote>
         <small>{annotation.source?.path || 'Current note'}{annotation.anchor?.heading?.text ? ` - ${annotation.anchor.heading.text}` : ''}</small>
       </div>
-      <label><span>Your annotation</span><textarea value={draft?.manual || ''} onChange={(event) => onDraftChange({ ...draft, manual: event.target.value })} placeholder="Add your interpretation, caveat, or follow-up..." /></label>
-      <label><span>AI contribution</span><textarea value={draft?.ai || ''} onChange={(event) => onDraftChange({ ...draft, ai: event.target.value })} placeholder="Optional curator contribution" /></label>
+      <label><span>Your annotation</span><textarea autoFocus={focusSection === 'manual'} value={draft?.manual || ''} onChange={(event) => onDraftChange({ ...draft, manual: event.target.value })} placeholder="Add your interpretation, caveat, or follow-up..." /></label>
+      <label><span>AI contribution</span><textarea autoFocus={focusSection === 'ai'} value={draft?.ai || ''} onChange={(event) => onDraftChange({ ...draft, ai: event.target.value })} placeholder="Add or review the AI explanation..." /></label>
       <div className="annotation-editor-actions">
         <button type="button" onClick={() => onArchive(annotation)}><Archive size={13} />{annotation.archived ? 'Restore' : 'Archive'}</button>
         <button type="button" className="save" onClick={() => onRequestSave(annotation, draft)} disabled={relocationNeedsAttention || (!draft?.manual?.trim() && !draft?.ai?.trim())}><Check size={13} />Save with approval</button>
       </div>
       <p className="annotation-approval-hint">Saving is a scoped Vault write and always requires explicit approval.</p>
+      {persistenceMessage && <p className="annotation-persistence-message" role="alert">{persistenceMessage}</p>}
     </section>}
     {annotations.length > 0 && <section className="annotation-history" aria-label="Saved annotations">
       <span>Saved on this note</span>
