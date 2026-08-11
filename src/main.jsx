@@ -49,6 +49,11 @@ import { streamProviderResponse } from './providerRuntimeClient.js'
 import { buildConversationContext, compactTokenCount, providerUsageSummary } from './conversationContext.js'
 import { cancelResearchRun, executeResearchRun, reattachResearchRun, resumeResearchRun } from './research/client.js'
 import {
+  executeKnowledgeReadRun,
+  knowledgeReadCapabilityState,
+  requireCompletedKnowledgeReadText,
+} from './research/knowledgeReadRun.js'
+import {
   RESEARCH_RUN_EVENT,
   applyResearchRunEvent,
   createResearchRunRecord,
@@ -1016,30 +1021,94 @@ function App() {
     setKnowledgeAgentSession((current) => current.context === context ? current : { ...current, context })
   }, [])
 
-  const completeKnowledgeRead = useCallback((descriptor, prompt) => {
-    setKnowledgeAgentSession((current) => {
-      const cursor = current.cursor + 1
-      return {
+  const executeKnowledgeRead = useCallback(async (descriptor, prompt, context) => {
+    const capability = knowledgeReadCapabilityState(runtimeCapabilities, descriptor.toolId)
+    if (!capability.available || !supportsLoopbackResearchExecution) {
+      throw new Error(capability.reason || 'Knowledge Read execution is unavailable in this Runtime.')
+    }
+    if (selectedModel.authProvider !== 'api') {
+      throw new Error('Select a configured API Provider model before using Knowledge Explain.')
+    }
+    const providerConfig = providerConfigs[selectedModel.providerId]
+    if (!providerConfig) throw new Error(`Provider configuration is missing for ${selectedModel.provider}.`)
+
+    const cursor = knowledgeAgentSession.cursor + 1
+    const sessionId = knowledgeAgentSession.sessionId
+    const requestId = `${sessionId}:${descriptor.toolId}:request:${cursor}`
+    const runId = `${sessionId}:${descriptor.toolId}:run:${cursor}`
+    const currentContext = context || knowledgeAgentSession.context
+    const input = descriptor.toolId === 'knowledge.query' ? { query: prompt } : { question: prompt }
+    const baseProviderOptions = selectedModel.providerId === 'deepseek'
+      ? getDeepSeekRuntimeOptions(providerConfig)
+      : selectedModel.providerId === 'bailian' ? getBailianRuntimeOptions(providerConfig) : null
+    const providerOptions = baseProviderOptions ? { ...baseProviderOptions, enableWebSearch: false, maxOutputTokens: 4_096 } : undefined
+    const providerRequest = {
+      providerId: selectedModel.providerId,
+      endpoint: selectedModel.endpoint || providerConfig.endpoint,
+      endpointType: selectedModel.endpointType,
+      apiKey: await getProviderSessionKey(selectedModel.providerId),
+      model: selectedModel.apiModelId,
+      options: providerOptions,
+    }
+
+    setKnowledgeAgentSession((current) => ({
+      ...current,
+      runId,
+      cursor,
+      runStatus: 'running',
+      messages: [...current.messages, { id: `knowledge-user-${cursor}`, role: 'user', text: prompt }],
+    }))
+
+    try {
+      const output = await executeKnowledgeReadRun({
+        toolId: descriptor.toolId,
+        requestId,
+        sessionId,
+        runId,
+        context: currentContext,
+        input,
+        model: selectedModel.apiModelId,
+        executeRun: (runOptions) => executeResearchRun({
+          ...runOptions,
+          execution: {
+            kind: 'provider',
+            ...providerRequest,
+            messages: runOptions.messages,
+            tools: [],
+            knowledgeRead: runOptions.knowledgeReadRequest,
+          },
+        }),
+      })
+      const text = requireCompletedKnowledgeReadText(output)
+      setKnowledgeAgentSession((current) => ({
         ...current,
-        runId: current.runId || `knowledge-run-${cursor}`,
-        cursor,
+        runId,
         runStatus: 'completed',
-        messages: [
-          ...current.messages,
-          { id: `knowledge-user-${cursor}`, role: 'user', text: prompt },
-          { id: `knowledge-assistant-${cursor}`, role: 'assistant', text: `${descriptor.title} completed as a read-only fixture. The shared Runtime action surface will provide the final result without mutating the Vault.` },
-        ],
-      }
-    })
-  }, [])
+        messages: [...current.messages, { id: `knowledge-assistant-${cursor}`, role: 'assistant', text }],
+      }))
+      return text
+    } catch (error) {
+      setKnowledgeAgentSession((current) => ({
+        ...current,
+        runId,
+        runStatus: error?.name === 'AbortError' ? 'cancelled' : 'failed',
+        messages: [...current.messages, {
+          id: `knowledge-assistant-${cursor}`,
+          role: 'assistant',
+          text: error?.name === 'AbortError' ? 'Knowledge Read was cancelled. No changes were made.' : `Knowledge Read failed: ${error?.message || 'No completed result was returned.'}`,
+        }],
+      }))
+      throw error
+    }
+  }, [knowledgeAgentSession, providerConfigs, runtimeCapabilities, selectedModel, supportsLoopbackResearchExecution])
 
   const handleKnowledgeAction = useCallback((descriptor, options = {}) => {
     if (!descriptor?.available) return
     const prompt = options.prompt || `${descriptor.title} the current note.`
-    if (descriptor.effect === 'read') {
-      completeKnowledgeRead(descriptor, prompt)
-      return
+    if (['knowledge.query', 'knowledge.explain'].includes(descriptor.toolId)) {
+      return executeKnowledgeRead(descriptor, prompt, options.context)
     }
+    if (descriptor.effect === 'read') return
     const currentContext = knowledgeAgentSession.context
     if (!currentContext?.activeNote) return
     const targetScope = options.targetScope || `${currentContext.vault.name} / ${currentContext.activeNote.path}`
@@ -1054,7 +1123,7 @@ function App() {
       payload: options.payload || null,
     })
     setKnowledgeAgentSession((current) => ({ ...current, runId: current.runId || `knowledge-run-${current.cursor + 1}`, runStatus: 'waiting-approval' }))
-  }, [completeKnowledgeRead, knowledgeAgentSession])
+  }, [executeKnowledgeRead, knowledgeAgentSession])
 
   const resolveKnowledgeApproval = useCallback(async (approved) => {
     if (!knowledgeApproval || knowledgeApprovalResolvingRef.current) return
@@ -1090,9 +1159,9 @@ function App() {
 
   const submitKnowledgeQuestion = useCallback((question) => {
     const query = knowledgeToolDescriptors.find((descriptor) => descriptor.id === 'query')
-    if (query?.available) completeKnowledgeRead(query, question)
+    if (query?.available) void executeKnowledgeRead(query, question, knowledgeAgentSession.context).catch(() => {})
     setKnowledgeAgentInput('')
-  }, [completeKnowledgeRead, knowledgeToolDescriptors])
+  }, [executeKnowledgeRead, knowledgeAgentSession.context, knowledgeToolDescriptors])
 
   const continueKnowledgeInResearch = useCallback(() => {
     const researchTabId = openWorkspaceTab('research')

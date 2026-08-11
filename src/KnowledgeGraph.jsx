@@ -121,7 +121,7 @@ function metadataText(value) {
   return value
 }
 
-function MarkdownDocument({ note, notes, selection, annotations, onNavigate, onSelectPassage, onSelectionAction, onClearSelection, onOpenAnnotation }) {
+function MarkdownDocument({ note, notes, selection, annotations, onNavigate, onSelectPassage, onSelectionAction, onClearSelection, onOpenAnnotation, aiAvailable, aiUnavailableReason }) {
   const documentRef = useRef(null)
   const [chooserPosition, setChooserPosition] = useState(null)
   const blocks = useMemo(() => {
@@ -252,6 +252,7 @@ function MarkdownDocument({ note, notes, selection, annotations, onNavigate, onS
   return (
     <article className="knowledge-document" ref={documentRef} onMouseUp={(event) => {
       if (event.button !== 0) return
+      if (event.target.closest?.('.selection-chooser')) return
       window.setTimeout(() => commitDomSelection(true), 0)
     }}>
       <div className="document-path">{note.path}</div>
@@ -279,7 +280,7 @@ function MarkdownDocument({ note, notes, selection, annotations, onNavigate, onS
           </div>
         })}
       </div>
-      <SelectionChooser selection={selection} position={chooserPosition} onAction={(action) => { setChooserPosition(null); onSelectionAction(action) }} onDismiss={() => setChooserPosition(null)} />
+      <SelectionChooser selection={selection} position={chooserPosition} onAction={(action) => { setChooserPosition(null); onSelectionAction(action) }} onDismiss={() => setChooserPosition(null)} aiAvailable={aiAvailable} aiUnavailableReason={aiUnavailableReason} />
     </article>
   )
 }
@@ -456,10 +457,14 @@ export default function KnowledgeGraphSection({
   const [annotationVaultId, setAnnotationVaultId] = useState('')
   const [annotationFocusSection, setAnnotationFocusSection] = useState('manual')
   const [annotationPersistenceMessage, setAnnotationPersistenceMessage] = useState('')
+  const [annotationAiStatus, setAnnotationAiStatus] = useState(null)
+  const pendingExplainIdRef = useRef(null)
 
   const clearAnnotationEditor = () => {
+    pendingExplainIdRef.current = null
     setActiveAnnotation(null)
     setAnnotationDraft({ manual: '', ai: '' })
+    setAnnotationAiStatus(null)
   }
 
   const dismissAnnotationWorkbench = () => {
@@ -637,6 +642,8 @@ export default function KnowledgeGraphSection({
     setAnnotationDraft({ ...next.sections })
     setAnnotationFocusSection(focusSection)
     setAnnotationPersistenceMessage('')
+    setAnnotationAiStatus(null)
+    return next
   }
 
   const requestAnnotationWrite = (nextAnnotation, verb) => {
@@ -698,22 +705,39 @@ export default function KnowledgeGraphSection({
     requestAnnotationWrite(next, next.archived ? 'Archive' : 'Restore')
   }
 
-  const handleSelectionAction = (action) => {
+  const handleSelectionAction = async (action) => {
     setRightOpen(true)
     setActivePanels((current) => ({ ...current, right: 'agent' }))
-    openAnnotationEditor(action === 'ai' ? 'ai' : 'manual')
-    if (action === 'ai') {
-      const descriptor = knowledgeToolDescriptors.find((item) => item.id === 'explain')
-      if (descriptor?.available) onKnowledgeAction(descriptor, { prompt: `${descriptor.title} selected passage: ${selection?.anchor?.quote?.exact || ''}` })
+    const nextAnnotation = openAnnotationEditor(action === 'ai' ? 'ai' : 'manual')
+    if (action !== 'ai' || !nextAnnotation) return
+    const descriptor = knowledgeToolDescriptors.find((item) => item.id === 'explain')
+    if (!descriptor?.available) return
+    pendingExplainIdRef.current = nextAnnotation.id
+    setAnnotationAiStatus({ kind: 'loading', message: 'Generating an explanation through the Research Run Runtime…' })
+    try {
+      const text = await onKnowledgeAction(descriptor, {
+        prompt: `${descriptor.title} selected passage: ${selection?.anchor?.quote?.exact || ''}`,
+        context: knowledgeContext,
+      })
+      if (pendingExplainIdRef.current !== nextAnnotation.id || typeof text !== 'string' || !text.trim()) return
+      setAnnotationDraft((current) => ({ ...current, ai: text }))
+      setAnnotationAiStatus({ kind: 'ready', message: 'AI explanation ready for review. Saving still requires explicit approval.' })
+    } catch (error) {
+      if (pendingExplainIdRef.current !== nextAnnotation.id) return
+      setAnnotationAiStatus({ kind: 'error', message: error?.name === 'AbortError' ? 'AI explanation was cancelled. Nothing was saved.' : `AI explanation failed: ${error?.message || 'No completed result was returned.'}` })
+    } finally {
+      if (pendingExplainIdRef.current === nextAnnotation.id) pendingExplainIdRef.current = null
     }
   }
 
   const handleSelectPassage = (nextSelection) => {
+    pendingExplainIdRef.current = null
     setSelection(nextSelection)
     dismissAnnotationWorkbench()
   }
 
   const handleClearSelection = () => {
+    pendingExplainIdRef.current = null
     setSelection(null)
     dismissAnnotationWorkbench()
   }
@@ -758,7 +782,7 @@ export default function KnowledgeGraphSection({
           <button className="document-tab-add" onClick={() => { setLeftOpen(true); setActivePanels((current) => ({ ...current, left: 'files' })) }} aria-label="Browse Vault files"><Plus size={14} /></button>
         </div>
         <div className="knowledge-editor">
-          {selectedNote ? <MarkdownDocument note={selectedNote} notes={notes} selection={selection} annotations={selectedNoteAnnotations} onSelectPassage={handleSelectPassage} onSelectionAction={handleSelectionAction} onClearSelection={handleClearSelection} onNavigate={handleSelectNote} onOpenAnnotation={(annotation) => { setActiveAnnotation(annotation); setAnnotationDraft({ ...annotation.sections }); setAnnotationFocusSection('manual'); setAnnotationWorkbenchOpen(true) }} /> : <div className="knowledge-welcome">
+          {selectedNote ? <MarkdownDocument note={selectedNote} notes={notes} selection={selection} annotations={selectedNoteAnnotations} onSelectPassage={handleSelectPassage} onSelectionAction={handleSelectionAction} onClearSelection={handleClearSelection} onNavigate={handleSelectNote} onOpenAnnotation={(annotation) => { setActiveAnnotation(annotation); setAnnotationDraft({ ...annotation.sections }); setAnnotationFocusSection('manual'); setAnnotationAiStatus(null); setAnnotationWorkbenchOpen(true) }} aiAvailable={knowledgeToolDescriptors.find((item) => item.id === 'explain')?.available === true} aiUnavailableReason={knowledgeToolDescriptors.find((item) => item.id === 'explain')?.unavailableReason || 'AI Explain is unavailable in this Runtime.'} /> : <div className="knowledge-welcome">
             <span><BookOpen size={25} /></span>
             <h2>{notes.length ? 'Choose a document from the Files panel' : 'Your research knowledge, in one workspace'}</h2>
             <p>{notes.length ? 'Open Markdown notes as tabs and keep multiple sources ready while you research.' : 'Connect an Obsidian Vault to browse files, inspect backlinks, read Markdown, and arrange research tools around your document.'}</p>
@@ -767,7 +791,7 @@ export default function KnowledgeGraphSection({
         </div>
       </main>
 
-      {annotationWorkbenchOpen && (activeAnnotation || selectedNoteAnnotations.length > 0) && <AnnotationEditor annotation={activeAnnotation} draft={annotationDraft} annotations={selectedNoteAnnotations} onDraftChange={setAnnotationDraft} onRequestSave={handleRequestSave} onArchive={handleArchive} onDismiss={dismissAnnotationWorkbench} focusSection={annotationFocusSection} persistenceMessage={annotationPersistenceMessage} onReopen={(annotation) => { setActiveAnnotation(annotation); setAnnotationDraft({ ...annotation.sections }); setAnnotationFocusSection('manual'); setAnnotationWorkbenchOpen(true) }} />}
+      {annotationWorkbenchOpen && (activeAnnotation || selectedNoteAnnotations.length > 0) && <AnnotationEditor annotation={activeAnnotation} draft={annotationDraft} annotations={selectedNoteAnnotations} onDraftChange={setAnnotationDraft} onRequestSave={handleRequestSave} onArchive={handleArchive} onDismiss={dismissAnnotationWorkbench} focusSection={annotationFocusSection} persistenceMessage={annotationPersistenceMessage} aiStatus={annotationAiStatus} onReopen={(annotation) => { setActiveAnnotation(annotation); setAnnotationDraft({ ...annotation.sections }); setAnnotationFocusSection('manual'); setAnnotationAiStatus(null); setAnnotationWorkbenchOpen(true) }} />}
       {rightOpen && <Dock side="right" panelIds={dockLayout.right} activePanelId={activePanels.right} draggingId={draggingId} onActivate={(side, panelId) => setActivePanels((current) => ({ ...current, [side]: panelId }))} onDragStart={handleDragStart} onDragEnd={() => setDraggingId(null)} onDrop={handleDrop} renderPanel={renderPanel} />}
     </div>
 

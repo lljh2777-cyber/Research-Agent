@@ -23,6 +23,13 @@ const RUNTIME_ACTION_CAPABILITY_IDS = Object.freeze(
 
 export function availableKnowledgeCapabilitiesFromRuntime(runtimeCapabilities) {
   const available = []
+  const knowledgeReads = runtimeCapabilities?.knowledgeReads
+  if (knowledgeReads?.available === true && knowledgeReads.transport === 'research-run') {
+    for (const capability of ['knowledge.query', 'knowledge.explain']) {
+      if (knowledgeReads.capabilities?.[capability] === true) available.push(capability)
+    }
+  }
+
   const annotations = runtimeCapabilities?.annotations
   if (
     annotations?.available === true
@@ -207,7 +214,7 @@ export function createKnowledgeToolFixtures({ context, availableCapabilities = [
   const available = new Set(availableCapabilities)
   return TOOL_FIXTURES.map((tool) => {
     const contextReason = missingContextReason(tool, context)
-    const capabilityAvailable = ['query', 'explain'].includes(tool.id) || available.has(tool.capability)
+    const capabilityAvailable = available.has(tool.capability)
     return {
       ...tool,
       available: !contextReason && capabilityAvailable,

@@ -9,7 +9,7 @@ import {
   X,
 } from 'lucide-react'
 
-export function SelectionChooser({ selection, position, onAction, onDismiss }) {
+export function SelectionChooser({ selection, position, onAction, onDismiss, aiAvailable = false, aiUnavailableReason = '' }) {
   const chooserRef = useRef(null)
   useEffect(() => {
     const dismissOutside = (event) => {
@@ -38,7 +38,7 @@ export function SelectionChooser({ selection, position, onAction, onDismiss }) {
     style={{ left: position.x, top: position.y }}
   >
     <button type="button" role="menuitem" autoFocus onClick={() => onAction('manual')}><PencilLine size={14} />手工批注</button>
-    <button type="button" role="menuitem" onClick={() => onAction('ai')}><Sparkles size={14} />AI 解释</button>
+    <button type="button" role="menuitem" onClick={() => onAction('ai')} disabled={!aiAvailable} title={!aiAvailable ? aiUnavailableReason : undefined}><Sparkles size={14} />AI 解释</button>
   </div>
 }
 
@@ -68,6 +68,7 @@ export function AnnotationEditor({
   onReopen,
   focusSection = 'manual',
   persistenceMessage = '',
+  aiStatus = null,
 }) {
   if (!annotation && annotations.length === 0) return null
   const relocationNeedsAttention = annotation && ['ambiguous', 'stale', 'missing'].includes(annotation.relocation.status)
@@ -87,10 +88,11 @@ export function AnnotationEditor({
         <small>{annotation.source?.path || 'Current note'}{annotation.anchor?.heading?.text ? ` - ${annotation.anchor.heading.text}` : ''}</small>
       </div>
       <label><span>Your annotation</span><textarea autoFocus={focusSection === 'manual'} value={draft?.manual || ''} onChange={(event) => onDraftChange({ ...draft, manual: event.target.value })} placeholder="Add your interpretation, caveat, or follow-up..." /></label>
-      <label><span>AI contribution</span><textarea autoFocus={focusSection === 'ai'} value={draft?.ai || ''} onChange={(event) => onDraftChange({ ...draft, ai: event.target.value })} placeholder="Add or review the AI explanation..." /></label>
+      <label><span>AI contribution</span><textarea autoFocus={focusSection === 'ai'} aria-busy={aiStatus?.kind === 'loading'} disabled={aiStatus?.kind === 'loading'} value={draft?.ai || ''} onChange={(event) => onDraftChange({ ...draft, ai: event.target.value })} placeholder="Add or review the AI explanation..." /></label>
+      {aiStatus?.message && <p className={`annotation-ai-status ${aiStatus.kind}`} role={aiStatus.kind === 'error' ? 'alert' : 'status'}>{aiStatus.message}</p>}
       <div className="annotation-editor-actions">
         <button type="button" onClick={() => onArchive(annotation)}><Archive size={13} />{annotation.archived ? 'Restore' : 'Archive'}</button>
-        <button type="button" className="save" onClick={() => onRequestSave(annotation, draft)} disabled={relocationNeedsAttention || (!draft?.manual?.trim() && !draft?.ai?.trim())}><Check size={13} />Save with approval</button>
+        <button type="button" className="save" onClick={() => onRequestSave(annotation, draft)} disabled={aiStatus?.kind === 'loading' || relocationNeedsAttention || (!draft?.manual?.trim() && !draft?.ai?.trim())}><Check size={13} />Save with approval</button>
       </div>
       <p className="annotation-approval-hint">Saving is a scoped Vault write and always requires explicit approval.</p>
       {persistenceMessage && <p className="annotation-persistence-message" role="alert">{persistenceMessage}</p>}

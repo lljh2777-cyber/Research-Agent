@@ -1208,6 +1208,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .selection-chooser > button { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 0; border-right: 1px solid rgba(125, 157, 201, .17); background: transparent; color: #d9e5f2; padding: 7px; cursor: pointer; font-size: 9px; }
 .selection-chooser > button:last-child { border-right: 0; }
 .selection-chooser > button:hover, .selection-chooser > button:focus-visible { background: rgba(110, 168, 254, .13); color: #fff; }
+.selection-chooser > button:disabled { cursor: not-allowed; opacity: .42; }
 .annotation-highlight { display: inline; border: 0; border-bottom: 1px solid rgba(126, 226, 195, .8); border-radius: 2px; background: rgba(126, 226, 195, .1); color: inherit; padding: 0 1px; font: inherit; line-height: inherit; text-align: inherit; text-decoration: underline; text-decoration-color: rgba(126, 226, 195, .42); text-underline-offset: 3px; cursor: pointer; }
 mark.annotation-highlight { cursor: inherit; }
 .annotation-highlight[data-annotation-count="2"], .annotation-highlight[data-annotation-count="3"] { border-bottom-style: double; background: rgba(110, 168, 254, .13); }
@@ -1230,8 +1231,11 @@ mark.annotation-highlight { cursor: inherit; }
 .annotation-editor-actions button { display: inline-flex; align-items: center; gap: 5px; border: 1px solid rgba(125, 157, 201, .2); border-radius: 4px; background: transparent; color: #9cafc4; padding: 7px 9px; cursor: pointer; font-size: 8px; }
 .annotation-editor-actions button.save { border-color: rgba(110, 168, 254, .4); background: #1b4ca8; color: #fff; }
 .annotation-editor-actions button:disabled { cursor: not-allowed; opacity: .42; }
-.annotation-approval-hint, .annotation-persistence-message { margin: 0; color: #71839a; font-size: 8px; line-height: 1.45; }
+.annotation-approval-hint, .annotation-persistence-message, .annotation-ai-status { margin: 0; color: #71839a; font-size: 8px; line-height: 1.45; }
 .annotation-persistence-message { color: #e5919a; }
+.annotation-ai-status.loading { color: #8eb9ee; }
+.annotation-ai-status.ready { color: #8fd5af; }
+.annotation-ai-status.error { color: #e5919a; }
 .annotation-history { display: grid; gap: 5px; padding: 11px; }
 .annotation-record { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 7px; border: 1px solid rgba(125, 157, 201, .14); border-radius: 5px; background: rgba(9, 20, 36, .72); color: #aebed0; padding: 8px; text-align: left; cursor: pointer; }
 .annotation-record > span, .annotation-record > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
