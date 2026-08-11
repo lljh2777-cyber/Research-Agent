@@ -13,6 +13,7 @@ import {
   resetRuntimeAdapterForTests,
   runtimeAdapterInternals,
 } from '../../src/runtime/adapter.js'
+import { ANNOTATION_WRITE_STAGES, createAnnotationWriteIdempotencyKey } from '../../src/features/knowledge/annotationWriteClient.js'
 
 function memoryStorage() {
   const values = new Map()
@@ -271,5 +272,40 @@ describe('runtime adapters', () => {
       code: 'limit_exceeded',
     })
     expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('carries stable valid and stage-distinct Annotation write keys through the real Adapter envelope', async () => {
+    const baseIntent = {
+      schemaVersion: 1,
+      kind: 'annotation.upsert',
+      annotationId: 'annotation-1',
+      target: { vaultId: 'vault-1', path: 'wiki/annotations/annotation-1.md', expectedRevision: null },
+      contentType: 'text/markdown',
+      content: '# Saved body\n',
+    }
+    const intents = [
+      baseIntent,
+      { ...baseIntent, target: { ...baseIntent.target, expectedRevision: 'revision-1' }, content: '# Archive pending\n' },
+      { ...baseIntent, target: { ...baseIntent.target, expectedRevision: 'revision-2' }, content: '# Archive completed\n' },
+    ]
+    const stages = [
+      ANNOTATION_WRITE_STAGES.BODY,
+      ANNOTATION_WRITE_STAGES.ARCHIVE_PENDING,
+      ANNOTATION_WRITE_STAGES.ARCHIVE_COMPLETED,
+    ]
+    const keys = await Promise.all(intents.map((intent, index) => createAnnotationWriteIdempotencyKey(intent, stages[index])))
+    await expect(createAnnotationWriteIdempotencyKey(intents[1], stages[1])).resolves.toBe(keys[1])
+    expect(new Set(keys).size).toBe(3)
+    keys.forEach((key) => expect(key).toMatch(/^[A-Za-z0-9._:-]{8,160}$/))
+
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const adapter = createWebRuntimeAdapter({ fetchImpl, env: {}, windowRef: { setTimeout, clearTimeout } })
+    adapter.runtime.setManifest(createRuntimeManifest({ target: RUNTIME_TARGETS.LOCAL_WEB, services: { annotations: true } }))
+    for (let index = 0; index < intents.length; index += 1) {
+      await adapter.annotations.write({ intent: intents[index], idempotencyKey: keys[index], approval: { status: 'approved' } })
+    }
+    const envelopes = fetchImpl.mock.calls.map(([, init]) => JSON.parse(init.body))
+    expect(envelopes.map(({ idempotencyKey }) => idempotencyKey)).toEqual(keys)
+    expect(envelopes.every(({ approval }) => approval.status === 'approved')).toBe(true)
   })
 })

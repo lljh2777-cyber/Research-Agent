@@ -37,6 +37,7 @@ import { activeAnnotationRanges, isEditableSelectionTarget, mapDomSelectionToMar
 import { createAnnotationPatchIntent, createTextAnchor, migrateAnnotationToV2, normalizeAnnotation, normalizeAnnotationArchiveTargets, parseAnnotationMarkdown, relocateTextAnchor } from './annotations/annotation.js'
 import { createKnowledgeArchiveActionInput, createKnowledgeArchiveResult, knowledgeArchiveResultToAnnotationArchive } from './research/knowledgeArchive.js'
 import { executeKnowledgeArchiveAction } from './features/knowledge/archiveActionClient.js'
+import { ANNOTATION_WRITE_STAGES, createAnnotationWriteIdempotencyKey } from './features/knowledge/annotationWriteClient.js'
 
 const LAYOUT_KEY = 'bioresearch-os:knowledge-dock-layout'
 
@@ -716,12 +717,11 @@ export default function KnowledgeGraphSection({
     return { record, metadata: { path: loaded.path, revision: loaded.revision } }
   }
 
-  const commitAnnotationWrite = async (nextAnnotation, verb, metadataOverride = null) => {
+  const commitAnnotationWrite = async (nextAnnotation, metadataOverride, idempotencyKey) => {
     if (!annotationRuntime?.available) throw new Error(annotationRuntime?.reason || 'Annotation persistence is unavailable.')
     const metadata = metadataOverride || annotationMeta[nextAnnotation.id] || {}
     const path = metadata.path || newAnnotationWriteTarget(nextAnnotation.id)
     const intent = createAnnotationPatchIntent(nextAnnotation, { path, expectedRevision: metadata.revision || null })
-    const idempotencyKey = `${nextAnnotation.id}:${nextAnnotation.timestamps.updatedAt}:${verb.toLocaleLowerCase()}`
     const result = await annotationRuntime.write({ intent, approval: { status: 'approved' }, idempotencyKey })
     if (!result?.ok) throw new Error(result?.error || result?.reason || 'The annotation could not be saved.')
     const confirmed = await requireExactWrittenAnnotation(nextAnnotation, result)
@@ -746,7 +746,7 @@ export default function KnowledgeGraphSection({
     }, 0)
   }
 
-  const requestAnnotationWrite = (nextAnnotation, verb, options = {}) => {
+  const requestAnnotationWrite = async (nextAnnotation, verb, options = {}) => {
     const descriptor = knowledgeToolDescriptors.find((item) => item.id === 'annotation')
     if (!descriptor?.available || !annotationRuntime?.available) return
     const metadata = options.metadata || annotationMeta[nextAnnotation.id] || {}
@@ -755,7 +755,14 @@ export default function KnowledgeGraphSection({
       path,
       expectedRevision: metadata.revision || null,
     })
-    const idempotencyKey = `${nextAnnotation.id}:${nextAnnotation.timestamps.updatedAt}:${verb.toLocaleLowerCase()}`
+    let idempotencyKey
+    try {
+      idempotencyKey = await createAnnotationWriteIdempotencyKey(intent, options.stage)
+    } catch (error) {
+      setAnnotationPersistenceMessage(error?.message || 'A stable Annotation write key could not be prepared.')
+      options.onFailed?.(error)
+      return
+    }
     const targetScope = `${knowledgeContext.vault.name} / ${path}`
     onKnowledgeAction(descriptor, {
       prompt: `${verb} annotation for ${knowledgeContext.activeNote.title}`,
@@ -766,7 +773,7 @@ export default function KnowledgeGraphSection({
       declinedMessage: options.declinedMessage,
       onApproved: async () => {
         try {
-          const persisted = await commitAnnotationWrite(nextAnnotation, verb, metadata)
+          const persisted = await commitAnnotationWrite(nextAnnotation, metadata, idempotencyKey)
           if (options.onPersisted) scheduleAnnotationStep(() => options.onPersisted(persisted))
           return persisted
         } catch (error) {
@@ -790,7 +797,7 @@ export default function KnowledgeGraphSection({
       aiProvenance: draft.ai.trim() ? annotationProvenance : null,
       timestamps: { ...annotation.timestamps, updatedAt: timestamp },
     })
-    requestAnnotationWrite(next, 'Save')
+    void requestAnnotationWrite(next, 'Save', { stage: ANNOTATION_WRITE_STAGES.BODY })
   }
 
   const handleSelectionAction = async (action, position = annotationPosition) => {
@@ -907,6 +914,7 @@ export default function KnowledgeGraphSection({
         setAnnotationArchiveOutcome({ status: result.status, archive, persistence: 'awaiting-approval' })
         scheduleAnnotationStep(() => requestAnnotationWrite(terminal, `Persist ${result.status} archive lifecycle`, {
           metadata: pendingMetadata,
+          stage: ANNOTATION_WRITE_STAGES[`ARCHIVE_${result.status.toUpperCase()}`],
           declinedMessage: 'Terminal lifecycle persistence was cancelled. The Action result remains visible and the Annotation remains pending.',
           onPersisted: () => setAnnotationArchiveOutcome(null),
           onDeclined: () => {
@@ -951,6 +959,7 @@ export default function KnowledgeGraphSection({
     setAnnotationPersistenceMessage('')
     requestAnnotationWrite(pending, 'Persist pending archive lifecycle', {
       metadata,
+      stage: ANNOTATION_WRITE_STAGES.ARCHIVE_PENDING,
       declinedMessage: 'Pending archive persistence was cancelled. No Action started.',
       onPersisted: ({ record, metadata: confirmedMetadata }) => requestFormalArchiveAction(record, confirmedMetadata),
       onDeclined: () => setAnnotationPersistenceMessage('Pending archive persistence was declined. No Action started.'),
