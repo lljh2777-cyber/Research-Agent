@@ -39,6 +39,45 @@ function embeddingStub(calls, { delay = 0, fail = false } = {}) {
   }
 }
 
+function faultStorage() {
+  const base = createMemoryRetrievalIndexStorage()
+  const faults = { available: false, list: false, read: false, write: false, remove: false }
+  return {
+    faults,
+    storage: {
+      get available() {
+        if (faults.available) throw new Error('quota-init-secret')
+        return true
+      },
+      async read(key) {
+        if (faults.read) throw new Error('quota-read-secret')
+        return base.read(key)
+      },
+      async write(key, value) {
+        if (faults.write) throw new Error('quota-write-secret')
+        return base.write(key, value)
+      },
+      async remove(key) {
+        if (faults.remove) throw new Error('quota-remove-secret')
+        return base.remove(key)
+      },
+      async list() {
+        if (faults.list) throw new Error('quota-list-secret')
+        return base.list()
+      },
+    },
+  }
+}
+
+function assertSafeStorageFailure(result, { read = false } = {}) {
+  assert.equal(result.ok, false)
+  assert.ok(['unavailable', 'failed'].includes(result.state))
+  assert.ok(['storage_unavailable', 'storage_failed'].includes(result.error?.code))
+  assert.equal(JSON.stringify(result).includes('quota-'), false)
+  assert.equal(JSON.stringify(result).includes('secret'), false)
+  if (read) assert.deepEqual(result.vectors, [])
+}
+
 test('reports unavailable when the runtime has no local persistence backend', async () => {
   const unavailable = { available: false, async read() {}, async write() {}, async remove() {}, async list() { return [] } }
   const store = createRetrievalIndexStore({ storage: unavailable, embed: embeddingStub([]) })
@@ -279,4 +318,87 @@ test('replaces a different identity for the same Vault only after the older buil
   assert.equal((await store.read({ identity })).state, 'cancelled')
   assert.equal((await store.read({ identity: changedIdentity })).state, 'ready')
   assert.equal(calls.some(({ signal }) => signal.aborted), true)
+})
+
+test('normalizes initialization and list/read backend failures without leaking raw errors', async () => {
+  const initFault = faultStorage()
+  initFault.faults.available = true
+  const unavailable = createRetrievalIndexStore({ storage: initFault.storage, embed: embeddingStub([]) })
+  assertSafeStorageFailure(await unavailable.list())
+  assertSafeStorageFailure(await unavailable.status({ identity }))
+  assertSafeStorageFailure(await unavailable.read({ identity }), { read: true })
+  assertSafeStorageFailure(await unavailable.progress({ identity }))
+  assertSafeStorageFailure(await unavailable.cancel({ identity }))
+
+  const listFault = faultStorage()
+  const listed = createRetrievalIndexStore({ storage: listFault.storage, embed: embeddingStub([]) })
+  assert.equal((await listed.list()).ok, true)
+  listFault.faults.list = true
+  assertSafeStorageFailure(await listed.list())
+
+  const readFault = faultStorage()
+  const readStore = createRetrievalIndexStore({ storage: readFault.storage, embed: embeddingStub([]) })
+  await readStore.build({ identity, chunks, texts })
+  readFault.faults.read = true
+  assertSafeStorageFailure(await readStore.read({ identity }), { read: true })
+  assertSafeStorageFailure(await readStore.status({ identity }))
+})
+
+test('normalizes write/remove/rebuild failures, never publishes ready, and fail-closes after cleanup double failure', async () => {
+  const writeFault = faultStorage()
+  const writeStore = createRetrievalIndexStore({ storage: writeFault.storage, embed: embeddingStub([]) })
+  writeFault.faults.write = true
+  const writeResult = await writeStore.build({ identity, chunks, texts })
+  assertSafeStorageFailure(writeResult)
+  assert.equal((await writeStore.read({ identity })).state, 'not-built')
+
+  const rebuildFault = faultStorage()
+  const rebuildStore = createRetrievalIndexStore({ storage: rebuildFault.storage, embed: embeddingStub([]) })
+  rebuildFault.faults.write = true
+  const rebuildResult = await rebuildStore.rebuild({ identity, chunks, texts })
+  assertSafeStorageFailure(rebuildResult)
+
+  const doubleFault = faultStorage()
+  const doubleStore = createRetrievalIndexStore({ storage: doubleFault.storage, embed: embeddingStub([]) })
+  doubleFault.faults.write = true
+  doubleFault.faults.remove = true
+  const doubleResult = await doubleStore.build({ identity, chunks, texts })
+  assertSafeStorageFailure(doubleResult)
+  assertSafeStorageFailure(await doubleStore.list())
+  assertSafeStorageFailure(await doubleStore.status({ identity }))
+  assertSafeStorageFailure(await doubleStore.read({ identity }), { read: true })
+  assertSafeStorageFailure(await doubleStore.progress({ identity }))
+  assertSafeStorageFailure(await doubleStore.cancel({ identity }))
+})
+
+test('cancel terminates safely when final storage writes fail and recovery requires a verified rebuild', async () => {
+  const cancelFault = faultStorage()
+  const store = createRetrievalIndexStore({ storage: cancelFault.storage, embed: embeddingStub([], { delay: 20 }) })
+  const building = store.build({ identity, chunks, texts })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  cancelFault.faults.write = true
+  const cancelled = await store.cancel({ identity })
+  const buildResult = await building
+  assertSafeStorageFailure(cancelled)
+  assert.deepEqual(cancelled, buildResult)
+
+  const recoveryBase = createMemoryRetrievalIndexStorage()
+  const seed = createRetrievalIndexStore({ storage: recoveryBase, embed: embeddingStub([]) })
+  await seed.build({ identity, chunks, texts })
+  const recovery = faultStorage()
+  recovery.storage.read = async (key) => {
+    if (recovery.faults.read) throw new Error('quota-recovery-read-secret')
+    return recoveryBase.read(key)
+  }
+  recovery.storage.write = async (key, value) => recoveryBase.write(key, value)
+  recovery.storage.remove = async (key) => recoveryBase.remove(key)
+  recovery.storage.list = async () => recoveryBase.list()
+  const recoveredStore = createRetrievalIndexStore({ storage: recovery.storage, embed: embeddingStub([]) })
+  recovery.faults.read = true
+  assertSafeStorageFailure(await recoveredStore.status({ identity }))
+  recovery.faults.read = false
+  assertSafeStorageFailure(await recoveredStore.read({ identity }), { read: true })
+  const rebuilt = await recoveredStore.rebuild({ identity, chunks, texts })
+  assert.equal(rebuilt.state, 'ready')
+  assert.equal((await recoveredStore.read({ identity })).state, 'ready')
 })
