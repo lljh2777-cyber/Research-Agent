@@ -6,6 +6,35 @@ import { AgentConversationPanel } from '../knowledge/AgentConversationPanel.jsx'
 import { getResearchRunPresentation } from './runPresentation.js'
 
 const stages = ['Query parsed', 'Retrieve', 'Rerank', 'Synthesize', 'Cite']
+const SAFE_RETRIEVAL_ERROR_MESSAGES = Object.freeze({
+  retrieval_index_unavailable: 'Retrieval Index is unavailable; using lexical evidence.',
+  retrieval_index_stale: 'Retrieval Index is stale; using lexical evidence.',
+  retrieval_index_invalid: 'Retrieval Index validation failed; using lexical evidence.',
+  vector_index_unavailable: 'Vector Index is unavailable; using lexical evidence.',
+  vector_index_stale: 'Vector Index is stale; using lexical evidence.',
+  vector_index_degraded: 'Vector Index is degraded; using lexical evidence.',
+  vector_index_failed: 'Vector Index failed safely; using lexical evidence.',
+  vector_index_cancelled: 'Vector Index build was cancelled; using lexical evidence.',
+  vector_index_identity_mismatch: 'Vector Index identity did not match the current Vault; using lexical evidence.',
+  vector_index_corrupt: 'Vector Index validation failed; using lexical evidence.',
+  vector_query_invalid: 'Query embedding was invalid; using lexical evidence.',
+  vector_provenance_mismatch: 'Embedding provenance did not match the index; using lexical evidence.',
+  embedding_unavailable: 'Embedding capability is unavailable; using lexical evidence.',
+  embedding_failed: 'Embedding failed safely; using lexical evidence.',
+  embedding_invalid_response: 'Embedding response was invalid; using lexical evidence.',
+  rerank_unavailable: 'Reranker is unavailable; hybrid evidence remains available.',
+  rerank_failed: 'Reranking failed safely; hybrid evidence remains available.',
+  rerank_invalid_response: 'Reranker response was invalid; hybrid evidence remains available.',
+  retrieval_cancelled: 'Retrieval was cancelled; using lexical evidence.',
+  citations_missing: 'No answer citations were provided.',
+  citation_out_of_range: 'An answer citation is outside the evidence packet.',
+  citation_duplicate: 'A duplicate answer citation was rejected.',
+  no_evidence: 'There is no evidence available for citation.',
+})
+
+function safeRetrievalErrorMessage(error) {
+  return SAFE_RETRIEVAL_ERROR_MESSAGES[error?.code] || 'Retrieval degraded safely; using lexical evidence.'
+}
 const RESEARCH_TOOL_OPTIONS = Object.freeze({
   [TOOL_IDS.VAULT_SEARCH]: { label: 'Vault retrieval', detail: 'Retrieve relevant Markdown evidence before answering.', icon: Search },
   [TOOL_IDS.VAULT_WIKILINKS]: { label: 'Wikilink graph', detail: 'Expand retrieval through related Obsidian notes.', icon: Network },
@@ -440,6 +469,7 @@ function NotePreview({ note, onClose }) {
   }, [onClose])
 
   const metadata = Object.entries(note.frontmatter || {})
+  const focus = note.retrievalFocus
   return (
     <div className="note-preview-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="note-preview" role="dialog" aria-modal="true" aria-label={`Preview ${note.title}`}>
@@ -452,6 +482,7 @@ function NotePreview({ note, onClose }) {
           <button className="note-preview-close" onClick={onClose} aria-label="Close note preview">x</button>
         </header>
         <div className="note-preview-body">
+          {focus && <div className="note-retrieval-focus" role="status"><strong>Retrieved chunk</strong><span>{focus.chunkId}{focus.heading ? ` · ${focus.heading}` : ''}</span><p>{focus.excerpt || 'Exact chunk text is not available in the current evidence packet.'}</p></div>}
           {metadata.length > 0 && <div className="note-metadata">{metadata.map(([key, value]) => <span key={key}><strong>{key}</strong>{Array.isArray(value) ? value.join(', ') : String(value)}</span>)}</div>}
           <pre>{note.body || 'This sample note does not have a local Markdown body yet.'}</pre>
         </div>
@@ -472,16 +503,17 @@ function ToolApprovalDialog({ approval, onResolve }) {
   </div>
 }
 
-function RetrievalPath({ vaultName, topK, embeddingLabel, rerankLabel, retrievalIndexState, packet, wikilinksEnabled, presentation }) {
+function RetrievalPath({ vaultName, topK, embeddingLabel, rerankLabel, retrievalIndexState, retrievalIndexLifecycle, packet, wikilinksEnabled, presentation }) {
   const evidenceCount = packet?.evidence?.length || 0
   const retrieval = packet?.retrieval
   const mode = retrieval?.mode || 'lexical'
   const degradation = packet?.error?.code || ''
+  const degradationMessage = degradation ? safeRetrievalErrorMessage(packet.error) : ''
   const query = packet?.question || 'Ask a question to retrieve evidence'
   const path = [
     ['Query', query, packet ? 'done' : 'current'],
     [`${mode === 'hybrid' ? 'Hybrid' : 'BM25'}${wikilinksEnabled ? ' + Wikilinks' : ''} (top-k=${topK})`, vaultName ? `vault: ${vaultName}` : 'no Vault connected', packet ? 'done' : 'current'],
-    ['Index and remote stages', packet ? `${retrievalIndexState}; embedding: ${embeddingLabel}; reranker: ${rerankLabel}${degradation ? `; degraded: ${degradation}` : ''}` : 'waiting for a query', packet ? (degradation ? 'current' : 'done') : 'current'],
+    ['Index and remote stages', packet ? `${retrievalIndexState}${retrievalIndexLifecycle?.progress ? ` (${retrievalIndexLifecycle.progress.completed}/${retrievalIndexLifecycle.progress.total})` : ''}; embedding: ${embeddingLabel}; reranker: ${rerankLabel}${retrievalIndexLifecycle?.message ? `; ${retrievalIndexLifecycle.message}` : ''}${degradationMessage ? `; ${degradationMessage}` : ''}` : `${retrievalIndexState}${retrievalIndexLifecycle?.message ? `; ${retrievalIndexLifecycle.message}` : ''}`, packet ? (degradation || retrievalIndexState !== 'ready' ? 'current' : 'done') : 'current'],
     ['Graph expansion', wikilinksEnabled ? packet ? `${retrieval?.graphExpanded || 0} one-hop result${retrieval?.graphExpanded === 1 ? '' : 's'} - rerank: ${rerankLabel}` : 'waiting for a query' : 'Disabled for this conversation', packet || !wikilinksEnabled ? 'done' : 'current'],
     [`Selected (${evidenceCount} chunks)`, packet ? `${retrieval?.candidateCount || 0} lexical candidates` : 'no evidence selected yet', packet ? 'done' : 'current'],
     ['Answer model', presentation.answerDetail, presentation.answerStatus],
@@ -521,32 +553,37 @@ function AgentStatus({ running, hasActivity, onPause, presentation }) {
   )
 }
 
-function Sources({ sources, onOpenNote }) {
+function Sources({ sources, onOpenNote, packet }) {
+  const invalidSources = sources.filter((source) => !source.note).length
+  const duplicateChunks = packet?.evidence?.length && new Set(packet.evidence.map((item) => item.chunkId)).size !== packet.evidence.length
   return (
     <section className="inspector-section sources-section">
       <div className="inspector-heading"><span>Sources ({sources.length})</span><ChevronUp size={15} /></div>
       <div className="source-list">
-        {sources.map((source, index) => (
-          <button className="source-row" key={source.path || source.name} onClick={() => source.note && onOpenNote(source.note)} disabled={!source.note} title={source.path || source.name}>
+          {sources.map((source, index) => (
+          <button className="source-row" key={source.path || source.name} onClick={() => source.note && onOpenNote({ ...source.note, retrievalFocus: source.citations?.[0] || null })} disabled={!source.note} title={source.path || source.name}>
             <span className="source-index">{index + 1}</span><FileText size={15} /><span className="source-name">{source.name}</span><span className={`source-kind ${source.kind}`}>{source.kind}</span>
           </button>
         ))}
         {sources.length === 0 && <div className="source-empty">No evidence retrieved yet.</div>}
       </div>
+      {packet && !packet.evidence?.length && <div className="source-empty" role="status">No evidence is available for citation.</div>}
+      {invalidSources > 0 && <div className="source-empty" role="alert">{invalidSources} citation source{invalidSources === 1 ? '' : 's'} could not be opened in the current Vault.</div>}
+      {duplicateChunks && <div className="source-empty" role="alert">Duplicate citation chunks were returned and are not treated as distinct evidence.</div>}
       {sources.length > 5 && <button className="show-more">Show all sources <ChevronDown size={15} /></button>}
     </section>
   )
 }
 
-function Inspector({ activeStage, running, hasActivity, onPause, linkedNotes, sources, vaultName, topK, embeddingLabel, rerankLabel, retrievalIndexState, packet, answerMode, runStatus, wikilinksEnabled, onOpenNote }) {
+function Inspector({ activeStage, running, hasActivity, onPause, linkedNotes, sources, vaultName, topK, embeddingLabel, rerankLabel, retrievalIndexState, retrievalIndexLifecycle, packet, answerMode, runStatus, wikilinksEnabled, onOpenNote }) {
   const presentation = getResearchRunPresentation({ runStatus, running, hasActivity, activeStage, stageCount: stages.length, packet, answerMode })
   return (
     <aside className="inspector">
       <div className="inspector-title"><BookOpen size={18} /> <span>Knowledge context</span><ChevronUp size={16} /></div>
       <LinkedNotes notes={linkedNotes} onOpenNote={onOpenNote} />
-      <RetrievalPath vaultName={vaultName} topK={topK} embeddingLabel={embeddingLabel} rerankLabel={rerankLabel} retrievalIndexState={retrievalIndexState} packet={packet} wikilinksEnabled={wikilinksEnabled} presentation={presentation} />
+      <RetrievalPath vaultName={vaultName} topK={topK} embeddingLabel={embeddingLabel} rerankLabel={rerankLabel} retrievalIndexState={retrievalIndexState} retrievalIndexLifecycle={retrievalIndexLifecycle} packet={packet} wikilinksEnabled={wikilinksEnabled} presentation={presentation} />
       <AgentStatus running={running} hasActivity={hasActivity} onPause={onPause} presentation={presentation} />
-      <Sources sources={sources} onOpenNote={onOpenNote} />
+      <Sources sources={sources} packet={packet} onOpenNote={onOpenNote} />
     </aside>
   )
 }
@@ -556,14 +593,14 @@ export function ResearchWorkspace({ phase, setupProps, conversationProps, knowle
     <AgentConversationPanel variant="full" {...knowledgePanelProps} />
   </div>
   if (phase === 'setup') return <ResearchSetup {...setupProps} />
-  const { config, selectedModel, vaultName, mcpConnected, canEdit, onEdit, messages, running, activeStage, retrievalPacket, input, setInput, onSubmit, disabled, models, authStatus, authBusy, modelCatalog, modelsBusy, onSelectModel, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, onOpenNote, linkedNotes, sources, topK, embeddingLabel, rerankLabel, retrievalIndexState, answerMode, runStatus, wikilinksEnabled, onPause } = conversationProps
+  const { config, selectedModel, vaultName, mcpConnected, canEdit, onEdit, messages, running, activeStage, retrievalPacket, input, setInput, onSubmit, disabled, models, authStatus, authBusy, modelCatalog, modelsBusy, onSelectModel, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, onOpenNote, linkedNotes, sources, topK, embeddingLabel, rerankLabel, retrievalIndexState, retrievalIndexLifecycle, answerMode, runStatus, wikilinksEnabled, onPause } = conversationProps
   const hasActivity = messages.length > 0 || Boolean(retrievalPacket)
   return <>
     <div className="workspace-content">
       <div className="chat-column">
         <ResearchContextBar config={config} selectedModel={selectedModel} vaultName={vaultName} mcpConnected={mcpConnected} canEdit={canEdit} onEdit={onEdit} />
         {retrievalPacket?.error && <section className="source-empty" role="alert" aria-live="assertive">
-          Evidence retrieval failed: {retrievalPacket.error.message || String(retrievalPacket.error)}
+          {safeRetrievalErrorMessage(retrievalPacket.error)}
         </section>}
         <div className="conversation">
           {messages.length === 0 && <div className="conversation-empty"><Sparkles size={22} /><strong>Start a research conversation</strong><span>Ask a question or add Vault context below.</span></div>}
@@ -572,7 +609,7 @@ export function ResearchWorkspace({ phase, setupProps, conversationProps, knowle
         <EvidenceTrail activeStage={activeStage} running={running} hasActivity={hasActivity} />
         <Composer value={input} setValue={setInput} onSubmit={onSubmit} disabled={disabled} selectedModel={selectedModel} models={models} onSelectModel={onSelectModel} authStatus={authStatus} authBusy={authBusy} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={onConnectChatgpt} onLogoutChatgpt={onLogoutChatgpt} onRefreshModels={onRefreshModels} />
       </div>
-      <Inspector activeStage={activeStage} running={running} hasActivity={hasActivity} onPause={onPause} linkedNotes={linkedNotes} sources={sources} vaultName={vaultName} topK={topK} embeddingLabel={embeddingLabel} rerankLabel={rerankLabel} retrievalIndexState={retrievalIndexState} packet={retrievalPacket} answerMode={answerMode} runStatus={runStatus} wikilinksEnabled={wikilinksEnabled} onOpenNote={onOpenNote} />
+      <Inspector activeStage={activeStage} running={running} hasActivity={hasActivity} onPause={onPause} linkedNotes={linkedNotes} sources={sources} vaultName={vaultName} topK={topK} embeddingLabel={embeddingLabel} rerankLabel={rerankLabel} retrievalIndexState={retrievalIndexState} retrievalIndexLifecycle={retrievalIndexLifecycle} packet={retrievalPacket} answerMode={answerMode} runStatus={runStatus} wikilinksEnabled={wikilinksEnabled} onOpenNote={onOpenNote} />
     </div>
     {note && <NotePreview note={note} onClose={onCloseNote} />}
     <ToolApprovalDialog approval={approval} onResolve={onResolveApproval} />

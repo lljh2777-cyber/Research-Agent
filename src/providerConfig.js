@@ -94,6 +94,8 @@ export function normalizeProviderConfigs(value) {
         ...(isDeepSeekEndpointType(model.preferredEndpointType) || isBailianEndpointType(model.preferredEndpointType) ? { preferredEndpointType: model.preferredEndpointType } : {}),
         ...(Number.isFinite(model.contextWindowTokens) ? { contextWindowTokens: model.contextWindowTokens } : {}),
         ...(Number.isFinite(model.maxOutputTokens) ? { maxOutputTokens: model.maxOutputTokens } : {}),
+        ...(Number.isInteger(model.dimensions) ? { dimensions: model.dimensions } : {}),
+        ...(Number.isInteger(model.embeddingDimensions) ? { embeddingDimensions: model.embeddingDimensions } : {}),
         ...(model.manual ? { manual: true } : {}),
       }))
       : []
@@ -316,6 +318,8 @@ export function providerConfigsToRetrievalModels(configs) {
         ready: true,
         detail: `Discovered from ${provider?.name || providerId}.`,
         capabilities: model.capabilities || {},
+        ...(Number.isInteger(model.dimensions) ? { dimensions: model.dimensions } : {}),
+        ...(Number.isInteger(model.embeddingDimensions) ? { embeddingDimensions: model.embeddingDimensions } : {}),
       })
     }
   }

@@ -99,6 +99,15 @@ test('exposes discovered embedding and rerank models by normalized capability wi
   ])
 })
 
+test('preserves account-visible embedding dimensions for exact index identity construction', () => {
+  const configs = createDefaultProviderConfigs()
+  configs.siliconflow = {
+    ...configs.siliconflow,
+    models: [{ id: 'BAAI/bge-m3', name: 'BGE M3', kind: 'embedding', dimensions: 1024, capabilities: { embedding: true, embeddings: true } }],
+  }
+  assert.equal(providerConfigsToRetrievalModels(configs)[0].dimensions, 1024)
+})
+
 test('explains when the local provider adapter route is missing', async () => {
   await assert.rejects(
     fetchProviderModels({ providerId: 'deepseek', endpoint: 'https://api.deepseek.com', apiKey: 'secret' }, async () => (

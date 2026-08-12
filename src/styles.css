@@ -619,6 +619,16 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .settings-section-heading h3 { margin: 0 0 4px; font-size: 12px; }
 .settings-section-heading p { margin: 0; color: #718198; font-size: 9px; }
 .settings-section-heading > span { align-self: center; color: var(--mint); font-family: var(--mono); font-size: 8px; }
+.retrieval-index-lifecycle { margin-top: 14px; }
+.settings-progress { height: 5px; margin: 14px 17px 0; overflow: hidden; border-radius: 999px; background: rgba(126, 226, 195, .12); }
+.settings-progress span { display: block; height: 100%; border-radius: inherit; background: var(--mint); transition: width .2s ease; }
+.settings-inline-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 17px 0; }
+.settings-muted-line { display: block; padding: 10px 17px 15px; color: #718198; font-size: 9px; }
+.note-retrieval-focus { margin-bottom: 14px; padding: 11px 12px; border-left: 2px solid var(--mint); background: rgba(126, 226, 195, .06); }
+.note-retrieval-focus strong, .note-retrieval-focus span { display: block; }
+.note-retrieval-focus strong { margin-bottom: 4px; color: var(--mint); font-size: 10px; }
+.note-retrieval-focus span { color: #718198; font-family: var(--mono); font-size: 9px; }
+.note-retrieval-focus p { margin: 7px 0 0; white-space: pre-wrap; }
 .discovered-model-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .discovered-model-list > div { min-width: 0; display: grid; gap: 4px; border-right: 1px solid rgba(125, 157, 201, .12); border-bottom: 1px solid rgba(125, 157, 201, .12); padding: 11px 14px; }
 .discovered-model-list > div:nth-child(2n) { border-right: 0; }
