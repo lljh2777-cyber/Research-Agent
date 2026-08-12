@@ -8,6 +8,7 @@ export const RETRIEVAL_INDEX_CACHE_SCHEMA_VERSION = 1
 export const RETRIEVAL_INDEX_CACHE_PREFIX = 'bioresearch-os:retrieval-index:v1:'
 export const RETRIEVAL_INDEX_CACHE_MAX_BYTES = 128 * 1024 * 1024
 export const RETRIEVAL_INDEX_BATCH_MAX = 128
+export const RETRIEVAL_INDEX_BATCH_MAX_BYTES = 256 * 1024
 export const RETRIEVAL_INDEX_TEXT_MAX_BYTES = 16_384
 export const RETRIEVAL_INDEX_STATES = Object.freeze([
   'unavailable',
@@ -165,6 +166,63 @@ function nowIso(now) {
   return new Date(now()).toISOString()
 }
 
+function byteLength(value) {
+  return new TextEncoder().encode(value).length
+}
+
+function safeProgress(value) {
+  if (!isRecord(value)) return null
+  const keys = Object.keys(value).sort().join('|')
+  if (keys !== 'batches|completed|total') return null
+  if (![value.completed, value.total, value.batches].every((item) => Number.isInteger(item) && item >= 0)) return null
+  if (value.completed > value.total) return null
+  return { completed: value.completed, total: value.total, batches: value.batches }
+}
+
+function minimalFailedTombstone(key, identity, now) {
+  const safeIdentity = normalizedStoredIdentity(identity)
+  return {
+    schemaVersion: RETRIEVAL_INDEX_CACHE_SCHEMA_VERSION,
+    kind: INDEX_CACHE_KIND,
+    key,
+    ...(safeIdentity ? { identity: safeIdentity } : {}),
+    state: 'failed',
+    progress: null,
+    error: safeError({ code: 'retrieval_index_invalid' }),
+    updatedAt: nowIso(now),
+  }
+}
+
+function normalizePersistedLifecycle(value) {
+  if (!isRecord(value) || !RETRIEVAL_INDEX_STATES.includes(value.state)) return null
+  const common = ['identity', 'key', 'kind', 'schemaVersion', 'state', 'updatedAt']
+  const stateKeys = value.state === 'building'
+    ? [...common, 'progress']
+    : value.state === 'stale'
+      ? [...common, 'progress', 'staleReason']
+      : [...common, 'error', 'progress']
+  if (Object.keys(value).sort().join('|') !== stateKeys.sort().join('|')) return null
+  if (value.schemaVersion !== RETRIEVAL_INDEX_CACHE_SCHEMA_VERSION || value.kind !== INDEX_CACHE_KIND) return null
+  const identity = normalizedStoredIdentity(value.identity)
+  if (!identity || value.key !== retrievalIndexIdentityKey(identity)) return null
+  if (typeof value.updatedAt !== 'string' || !value.updatedAt) return null
+  const progress = safeProgress(value.progress)
+  if (!progress && value.progress !== null) return null
+  if (value.state === 'stale' && !['vault_revision_changed', 'chunk_settings_changed', 'embedding_configuration_changed', 'schema_changed', 'manual'].includes(value.staleReason)) return null
+  if (value.state !== 'building' && (!isRecord(value.error) || asErrorCode(value.error.code) !== value.error.code || value.error.message !== safeError(value.error).message)) return null
+  return {
+    schemaVersion: RETRIEVAL_INDEX_CACHE_SCHEMA_VERSION,
+    kind: INDEX_CACHE_KIND,
+    key: value.key,
+    identity,
+    state: value.state,
+    ...(value.state === 'stale' ? { staleReason: value.staleReason } : {}),
+    progress,
+    ...(value.state !== 'building' ? { error: safeError(value.error) } : {}),
+    updatedAt: value.updatedAt,
+  }
+}
+
 function createLocalStorageBackend(storage) {
   return {
     available: Boolean(storage),
@@ -242,15 +300,32 @@ export function createRetrievalIndexStore({ storage, embed, now = Date.now } = {
   const active = new Map()
   const recoveryPromise = recoverInterruptedBuilds()
 
-  async function rawEnvelope(key) {
+  async function quarantine(key, identity = null) {
+    const tombstone = minimalFailedTombstone(key, identity, now)
+    try {
+      await writeEnvelope(key, tombstone)
+    } catch {
+      try {
+        await backend.remove(key)
+      } catch {
+        // Do not expose the original payload when persistence itself fails.
+      }
+    }
+    return tombstone
+  }
+
+  async function rawEnvelope(key, fallbackIdentity = null) {
     const raw = await backend.read(key)
     if (!raw) return null
     try {
       const value = typeof raw === 'string' ? JSON.parse(raw) : raw
       if (!isRecord(value) || value.key !== key || value.schemaVersion !== RETRIEVAL_INDEX_CACHE_SCHEMA_VERSION || value.kind !== INDEX_CACHE_KIND) throw new TypeError('unsupported cache')
-      return value
+      if (value.state === 'ready') return normalizeRetrievalIndexCache(value)
+      const lifecycle = normalizePersistedLifecycle(value)
+      if (!lifecycle) throw new TypeError('unsafe cache')
+      return lifecycle
     } catch {
-      return { key, state: 'failed', error: safeError({ code: 'retrieval_index_invalid' }), updatedAt: nowIso(now) }
+      return quarantine(key, fallbackIdentity)
     }
   }
 
@@ -292,10 +367,9 @@ export function createRetrievalIndexStore({ storage, embed, now = Date.now } = {
     const requested = identity ? normalizeRetrievalIndexIdentity(identity) : null
     if (!requested) return { ok: true, state: 'not-built', progress: null, identity: null, error: null }
     const key = retrievalIndexIdentityKey(requested)
-    const exact = await rawEnvelope(key)
-    const storedIdentity = normalizedStoredIdentity(exact?.identity)
-    if (exact?.identity && !storedIdentity) return { ok: false, key, state: 'failed', identity: requested, progress: null, error: safeError({ code: 'retrieval_index_invalid' }) }
-    if (storedIdentity && JSON.stringify(storedIdentity) !== JSON.stringify(requested)) {
+      const exact = await rawEnvelope(key, requested)
+      const storedIdentity = normalizedStoredIdentity(exact?.identity)
+      if (storedIdentity && JSON.stringify(storedIdentity) !== JSON.stringify(requested)) {
       return { ok: true, key, state: 'stale', identity: requested, progress: null, staleReason: identityDifference(storedIdentity, requested), error: null }
     }
     if (exact) return summarizeEnvelope(exact)
@@ -310,22 +384,14 @@ export function createRetrievalIndexStore({ storage, embed, now = Date.now } = {
     const requested = normalizeRetrievalIndexIdentity(identity)
     if (!backend.available) return { ok: false, state: 'unavailable', error: safeError({ code: 'provider_unavailable' }) }
     const key = retrievalIndexIdentityKey(requested)
-    const value = await rawEnvelope(key)
-    if (!value) return { ok: true, key, state: 'not-built', identity: requested, index: null, vectors: [] }
-    const storedIdentity = normalizedStoredIdentity(value.identity)
-    if (value.identity && !storedIdentity) return { ok: false, key, state: 'failed', identity: requested, error: safeError({ code: 'retrieval_index_invalid' }), index: null, vectors: [] }
-    if (storedIdentity && JSON.stringify(storedIdentity) !== JSON.stringify(requested)) {
+     const value = await rawEnvelope(key, requested)
+     if (!value) return { ok: true, key, state: 'not-built', identity: requested, index: null, vectors: [] }
+     const storedIdentity = normalizedStoredIdentity(value.identity)
+     if (storedIdentity && JSON.stringify(storedIdentity) !== JSON.stringify(requested)) {
       return { ok: true, key, state: 'stale', identity: requested, staleReason: identityDifference(storedIdentity, requested), index: null, vectors: [] }
     }
-    if (value.state !== 'ready') return { ...summarizeEnvelope(value), index: null, vectors: [] }
-    try {
-      const cache = normalizeRetrievalIndexCache(typeof value === 'string' ? JSON.parse(value) : value)
-      return { ok: true, key, state: 'ready', identity: cache.identity, index: cache.index, vectors: cache.vectors, provenance: cache.provenance }
-    } catch (error) {
-      const failed = { ...value, state: 'failed', error: safeError({ code: 'retrieval_index_invalid' }), updatedAt: nowIso(now) }
-      await writeEnvelope(key, failed)
-      return { ...summarizeEnvelope(failed), index: null, vectors: [] }
-    }
+     if (value.state !== 'ready') return { ...summarizeEnvelope(value), index: null, vectors: [] }
+     return { ok: true, key, state: 'ready', identity: value.identity, index: value.index, vectors: value.vectors, provenance: value.provenance }
   }
 
   async function progress({ identity } = {}) {
@@ -337,9 +403,11 @@ export function createRetrievalIndexStore({ storage, embed, now = Date.now } = {
     const key = retrievalIndexIdentityKey(requested)
     const job = active.get(key)
     if (!job) return status({ identity: requested })
-    job.cancelRequested = true
-    job.controller.abort()
-    return { ok: true, key, state: 'cancelling', identity: requested }
+     job.cancelRequested = true
+     job.generation += 1
+     job.controller.abort()
+     await job.quiesced
+     return { ok: true, key, state: job.result?.state || 'cancelled', identity: requested }
   }
 
   async function build(input = {}) {
@@ -363,27 +431,54 @@ export function createRetrievalIndexStore({ storage, embed, now = Date.now } = {
       await sameVault.promise.catch(() => {})
     }
     const controller = new AbortController()
-    const job = { key, identity, controller, cancelRequested: false, promise: null }
+     let resolveQuiesced
+     const job = {
+       key,
+       identity,
+       controller,
+       cancelRequested: false,
+       generation: 0,
+       result: null,
+       quiesced: new Promise((resolve) => { resolveQuiesced = resolve }),
+       promise: null,
+     }
     active.set(key, job)
     const total = index.chunks.length
     const batchSize = Math.min(RETRIEVAL_INDEX_BATCH_MAX, Math.max(1, Number(input.batchSize) || RETRIEVAL_INDEX_BATCH_MAX))
     const buildPromise = (async () => {
       const progressValue = { completed: 0, total, batches: 0 }
       const vectors = []
+      const generation = job.generation
+      const ensureActive = () => {
+        if (controller.signal.aborted || job.cancelRequested || job.generation !== generation || active.get(key) !== job) {
+          throw Object.assign(new Error('cancelled'), { name: 'AbortError', code: 'cancelled' })
+        }
+      }
       try {
         await writeEnvelope(key, storageEnvelope(identity, 'building', { progress: progressValue, updatedAt: nowIso(now) }))
-        for (let offset = 0; offset < index.chunks.length; offset += batchSize) {
-          if (controller.signal.aborted || job.cancelRequested) throw Object.assign(new Error('cancelled'), { name: 'AbortError', code: 'cancelled' })
-          const batch = index.chunks.slice(offset, offset + batchSize)
+        for (let offset = 0; offset < index.chunks.length;) {
+          ensureActive()
+          let end = offset
+          let batchBytes = 0
+          while (end < index.chunks.length && end - offset < batchSize) {
+            const itemBytes = byteLength(texts[end])
+            if (end > offset && batchBytes + itemBytes > RETRIEVAL_INDEX_BATCH_MAX_BYTES) break
+            if (end === offset && itemBytes > RETRIEVAL_INDEX_BATCH_MAX_BYTES) {
+              throw Object.assign(new Error('Embedding batch exceeds its byte bound.'), { code: 'invalid_request' })
+            }
+            batchBytes += itemBytes
+            end += 1
+          }
+          const batch = index.chunks.slice(offset, end)
           const result = await embed({
             ...(input.provider || {}),
             providerId: identity.embedding.providerId,
             model: identity.embedding.modelId,
             dimensions: identity.embedding.dimensions,
-            inputs: texts.slice(offset, offset + batch.length),
-            signal: controller.signal,
-          })
-          if (controller.signal.aborted || job.cancelRequested) throw Object.assign(new Error('cancelled'), { name: 'AbortError', code: 'cancelled' })
+             inputs: texts.slice(offset, end),
+             signal: controller.signal,
+           })
+           ensureActive()
           if (result?.ok === false) throw Object.assign(new Error(result.error || 'Embedding failed.'), { code: result.code })
           const returned = Array.isArray(result?.embeddings) ? result.embeddings : []
           if (returned.length !== batch.length) throw Object.assign(new Error('Embedding batch shape was invalid.'), { code: 'malformed_response' })
@@ -396,12 +491,14 @@ export function createRetrievalIndexStore({ storage, embed, now = Date.now } = {
             seen.add(localIndex)
             vectors.push({ chunkId: batch[localIndex].id, index: offset + localIndex, vector: item.vector.map(Number) })
           })
-          progressValue.completed = Math.min(total, offset + batch.length)
-          progressValue.batches += 1
-          await writeEnvelope(key, storageEnvelope(identity, 'building', { progress: { ...progressValue }, updatedAt: nowIso(now) }))
-          input.onProgress?.({ ...progressValue, state: 'building', key, identity })
-        }
-        if (controller.signal.aborted || job.cancelRequested) throw Object.assign(new Error('cancelled'), { name: 'AbortError', code: 'cancelled' })
+           progressValue.completed = Math.min(total, offset + batch.length)
+           progressValue.batches += 1
+           await writeEnvelope(key, storageEnvelope(identity, 'building', { progress: { ...progressValue }, updatedAt: nowIso(now) }))
+           ensureActive()
+           input.onProgress?.({ ...progressValue, state: 'building', key, identity })
+           offset = end
+         }
+         ensureActive()
         const cache = normalizeRetrievalIndexCache({
           ...storageEnvelope(identity, 'ready', {
             createdAt: nowIso(now),
@@ -410,18 +507,24 @@ export function createRetrievalIndexStore({ storage, embed, now = Date.now } = {
             vectors,
             provenance: { providerId: identity.embedding.providerId, modelId: identity.embedding.modelId },
           }),
-        })
-        await writeEnvelope(key, cache)
-        return { ok: true, key, state: 'ready', identity, index: cache.index, vectors: cache.vectors, provenance: cache.provenance, progress: { completed: total, total, batches: progressValue.batches } }
-      } catch (error) {
+         })
+         await writeEnvelope(key, cache)
+         ensureActive()
+         const result = { ok: true, key, state: 'ready', identity, index: cache.index, vectors: cache.vectors, provenance: cache.provenance, progress: { completed: total, total, batches: progressValue.batches } }
+         job.result = result
+         return result
+       } catch (error) {
         const cancelled = controller.signal.aborted || job.cancelRequested || error?.name === 'AbortError' || error?.code === 'cancelled'
         const finalState = cancelled ? 'cancelled' : error?.code === 'malformed_response' ? 'degraded' : 'failed'
         const finalError = safeError(cancelled ? { code: 'cancelled' } : error, cancelled ? 'cancelled' : 'provider_error')
-        await writeEnvelope(key, storageEnvelope(identity, finalState, { progress: { ...progressValue }, error: finalError, updatedAt: nowIso(now) }))
-        return { ok: false, key, state: finalState, identity, progress: { ...progressValue }, error: finalError }
-      } finally {
-        active.delete(key)
-      }
+         await writeEnvelope(key, storageEnvelope(identity, finalState, { progress: { ...progressValue }, error: finalError, updatedAt: nowIso(now) }))
+         const result = { ok: false, key, state: finalState, identity, progress: { ...progressValue }, error: finalError }
+         job.result = result
+         return result
+       } finally {
+         active.delete(key)
+         resolveQuiesced()
+       }
     })()
     job.promise = buildPromise
     return buildPromise

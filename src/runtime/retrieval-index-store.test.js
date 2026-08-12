@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   RETRIEVAL_INDEX_CACHE_PREFIX,
+  RETRIEVAL_INDEX_BATCH_MAX_BYTES,
   createMemoryRetrievalIndexStorage,
   createRetrievalIndexStore,
   normalizeRetrievalIndexCache,
@@ -105,24 +106,70 @@ test('fails safe if a storage key collides with a different persisted identity',
   const persisted = JSON.parse(await storage.read(originalKey))
   await storage.write(requestedKey, JSON.stringify({ ...persisted, key: requestedKey }))
   const read = await store.read({ identity: otherIdentity })
-  assert.equal(read.state, 'stale')
+  assert.equal(read.state, 'failed')
   assert.equal(read.index, null)
   assert.deepEqual(read.vectors, [])
 })
 
-test('fails closed for corrupt and unknown-version cache records', async () => {
+test('replaces corrupt and unknown-version secret-bearing records with secret-free failed tombstones', async () => {
   const storage = createMemoryRetrievalIndexStorage()
   const key = retrievalIndexIdentityKey(identity)
-  await storage.write(key, '{broken-json')
+  await storage.write(key, JSON.stringify({
+    schemaVersion: 1,
+    kind: 'retrieval-index-cache',
+    key,
+    state: 'ready',
+    identity,
+    endpoint: 'https://api.siliconflow.cn/v1',
+    Authorization: 'Bearer top-secret',
+    inputText: 'private vault text',
+  }))
   const corrupt = await createRetrievalIndexStore({ storage, embed: embeddingStub([]) }).read({ identity })
   assert.equal(corrupt.state, 'failed')
   assert.equal(corrupt.index, null)
+  const corruptRaw = await storage.read(key)
+  assert.equal(corruptRaw.includes('top-secret'), false)
+  assert.equal(corruptRaw.includes('private vault text'), false)
+  assert.equal(corruptRaw.includes('api.siliconflow'), false)
 
-  await storage.write(key, JSON.stringify({ schemaVersion: 99, kind: 'retrieval-index-cache', key, state: 'ready' }))
+  await storage.write(key, JSON.stringify({
+    schemaVersion: 99,
+    kind: 'retrieval-index-cache',
+    key,
+    state: 'ready',
+    identity,
+    apiKey: 'unknown-version-secret',
+    headers: { Authorization: 'Bearer unknown-version-secret' },
+  }))
   const unknown = await createRetrievalIndexStore({ storage, embed: embeddingStub([]) }).read({ identity })
   assert.equal(unknown.state, 'failed')
   assert.equal(unknown.index, null)
+  const unknownRaw = await storage.read(key)
+  assert.equal(unknownRaw.includes('unknown-version-secret'), false)
+  assert.equal(unknownRaw.includes('Authorization'), false)
+  assert.equal((await createRetrievalIndexStore({ storage, embed: embeddingStub([]) }).status({ identity })).state, 'failed')
+  assert.equal((await createRetrievalIndexStore({ storage, embed: embeddingStub([]) }).list()).items[0].state, 'failed')
   assert.throws(() => normalizeRetrievalIndexCache({ schemaVersion: 99 }), /cache has unexpected or missing keys|unsupported/)
+})
+
+test('splits embedding batches by count and UTF-8 bytes', async () => {
+  const storage = createMemoryRetrievalIndexStorage()
+  const calls = []
+  const manyChunks = Array.from({ length: 128 }, (_, index) => ({
+    ...chunks[0],
+    id: `large::${index}`,
+    ordinal: index,
+  }))
+  const manyTexts = Array.from({ length: 128 }, () => 'a'.repeat(4096))
+  const store = createRetrievalIndexStore({ storage, embed: embeddingStub(calls) })
+  const result = await store.build({ identity, chunks: manyChunks, texts: manyTexts, batchSize: 128 })
+  assert.equal(result.state, 'ready')
+  assert.equal(calls.length, 2)
+  assert.deepEqual(calls.map(({ inputs }) => inputs.length), [64, 64])
+  for (const call of calls) {
+    assert.ok(call.inputs.length <= 128)
+    assert.ok(new TextEncoder().encode(call.inputs.join('')).length <= RETRIEVAL_INDEX_BATCH_MAX_BYTES)
+  }
 })
 
 test('converts interrupted building state to cancelled on restart and never publishes partial ready data', async () => {
@@ -169,6 +216,53 @@ test('replays the same active build and cancels before committing a rebuild', as
   assert.equal(cancelledResult.state, 'cancelled')
   assert.equal((await store.read({ identity })).state, 'cancelled')
   assert.equal(RETRIEVAL_INDEX_CACHE_PREFIX.startsWith('bioresearch-os:'), true)
+})
+
+test('cancel waits for a delayed ready write and prevents late ready/progress publication', async () => {
+  const base = createMemoryRetrievalIndexStorage()
+  let readyStarted
+  const readyStartedPromise = new Promise((resolve) => { readyStarted = resolve })
+  let releaseReady
+  const readyRelease = new Promise((resolve) => { releaseReady = resolve })
+  const writes = []
+  const storage = {
+    available: true,
+    read: (key) => base.read(key),
+    async write(key, value) {
+      const state = JSON.parse(value).state
+      writes.push(state)
+      if (state === 'ready') {
+        readyStarted()
+        await readyRelease
+      }
+      return base.write(key, value)
+    },
+    remove: (key) => base.remove(key),
+    list: () => base.list(),
+  }
+  const progress = []
+  const store = createRetrievalIndexStore({ storage, embed: embeddingStub([]) })
+  const build = store.build({ identity, chunks, texts, onProgress: (value) => progress.push(value) })
+  await readyStartedPromise
+  const cancel = store.cancel({ identity })
+  const notYetCancelled = await Promise.race([
+    cancel.then(() => false),
+    new Promise((resolve) => setTimeout(() => resolve(true), 10)),
+  ])
+  assert.equal(notYetCancelled, true)
+  releaseReady()
+  const cancelResult = await cancel
+  const buildResult = await build
+  assert.equal(cancelResult.state, 'cancelled')
+  assert.equal(buildResult.state, 'cancelled')
+  assert.equal((await store.read({ identity })).state, 'cancelled')
+  const writesAtCancelReturn = writes.length
+  const progressAtCancelReturn = progress.length
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.equal(writes.length, writesAtCancelReturn)
+  assert.equal(progress.length, progressAtCancelReturn)
+  assert.equal(writes.includes('ready'), true)
+  assert.equal(writes.at(-1), 'cancelled')
 })
 
 test('replaces a different identity for the same Vault only after the older build reaches quiescence', async () => {
