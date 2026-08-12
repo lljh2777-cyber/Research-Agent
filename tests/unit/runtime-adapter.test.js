@@ -124,12 +124,14 @@ describe('runtime adapters', () => {
     const fetchImpl = vi.fn(async (url, options) => {
       if (url === '/api/providers/embeddings') {
         const body = JSON.parse(options.body)
+        expect(Array.isArray(body.inputs)).toBe(true)
+        expect(body.input).toBeUndefined()
         return new Response(JSON.stringify({
           ok: true,
           providerId: body.providerId,
           modelId: body.model,
           dimensions: 2,
-          embeddings: body.input.map((text, index) => ({ index, vector: [index + 0.1, text.length / 100] })),
+          embeddings: body.inputs.map((text, index) => ({ index, vector: [index + 0.1, text.length / 100] })),
           provenance: { providerId: body.providerId, modelId: body.model },
         }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       }
