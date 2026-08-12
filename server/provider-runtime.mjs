@@ -380,6 +380,16 @@ function normalizeDimensions(value) {
   return dimensions
 }
 
+const SILICONFLOW_ADJUSTABLE_EMBEDDING_MODELS = new Set([
+  'qwen/qwen3-embedding-0.6b',
+  'qwen/qwen3-embedding-4b',
+  'qwen/qwen3-embedding-8b',
+])
+
+function supportsSiliconFlowEmbeddingDimensions(model) {
+  return SILICONFLOW_ADJUSTABLE_EMBEDDING_MODELS.has(String(model || '').trim().toLowerCase())
+}
+
 export function buildProviderEmbeddingRequest({ providerId, endpoint, apiKey, model, input, inputs, query, dimensions }) {
   requireSiliconFlowCapability(providerId, 'embedding')
   const cleanEndpoint = cleanProviderBaseUrl(endpoint)
@@ -392,7 +402,7 @@ export function buildProviderEmbeddingRequest({ providerId, endpoint, apiKey, mo
     body: {
       model: cleanModel,
       input: normalizedInputs,
-      ...(normalizedDimensions ? { dimensions: normalizedDimensions } : {}),
+      ...(normalizedDimensions && supportsSiliconFlowEmbeddingDimensions(cleanModel) ? { dimensions: normalizedDimensions } : {}),
     },
     headers: providerHeaders(providerId, 'openai-chat-completions', apiKey, 'application/json'),
     providerId,

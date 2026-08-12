@@ -192,7 +192,7 @@ test('routes SiliconFlow embedding and rerank operations through the server Prov
   try {
     const embeddingResponse = await fetch(`${origin}/api/providers/embeddings`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'embed', input: 'text', dimensions: 2 }),
+      body: JSON.stringify({ providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'BAAI/bge-m3', input: 'text', dimensions: 2 }),
     })
     assert.equal(embeddingResponse.status, 200)
     assert.deepEqual((await embeddingResponse.json()).embeddings, [{ index: 0, vector: [0.1, 0.2] }])
@@ -204,6 +204,7 @@ test('routes SiliconFlow embedding and rerank operations through the server Prov
     assert.equal(rerankResponse.status, 200)
     assert.deepEqual((await rerankResponse.json()).scores, [{ chunkId: 'chunk-1', score: 0.8 }])
     assert.equal(upstream[0].url, 'https://api.siliconflow.cn/v1/embeddings')
+    assert.deepEqual(JSON.parse(upstream[0].options.body), { model: 'BAAI/bge-m3', input: ['text'] })
     assert.equal(upstream[1].url, 'https://api.siliconflow.cn/v1/rerank')
     assert.equal(upstream[0].options.headers.Authorization, 'Bearer secret')
     assert.equal(JSON.parse(upstream[1].options.body).documents[0], 'text')
