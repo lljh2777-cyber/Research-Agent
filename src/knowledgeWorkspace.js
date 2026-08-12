@@ -48,26 +48,43 @@ export function markdownBlockReferenceAnchorId(blockId = '') {
 
 export function extractMarkdownBlockReferences(markdown = '') {
   const references = []
-  let inCode = false
   let inComment = false
+  let fence = null
 
   String(markdown).split(/\r?\n/).forEach((line, lineIndex) => {
-    const trimmed = line.trim()
-    if (inComment) {
-      if (trimmed.includes('-->')) inComment = false
+    if (fence) {
+      const closingFence = line.match(/^ {0,3}(`{3,}|~{3,})\s*$/)
+      if (closingFence && closingFence[1][0] === fence.marker && closingFence[1].length >= fence.length) fence = null
       return
     }
-    if (trimmed.startsWith('<!--')) {
-      if (!trimmed.includes('-->')) inComment = true
-      return
-    }
-    if (trimmed.startsWith('```')) {
-      inCode = !inCode
-      return
-    }
-    if (inCode) return
 
-    const match = line.match(/(?:^|\s)\^([A-Za-z0-9-]+)\s*$/)
+    let visible = ''
+    let cursor = 0
+    while (cursor < line.length) {
+      if (inComment) {
+        const commentEnd = line.indexOf('-->', cursor)
+        if (commentEnd < 0) return
+        inComment = false
+        cursor = commentEnd + 3
+        continue
+      }
+      const commentStart = line.indexOf('<!--', cursor)
+      if (commentStart < 0) {
+        visible += line.slice(cursor)
+        break
+      }
+      visible += line.slice(cursor, commentStart)
+      inComment = true
+      cursor = commentStart + 4
+    }
+
+    const openingFence = visible.match(/^ {0,3}(`{3,}|~{3,})(?:[^`~].*)?$/)
+    if (openingFence) {
+      fence = { marker: openingFence[1][0], length: openingFence[1].length }
+      return
+    }
+
+    const match = visible.match(/(?:^|\s)\^([A-Za-z0-9-]+)\s*$/)
     if (!match) return
     references.push({
       blockId: match[1],

@@ -24,7 +24,7 @@ async function installObsidianVaultSnapshot(page) {
             name: 'paper.md',
             title: 'Source paper',
             path: 'wiki/sources/paper.md',
-            body: '# Source paper\n\nThe method uses [[wiki/annotations/paper#^ann-2384afaf23|Delaunay subgraph]].\n\n[[wiki/annotations/paper#^missing|Missing block]] remains unavailable.\n\n[[wiki/annotations/duplicate#^duplicate|Duplicate block]] remains unavailable.\n\n[[wiki/annotations/paper#Explanation|Heading link]] remains supported.',
+            body: '# Source paper\n\nThe method uses [[wiki/annotations/paper#^ann-2384afaf23|Delaunay subgraph]].\n\n[[wiki/annotations/paper#^missing|Missing block]] remains unavailable.\n\n[[wiki/annotations/duplicate#^duplicate|Duplicate block]] remains unavailable.\n\n[[wiki/annotations/protected#^tilde-secret|Fenced block]] and [[wiki/annotations/protected#^comment-secret|Comment block]] remain unavailable.\n\n[[wiki/annotations/paper#Explanation|Heading link]] remains supported.',
             frontmatter: {},
             wikilinks: [],
             wordCount: 16,
@@ -45,6 +45,16 @@ async function installObsidianVaultSnapshot(page) {
             title: 'Duplicate annotations',
             path: 'wiki/annotations/duplicate.md',
             body: '# Duplicate annotations\n\nFirst.\n\n^duplicate\n\nSecond.\n\n^duplicate',
+            frontmatter: { tags: ['annotation'] },
+            wikilinks: [],
+            wordCount: 5,
+          },
+          {
+            id: 'wiki/annotations/protected.md',
+            name: 'protected.md',
+            title: 'Protected annotations',
+            path: 'wiki/annotations/protected.md',
+            body: '# Protected annotations\n\n~~~md\n^tilde-secret\n~~~~\n\nprefix <!--\n^comment-secret\n--> suffix',
             frontmatter: { tags: ['annotation'] },
             wikilinks: [],
             wordCount: 5,
@@ -96,11 +106,18 @@ test('opens persisted Obsidian annotation block references by mouse and keyboard
   await page.getByRole('button', { name: 'Source paper Markdown', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Missing block', exact: true })).toBeDisabled()
   await expect(page.getByRole('button', { name: 'Duplicate block', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Fenced block', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Comment block', exact: true })).toBeDisabled()
   await expect(page.locator('#block-reference-duplicate')).toHaveCount(0)
   const headingLink = page.getByRole('button', { name: 'Heading link', exact: true })
   await expect(headingLink).toBeEnabled()
   await headingLink.click()
   await expect(page.getByRole('heading', { name: 'Explanation', level: 3 })).toBeVisible()
+
+  await page.getByRole('button', { name: 'protected', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Protected annotations', level: 1 })).toBeVisible()
+  await expect(page.locator('#block-reference-tilde-secret')).toHaveCount(0)
+  await expect(page.locator('#block-reference-comment-secret')).toHaveCount(0)
 
   expect(pageErrors).toEqual([])
   expect({ consoleErrors, httpErrors }).toEqual({ consoleErrors: [], httpErrors: [] })

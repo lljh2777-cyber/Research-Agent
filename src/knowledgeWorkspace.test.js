@@ -142,13 +142,13 @@ test('fails closed for invalid, missing, duplicate, comment, and code-fenced blo
     id: 'annotations.md',
     path: 'annotations.md',
     title: 'Annotations',
-    body: '<!-- ^ignored -->\n```md\n^code-ref\n```\nText ^real-ref\n^duplicate\n^duplicate',
+    body: '<!-- ^ignored -->\n```md\n^code-ref\n```\n~~~md\n^tilde-secret\n~~~~\nprefix <!--\n^comment-secret\n--> suffix\nText ^real-ref\n^duplicate\n^duplicate',
   }
 
   assert.deepEqual(extractMarkdownBlockReferences(target.body), [
-    { blockId: 'real-ref', id: 'block-reference-real-ref', line: 5 },
-    { blockId: 'duplicate', id: 'block-reference-duplicate', line: 6 },
-    { blockId: 'duplicate', id: 'block-reference-duplicate', line: 7 },
+    { blockId: 'real-ref', id: 'block-reference-real-ref', line: 11 },
+    { blockId: 'duplicate', id: 'block-reference-duplicate', line: 12 },
+    { blockId: 'duplicate', id: 'block-reference-duplicate', line: 13 },
   ])
   assert.equal(markdownBlockReferenceAnchorId('bad id'), null)
   assert.equal(resolveWikilink([source, target], source, { target: 'annotations', heading: '^missing' }).missingHeading, true)
