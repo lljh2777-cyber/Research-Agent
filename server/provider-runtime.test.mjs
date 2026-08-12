@@ -1,7 +1,18 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildBailianResponseResourceRequest, buildProviderChatRequest, createProviderRequestSignal, streamProviderChat } from './provider-runtime.mjs'
+import {
+  buildBailianResponseResourceRequest,
+  buildProviderChatRequest,
+  buildProviderEmbeddingRequest,
+  buildProviderRerankRequest,
+  createProviderRequestSignal,
+  executeProviderEmbedding,
+  executeProviderRerank,
+  normalizeProviderEmbeddingResponse,
+  normalizeProviderRerankResponse,
+  streamProviderChat,
+} from './provider-runtime.mjs'
 
 const messages = [
   { role: 'system', content: 'Use vault evidence.' },
@@ -61,6 +72,96 @@ test('builds provider-native Anthropic and Gemini requests', () => {
   assert.equal(gemini.url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini%2Fcurrent:streamGenerateContent?alt=sse')
   assert.equal(gemini.headers['x-goog-api-key'], 'g-key')
   assert.equal(gemini.url.includes('g-key'), false)
+})
+
+test('builds bounded SiliconFlow embedding requests without leaking credentials into the URL', () => {
+  const request = buildProviderEmbeddingRequest({
+    providerId: 'siliconflow',
+    endpoint: 'https://api.siliconflow.cn/v1/',
+    apiKey: 'secret-key',
+    model: 'BAAI/bge-m3',
+    inputs: ['first chunk', 'second chunk'],
+    dimensions: 1024,
+  })
+  assert.equal(request.url, 'https://api.siliconflow.cn/v1/embeddings')
+  assert.equal(request.headers.Authorization, 'Bearer secret-key')
+  assert.equal(request.headers.Accept, 'application/json')
+  assert.deepEqual(request.body, { model: 'BAAI/bge-m3', input: ['first chunk', 'second chunk'], dimensions: 1024 })
+  assert.equal(request.url.includes('secret-key'), false)
+  assert.throws(() => buildProviderEmbeddingRequest({
+    providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'BAAI/bge-m3', inputs: Array(129).fill('chunk'),
+  }), /1 to 128 inputs/)
+})
+
+test('builds bounded SiliconFlow rerank requests with candidate IDs kept outside the upstream body', () => {
+  const request = buildProviderRerankRequest({
+    providerId: 'siliconflow',
+    endpoint: 'https://api.siliconflow.cn/v1',
+    apiKey: 'secret-key',
+    model: 'BAAI/bge-reranker-v2-m3',
+    query: 'ligand receptor',
+    candidates: [{ chunkId: 'chunk-1', excerpt: 'first evidence' }, { chunkId: 'chunk-2', excerpt: 'second evidence' }],
+    topK: 1,
+  })
+  assert.equal(request.url, 'https://api.siliconflow.cn/v1/rerank')
+  assert.deepEqual(request.body, {
+    model: 'BAAI/bge-reranker-v2-m3',
+    query: 'ligand receptor',
+    documents: ['first evidence', 'second evidence'],
+    top_n: 1,
+    return_documents: false,
+  })
+  assert.deepEqual(request.candidates, [{ candidateId: 'chunk-1', text: 'first evidence' }, { candidateId: 'chunk-2', text: 'second evidence' }])
+  assert.equal(JSON.stringify(request.body).includes('chunk-1'), false)
+  assert.throws(() => buildProviderRerankRequest({
+    providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'reranker', query: 'q', candidates: Array(51).fill({ chunkId: 'x', excerpt: 'candidate' }),
+  }), /1 to 50 candidates/)
+})
+
+test('validates embedding dimensions and rerank scores while returning safe provenance', () => {
+  const embeddings = normalizeProviderEmbeddingResponse({ data: [{ index: 0, embedding: [0.1, 0.2] }] }, {
+    providerId: 'siliconflow', modelId: 'BAAI/bge-m3', requestedDimensions: 2,
+  })
+  assert.deepEqual(embeddings, {
+    ok: true,
+    providerId: 'siliconflow',
+    modelId: 'BAAI/bge-m3',
+    dimensions: 2,
+    embeddings: [{ index: 0, vector: [0.1, 0.2] }],
+    provenance: { providerId: 'siliconflow', modelId: 'BAAI/bge-m3' },
+  })
+  const rerank = normalizeProviderRerankResponse({ results: [{ index: 1, relevance_score: 0.91 }, { index: 0, relevance_score: 0.4 }] }, {
+    providerId: 'siliconflow', modelId: 'reranker', candidates: [{ candidateId: 'chunk-1' }, { candidateId: 'chunk-2' }], topK: 2,
+  })
+  assert.deepEqual(rerank.results, [
+    { candidateId: 'chunk-2', score: 0.91, rank: 0 },
+    { candidateId: 'chunk-1', score: 0.4, rank: 1 },
+  ])
+  assert.deepEqual(rerank.provenance, { providerId: 'siliconflow', modelId: 'reranker' })
+  assert.throws(() => normalizeProviderEmbeddingResponse({ data: [{ embedding: [0.1] }, { embedding: [0.2, 0.3] }] }), /inconsistent dimensions/)
+  assert.throws(() => normalizeProviderRerankResponse({ results: [{ index: 0, relevance_score: 1.5 }] }, {
+    candidates: [{ candidateId: 'chunk-1' }], topK: 1,
+  }), /invalid rerank indexes or scores/)
+})
+
+test('executes embedding and rerank through abortable JSON provider requests', async () => {
+  const calls = []
+  const fetchImpl = async (url, options) => {
+    calls.push({ url, options })
+    return new Response(url.endsWith('/embeddings')
+      ? JSON.stringify({ data: [{ index: 0, embedding: [0.1, 0.2] }] })
+      : JSON.stringify({ results: [{ index: 0, relevance_score: 0.8 }] }), { status: 200 })
+  }
+  const controller = new AbortController()
+  const embedding = await executeProviderEmbedding({ providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'embed', input: 'text', dimensions: 2, signal: controller.signal }, fetchImpl)
+  const rerank = await executeProviderRerank({ providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'rerank', query: 'q', candidates: [{ chunkId: 'chunk-1', excerpt: 'text' }], signal: controller.signal }, fetchImpl)
+  assert.equal(embedding.dimensions, 2)
+  assert.deepEqual(rerank.scores, [{ chunkId: 'chunk-1', score: 0.8 }])
+  assert.equal(calls[0].options.signal instanceof AbortSignal, true)
+  assert.equal(calls[0].options.signal.aborted, false)
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer secret')
+  assert.equal(calls[0].url.endsWith('/embeddings'), true)
+  assert.equal(calls[1].url.endsWith('/rerank'), true)
 })
 
 test('builds SiliconFlow chat requests through the shared Runtime Provider boundary', () => {

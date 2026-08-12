@@ -1,6 +1,7 @@
 const AUTH_PATTERN = /\b(401|403|api[ -]?key|auth(?:entication|orization)?|credential|unauthorized|forbidden)\b/i
 const RATE_LIMIT_PATTERN = /\b(429|rate[ -]?limit|too many requests|quota)\b/i
 const TIMEOUT_PATTERN = /\b(timeout|timed out|deadline)\b/i
+const OVERLOAD_PATTERN = /\b(overload|overloaded|capacity|temporarily unavailable|service unavailable|529)\b/i
 
 function redactSecrets(value) {
   return String(value)
@@ -21,6 +22,12 @@ export function normalizeProviderError(error, { cancelled = false } = {}) {
 
   const statusCode = Number.isFinite(Number(error?.statusCode)) ? Number(error.statusCode) : null
   const rawMessage = redactSecrets(error?.message || 'Provider request failed.').slice(0, 500)
+  if (error?.code === 'malformed_response') {
+    return { code: 'malformed_response', message: 'The provider returned a malformed response.', retryable: false, statusCode: statusCode || 502 }
+  }
+  if (error?.code === 'capability_unavailable' || error?.code === 'provider_unavailable') {
+    return { code: 'provider_unavailable', message: 'The selected provider capability is unavailable.', retryable: false, statusCode: statusCode || 400 }
+  }
   if (statusCode === 504 || error?.name === 'TimeoutError' || TIMEOUT_PATTERN.test(rawMessage)) {
     return { code: 'timeout', message: 'The provider did not complete the response before the timeout.', retryable: true, statusCode: 504 }
   }
@@ -29,6 +36,9 @@ export function normalizeProviderError(error, { cancelled = false } = {}) {
   }
   if (statusCode === 429 || RATE_LIMIT_PATTERN.test(rawMessage)) {
     return { code: 'rate_limited', message: 'The provider rate limit or quota was reached. Wait and try again.', retryable: true, statusCode: 429 }
+  }
+  if ([502, 503, 529].includes(statusCode) || OVERLOAD_PATTERN.test(rawMessage)) {
+    return { code: 'overloaded', message: 'The provider is temporarily overloaded. Wait and try again.', retryable: true, statusCode: statusCode || 503 }
   }
   if (statusCode && statusCode >= 400 && statusCode < 500) {
     return { code: 'invalid_request', message: rawMessage, retryable: false, statusCode }
