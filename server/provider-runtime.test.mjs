@@ -74,8 +74,8 @@ test('builds provider-native Anthropic and Gemini requests', () => {
   assert.equal(gemini.url.includes('g-key'), false)
 })
 
-test('builds bounded SiliconFlow embedding requests without leaking credentials into the URL', () => {
-  const request = buildProviderEmbeddingRequest({
+test('builds model-aware bounded SiliconFlow embedding requests without leaking credentials into the URL', () => {
+  const fixedRequest = buildProviderEmbeddingRequest({
     providerId: 'siliconflow',
     endpoint: 'https://api.siliconflow.cn/v1/',
     apiKey: 'secret-key',
@@ -83,11 +83,29 @@ test('builds bounded SiliconFlow embedding requests without leaking credentials 
     inputs: ['first chunk', 'second chunk'],
     dimensions: 1024,
   })
-  assert.equal(request.url, 'https://api.siliconflow.cn/v1/embeddings')
-  assert.equal(request.headers.Authorization, 'Bearer secret-key')
-  assert.equal(request.headers.Accept, 'application/json')
-  assert.deepEqual(request.body, { model: 'BAAI/bge-m3', input: ['first chunk', 'second chunk'], dimensions: 1024 })
-  assert.equal(request.url.includes('secret-key'), false)
+  assert.equal(fixedRequest.url, 'https://api.siliconflow.cn/v1/embeddings')
+  assert.equal(fixedRequest.headers.Authorization, 'Bearer secret-key')
+  assert.equal(fixedRequest.headers.Accept, 'application/json')
+  assert.deepEqual(fixedRequest.body, { model: 'BAAI/bge-m3', input: ['first chunk', 'second chunk'] })
+  assert.equal(fixedRequest.url.includes('secret-key'), false)
+  for (const model of ['Qwen/Qwen3-Embedding-8B', 'Qwen/Qwen3-Embedding-4B', 'Qwen/Qwen3-Embedding-0.6B']) {
+    const adjustableRequest = buildProviderEmbeddingRequest({
+      providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret-key', model, input: 'probe', dimensions: 768,
+    })
+    assert.equal(adjustableRequest.body.dimensions, 768)
+  }
+  for (const model of ['Pro/BAAI/bge-m3', 'BAAI/bge-large-en-v1.5', 'Qwen/Qwen3-VL-Embedding-8B']) {
+    const fixedModelRequest = buildProviderEmbeddingRequest({
+      providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret-key', model, input: 'probe', dimensions: 768,
+    })
+    assert.equal(Object.hasOwn(fixedModelRequest.body, 'dimensions'), false)
+  }
+  assert.throws(() => buildProviderEmbeddingRequest({
+    providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'BAAI/bge-m3', input: 'text', dimensions: 0,
+  }), /integer from 1 to 16384/)
+  assert.throws(() => buildProviderEmbeddingRequest({
+    providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'BAAI/bge-m3', input: 'text', dimensions: 2.5,
+  }), /integer from 1 to 16384/)
   assert.throws(() => buildProviderEmbeddingRequest({
     providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'BAAI/bge-m3', inputs: Array(129).fill('chunk'),
   }), /1 to 128 inputs/)
@@ -147,7 +165,7 @@ test('validates embedding dimensions and rerank scores while returning safe prov
   }), /invalid rerank indexes or scores/)
 })
 
-test('executes embedding and rerank through abortable JSON provider requests', async () => {
+test('executes fixed-dimension embedding and rerank through abortable JSON provider requests', async () => {
   const calls = []
   const fetchImpl = async (url, options) => {
     calls.push({ url, options })
@@ -156,7 +174,7 @@ test('executes embedding and rerank through abortable JSON provider requests', a
       : JSON.stringify({ results: [{ index: 0, relevance_score: 0.8 }] }), { status: 200 })
   }
   const controller = new AbortController()
-  const embedding = await executeProviderEmbedding({ providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'embed', input: 'text', dimensions: 2, signal: controller.signal }, fetchImpl)
+  const embedding = await executeProviderEmbedding({ providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'BAAI/bge-m3', input: 'text', dimensions: 2, signal: controller.signal }, fetchImpl)
   const rerank = await executeProviderRerank({ providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'rerank', query: 'q', candidates: [{ chunkId: 'chunk-1', excerpt: 'text' }], signal: controller.signal }, fetchImpl)
   assert.equal(embedding.dimensions, 2)
   assert.deepEqual(rerank.scores, [{ chunkId: 'chunk-1', score: 0.8 }])
@@ -164,7 +182,26 @@ test('executes embedding and rerank through abortable JSON provider requests', a
   assert.equal(calls[0].options.signal.aborted, false)
   assert.equal(calls[0].options.headers.Authorization, 'Bearer secret')
   assert.equal(calls[0].url.endsWith('/embeddings'), true)
+  assert.deepEqual(JSON.parse(calls[0].options.body), { model: 'BAAI/bge-m3', input: ['text'] })
   assert.equal(calls[1].url.endsWith('/rerank'), true)
+})
+
+test('strictly validates fixed-model response dimensions while deriving probe dimensions when omitted', async () => {
+  const calls = []
+  const fixedFetch = async (url, options) => {
+    calls.push({ url, options })
+    return new Response(JSON.stringify({ data: [{ index: 0, embedding: [0.1] }] }), { status: 200 })
+  }
+  await assert.rejects(() => executeProviderEmbedding({
+    providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'Pro/BAAI/bge-m3', input: 'text', dimensions: 2,
+  }, fixedFetch), /invalid embedding vectors/)
+  assert.equal(Object.hasOwn(JSON.parse(calls[0].options.body), 'dimensions'), false)
+
+  const probe = await executeProviderEmbedding({
+    providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'BAAI/bge-m3', input: 'dimension probe',
+  }, async () => new Response(JSON.stringify({ data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }] }), { status: 200 }))
+  assert.equal(probe.dimensions, 3)
+  assert.deepEqual(probe.embeddings, [{ index: 0, vector: [0.1, 0.2, 0.3] }])
 })
 
 test('builds SiliconFlow chat requests through the shared Runtime Provider boundary', () => {
