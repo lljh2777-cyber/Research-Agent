@@ -35,8 +35,48 @@ export function extractMarkdownOutline(markdown = '') {
   return String(markdown).split(/\r?\n/).flatMap((line, lineIndex) => {
     const match = line.match(/^(#{1,6})\s+(.+)$/)
     if (!match) return []
-    return [{ id: `heading-${lineIndex}`, level: match[1].length, title: match[2].replace(/[*_`]/g, '').trim() }]
+    return [{ id: `heading-${lineIndex}`, level: match[1].length, title: match[2].replace(/\s+\^[A-Za-z0-9-]+\s*$/, '').replace(/[*_`]/g, '').trim() }]
   })
+}
+
+const OBSIDIAN_BLOCK_ID_PATTERN = /^[A-Za-z0-9-]+$/
+
+export function markdownBlockReferenceAnchorId(blockId = '') {
+  const normalized = String(blockId).trim().replace(/^\^/, '')
+  return OBSIDIAN_BLOCK_ID_PATTERN.test(normalized) ? `block-reference-${normalized}` : null
+}
+
+export function extractMarkdownBlockReferences(markdown = '') {
+  const references = []
+  let inCode = false
+  let inComment = false
+
+  String(markdown).split(/\r?\n/).forEach((line, lineIndex) => {
+    const trimmed = line.trim()
+    if (inComment) {
+      if (trimmed.includes('-->')) inComment = false
+      return
+    }
+    if (trimmed.startsWith('<!--')) {
+      if (!trimmed.includes('-->')) inComment = true
+      return
+    }
+    if (trimmed.startsWith('```')) {
+      inCode = !inCode
+      return
+    }
+    if (inCode) return
+
+    const match = line.match(/(?:^|\s)\^([A-Za-z0-9-]+)\s*$/)
+    if (!match) return
+    references.push({
+      blockId: match[1],
+      id: markdownBlockReferenceAnchorId(match[1]),
+      line: lineIndex + 1,
+    })
+  })
+
+  return references
 }
 
 export function parseWikilinks(value = '') {
@@ -68,15 +108,22 @@ export function resolveWikilink(notes = [], currentNote = null, link = {}) {
   const resolved = resolveVaultWikilink(notes, currentNote, raw)
   const note = resolved.note
   const heading = resolved.heading || String(link.heading || '').trim()
-  const outlineHeading = note && heading
+  const blockId = heading.startsWith('^') ? heading.slice(1) : ''
+  const blockReferences = note && blockId && OBSIDIAN_BLOCK_ID_PATTERN.test(blockId)
+    ? extractMarkdownBlockReferences(note.body).filter((item) => item.blockId === blockId)
+    : []
+  const outlineHeading = note && heading && !blockId
     ? extractMarkdownOutline(note.body).find((item) => item.title.toLocaleLowerCase() === heading.toLocaleLowerCase())
     : null
+  const resolvedAnchorId = blockId
+    ? (blockReferences.length === 1 ? blockReferences[0].id : null)
+    : outlineHeading?.id || null
 
   return {
     note,
-    anchorId: outlineHeading?.id || null,
+    anchorId: resolvedAnchorId,
     missing: !note,
-    missingHeading: Boolean(note && heading && !outlineHeading),
+    missingHeading: Boolean(note && heading && !resolvedAnchorId),
   }
 }
 
