@@ -167,22 +167,76 @@ test('does not fabricate vector-only evidence when lexical retrieval has no cand
   assert.equal(packet.error, null)
 })
 
-test('rejects query dimension, provenance, zero-norm, and non-finite failures without hybrid labeling', async () => {
+test('requires strict query dimensions and preserves deterministic lexical fallback without false rerank', async () => {
   const cases = [
+    [{ embeddings: [{ index: 0, vector: [1, 0] }] }, 'vector_query_invalid'],
+    [{ dimensions: null, embeddings: [{ index: 0, vector: [1, 0] }] }, 'vector_query_invalid'],
+    [{ dimensions: 0, embeddings: [{ index: 0, vector: [1, 0] }] }, 'vector_query_invalid'],
+    [{ dimensions: -1, embeddings: [{ index: 0, vector: [1, 0] }] }, 'vector_query_invalid'],
+    [{ dimensions: 2.5, embeddings: [{ index: 0, vector: [1, 0] }] }, 'vector_query_invalid'],
+    [{ dimensions: Number.NaN, embeddings: [{ index: 0, vector: [1, 0] }] }, 'vector_query_invalid'],
+    [{ dimensions: Number.POSITIVE_INFINITY, embeddings: [{ index: 0, vector: [1, 0] }] }, 'vector_query_invalid'],
+    [{ dimensions: '2', embeddings: [{ index: 0, vector: [1, 0] }] }, 'vector_query_invalid'],
     [{ dimensions: 3, embeddings: [{ index: 0, vector: [1, 0, 0] }] }, 'vector_query_invalid'],
     [{ providerId: 'other', modelId: 'BAAI/bge-m3', dimensions: 2, embeddings: [{ index: 0, vector: [1, 0] }] }, 'vector_provenance_mismatch'],
     [{ dimensions: 2, embeddings: [{ index: 0, vector: [0, 0] }] }, 'vector_query_invalid'],
     [{ dimensions: 2, embeddings: [{ index: 0, vector: [Number.NaN, 0] }] }, 'vector_query_invalid'],
   ]
+  let lexicalBaseline
   for (const [result, code] of cases) {
+    let rerankCalls = 0
     const packet = await retrieveHybridEvidence('ligand receptor', {
       lexicalIndex,
       vectorIndex: readyVectorIndex(),
-      runtime: vectorRuntime({ result: { ok: true, providerId: 'siliconflow', modelId: 'BAAI/bge-m3', provenance: { providerId: 'siliconflow', modelId: 'BAAI/bge-m3' }, ...result } }),
+      runtime: vectorRuntime({
+        result: { ok: true, providerId: 'siliconflow', modelId: 'BAAI/bge-m3', provenance: { providerId: 'siliconflow', modelId: 'BAAI/bge-m3' }, ...result },
+        rerank: {
+          available: true,
+          async rerank() {
+            rerankCalls += 1
+            return { scores: [] }
+          },
+        },
+      }),
+      useReranker: true,
     })
     assert.equal(packet.retrieval.mode, 'lexical')
     assert.equal(packet.error.code, code)
+    const evidence = packet.evidence.map(({ chunkId, scoreProvenance }) => ({ chunkId, final: scoreProvenance.final, rerank: scoreProvenance.rerank }))
+    lexicalBaseline ||= evidence
+    assert.deepEqual(evidence, lexicalBaseline)
+    assert.equal(rerankCalls, 0)
   }
+})
+
+test('does not infer omitted query dimensions from vector length', async () => {
+  let rerankCalls = 0
+  const packet = await retrieveHybridEvidence('ligand receptor', {
+    lexicalIndex,
+    vectorIndex: readyVectorIndex(),
+    runtime: vectorRuntime({
+      result: {
+        ok: true,
+        providerId: 'siliconflow',
+        modelId: 'BAAI/bge-m3',
+        embeddings: [{ index: 0, vector: [1, 0] }],
+        provenance: { providerId: 'siliconflow', modelId: 'BAAI/bge-m3' },
+      },
+      rerank: {
+        available: true,
+        async rerank() {
+          rerankCalls += 1
+          return { scores: [] }
+        },
+      },
+    }),
+    useReranker: true,
+  })
+
+  assert.equal(packet.retrieval.mode, 'lexical')
+  assert.equal(packet.error.code, 'vector_query_invalid')
+  assert.equal(packet.evidence[0].scoreProvenance.vector, null)
+  assert.equal(rerankCalls, 0)
 })
 
 test('rejects vector identity/provenance and chunk mapping corruption deterministically', async () => {

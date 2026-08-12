@@ -143,7 +143,7 @@ function normalizeQueryEmbedding(payload, identity) {
   }
   const embeddings = payload.embeddings
   const dimensions = identity.embedding.dimensions
-  if (payload.dimensions !== undefined && payload.dimensions !== dimensions) return { ok: false, error: degradation(RETRIEVAL_DEGRADATION_CODES.VECTOR_QUERY_INVALID, 'Query embedding dimensions do not match the ready Retrieval Index.') }
+  if (!Number.isSafeInteger(payload.dimensions) || payload.dimensions <= 0 || payload.dimensions !== dimensions) return { ok: false, error: degradation(RETRIEVAL_DEGRADATION_CODES.VECTOR_QUERY_INVALID, 'Query embedding dimensions must be a positive safe integer matching the ready Retrieval Index.') }
   if (!Array.isArray(embeddings) || embeddings.length !== 1 || !embeddings[0] || embeddings[0].index !== 0 || !Array.isArray(embeddings[0].vector) || embeddings[0].vector.length !== dimensions || embeddings[0].vector.some((item) => !Number.isFinite(item))) {
     return { ok: false, error: degradation(RETRIEVAL_DEGRADATION_CODES.VECTOR_QUERY_INVALID, 'Runtime query embedding must contain one finite vector with the exact index dimensions.') }
   }
