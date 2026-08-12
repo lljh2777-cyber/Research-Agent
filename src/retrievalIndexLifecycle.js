@@ -132,7 +132,17 @@ export function createRetrievalIndexBuildInput({ identity, retrievalIndex, remot
         heading: chunk.heading || null,
       }
     })
-    if (chunks.some((chunk) => !chunk.id || !chunk.noteId || !chunk.sourceId || !chunk.path || !Number.isInteger(chunk.ordinal))) throw new Error('invalid-chunk-identity')
+    if (chunks.some((chunk) => (
+      !String(chunk.id || '').trim()
+      || !String(chunk.noteId || '').trim()
+      || !String(chunk.sourceId || '').trim()
+      || !String(chunk.path || '').trim()
+      || !Number.isInteger(chunk.ordinal)
+      || chunk.ordinal < 0
+      || chunk.ordinal > 1_000_000
+    ))) throw new Error('invalid-chunk-identity')
+    if (new Set(chunks.map((chunk) => chunk.id)).size !== chunks.length) throw new Error('duplicate-chunk-id')
+    if (new Set(chunks.map((chunk) => `${chunk.noteId}\u0000${chunk.ordinal}`)).size !== chunks.length) throw new Error('duplicate-chunk-ordinal')
     return {
       ok: true,
       input: {

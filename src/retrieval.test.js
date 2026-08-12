@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, chunkVaultNote, evidenceSources, retrieveEvidence, tokenize } from './retrieval.js'
+import { createRetrievalIndexBuildInput, createRetrievalIndexIdentity } from './retrievalIndexLifecycle.js'
 
 const notes = [
   {
@@ -48,6 +49,50 @@ test('chunkVaultNote preserves the active heading and overlap', () => {
   assert(chunks.length > 1)
   assert.equal(chunks[0].heading, 'Results')
   assert.equal(chunks[0].path, 'methods/CellChat.md')
+  assert.deepEqual(chunks.map(({ id, noteId, sourceId, ordinal }) => ({ id, noteId, sourceId, ordinal })), chunks.map((_, ordinal) => ({
+    id: `methods/CellChat.md::${ordinal}`,
+    noteId: 'methods/CellChat.md',
+    sourceId: 'source:methods/CellChat.md',
+    ordinal,
+  })))
+})
+
+test('real lexical chunks form deterministic lifecycle build input and fail closed on invalid identity', () => {
+  const identity = createRetrievalIndexIdentity({
+    vaultId: 'vault-1',
+    vaultRevision: 'revision-1',
+    chunkSize: 220,
+    chunkOverlap: 40,
+    embeddingModel: { providerId: 'siliconflow', apiModelId: 'BAAI/bge-m3', dimensions: 1024 },
+  }).identity
+  const build = (orderedNotes) => createRetrievalIndexBuildInput({
+    identity,
+    retrievalIndex: buildRetrievalIndex(orderedNotes, { chunkSize: 220, chunkOverlap: 40 }),
+    remoteEmbeddingConsent: true,
+  })
+  const first = build(notes)
+  const repeated = build(notes)
+  const reordered = build([...notes].reverse())
+  assert.equal(first.ok, true)
+  assert.deepEqual(repeated.input.chunks, first.input.chunks)
+  assert.deepEqual(
+    [...reordered.input.chunks].sort((left, right) => left.id.localeCompare(right.id)),
+    [...first.input.chunks].sort((left, right) => left.id.localeCompare(right.id)),
+  )
+
+  const validChunk = buildRetrievalIndex(notes, { chunkSize: 220, chunkOverlap: 40 }).chunks[0]
+  const invalidCases = [
+    [{ ...validChunk, sourceId: '' }],
+    [validChunk, { ...validChunk }],
+    [{ ...validChunk, ordinal: -1 }],
+  ]
+  for (const chunks of invalidCases) {
+    assert.deepEqual(createRetrievalIndexBuildInput({
+      identity,
+      retrievalIndex: { chunks },
+      remoteEmbeddingConsent: true,
+    }), { ok: false, code: 'vault_chunks_unavailable' })
+  }
 })
 
 test('retrieveEvidence ranks lexical evidence and adds one-hop wikilinks', () => {

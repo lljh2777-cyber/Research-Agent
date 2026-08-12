@@ -94,6 +94,8 @@ export function chunkVaultNote(note, options = {}) {
     ? DEFAULT_CHUNK_OVERLAP
     : Math.max(0, Number(options.chunkOverlap) || 0)
   const chunkOverlap = Math.min(requestedOverlap, chunkSize - 1)
+  const noteId = note.id || note.path
+  const sourceId = `source:${noteId}`
   const metadata = frontmatterText(note.frontmatter)
   const chunks = []
 
@@ -101,9 +103,11 @@ export function chunkVaultNote(note, options = {}) {
     windowText(section.text, chunkSize, chunkOverlap).forEach((text) => {
       const index = chunks.length
       chunks.push({
-        id: `${note.id || note.path}::${index}`,
-        noteId: note.id || note.path,
+        id: `${noteId}::${index}`,
+        noteId,
+        sourceId,
         path: note.path,
+        ordinal: index,
         title: note.title,
         type: note.type || 'note',
         heading: section.heading,
@@ -116,9 +120,11 @@ export function chunkVaultNote(note, options = {}) {
 
   if (!chunks.length) {
     chunks.push({
-      id: `${note.id || note.path}::0`,
-      noteId: note.id || note.path,
+      id: `${noteId}::0`,
+      noteId,
+      sourceId,
       path: note.path,
+      ordinal: 0,
       title: note.title,
       type: note.type || 'note',
       heading: '',
