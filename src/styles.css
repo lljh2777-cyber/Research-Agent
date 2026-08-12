@@ -1212,6 +1212,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); o
 .document-markdown h3 { margin: 26px 0 9px; font-size: 17px; }
 .document-markdown h4, .document-markdown h5, .document-markdown h6 { margin: 22px 0 8px; font-size: 14px; }
 .document-markdown p { margin: 0 0 14px; }
+.document-block-reference { display: block; height: 0; scroll-margin-top: 20px; }
 .selectable-markdown-block { user-select: text; }
 .selectable-markdown-block p { white-space: pre-wrap; }
 .selection-chooser { width: 180px; position: fixed; z-index: 30; display: grid; grid-template-columns: 1fr 1fr; overflow: hidden; border: 1px solid rgba(110, 168, 254, .42); border-radius: 7px; background: #111f34; box-shadow: 0 12px 34px rgba(0, 0, 0, .42); }
@@ -1287,6 +1288,7 @@ mark.annotation-highlight { cursor: inherit; }
 .document-wikilink:hover { border-bottom-color: currentColor; color: #9bc7ff; background: rgba(110, 168, 254, .08); }
 .document-wikilink:focus-visible { border-radius: 2px; outline-offset: 2px; }
 .document-wikilink.missing { color: #d87883; border-bottom: 1px dashed rgba(216, 120, 131, .72); cursor: not-allowed; opacity: .9; }
+.document-wikilink.missing.annotated { cursor: pointer; }
 .document-markdown blockquote { margin: 18px 0; border-left: 2px solid var(--mint); background: rgba(126, 226, 195, .045); color: #a9c7be; padding: 11px 14px; }
 .document-markdown pre { overflow: auto; margin: 18px 0; border: 1px solid var(--border); border-radius: 5px; background: #08111f; padding: 13px; color: #b8c8db; font-family: var(--mono); font-size: 10px; line-height: 1.6; }
 .knowledge-welcome { min-height: 100%; display: grid; place-content: center; justify-items: center; padding: 40px; text-align: center; }

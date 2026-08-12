@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildVaultFileTree, collectVaultTags, DEFAULT_DOCK_LAYOUT, extractMarkdownOutline, filterVaultFileTree, moveDockPanel, normalizeDockLayout, parseWikilinks, resolveWikilink } from './knowledgeWorkspace.js'
+import { buildVaultFileTree, collectVaultTags, DEFAULT_DOCK_LAYOUT, extractMarkdownBlockReferences, extractMarkdownOutline, filterVaultFileTree, markdownBlockReferenceAnchorId, moveDockPanel, normalizeDockLayout, parseWikilinks, resolveWikilink } from './knowledgeWorkspace.js'
 
 test('normalizes dock layout without duplicates or missing panels', () => {
   const layout = normalizeDockLayout({ left: ['files', 'files', 'web'], right: ['graph', 'unknown'] })
@@ -16,7 +16,7 @@ test('moves a panel across docks and preserves ordering', () => {
 })
 
 test('extracts headings and aggregates frontmatter and inline tags', () => {
-  assert.deepEqual(extractMarkdownOutline('# Title\n## Methods\nText\n### Result'), [
+  assert.deepEqual(extractMarkdownOutline('# Title\n## Methods\nText\n### Result ^result-block'), [
     { id: 'heading-0', level: 1, title: 'Title' },
     { id: 'heading-1', level: 2, title: 'Methods' },
     { id: 'heading-3', level: 3, title: 'Result' },
@@ -105,4 +105,53 @@ test('resolves relative wikilinks and frontmatter aliases through the Vault reso
     missing: false,
     missingHeading: false,
   })
+})
+
+test('resolves exact Obsidian block references used by persisted annotation notes', () => {
+  const source = {
+    id: 'wiki/sources/paper.md',
+    path: 'wiki/sources/paper.md',
+    title: 'Paper',
+    body: 'Finding: [[wiki/annotations/paper#^ann-2384afaf23|Delaunay subgraph]].',
+  }
+  const annotation = {
+    id: 'wiki/annotations/paper.md',
+    path: 'wiki/annotations/paper.md',
+    title: 'Paper annotations',
+    body: '## Delaunay subgraph\n\nPersisted explanation.\n\n^ann-2384afaf23',
+  }
+  const link = parseWikilinks(source.body).find((segment) => segment.type === 'wikilink')
+
+  assert.deepEqual(extractMarkdownBlockReferences(annotation.body), [{
+    blockId: 'ann-2384afaf23',
+    id: 'block-reference-ann-2384afaf23',
+    line: 5,
+  }])
+  assert.equal(markdownBlockReferenceAnchorId('^ann-2384afaf23'), 'block-reference-ann-2384afaf23')
+  assert.deepEqual(resolveWikilink([source, annotation], source, link), {
+    note: annotation,
+    anchorId: 'block-reference-ann-2384afaf23',
+    missing: false,
+    missingHeading: false,
+  })
+})
+
+test('fails closed for invalid, missing, duplicate, comment, and code-fenced block references', () => {
+  const source = { id: 'source.md', path: 'source.md', title: 'Source', body: '' }
+  const target = {
+    id: 'annotations.md',
+    path: 'annotations.md',
+    title: 'Annotations',
+    body: '<!-- ^ignored -->\n```md\n^code-ref\n```\n~~~md\n^tilde-secret\n~~~~\nprefix <!--\n^comment-secret\n--> suffix\nText ^real-ref\n^duplicate\n^duplicate',
+  }
+
+  assert.deepEqual(extractMarkdownBlockReferences(target.body), [
+    { blockId: 'real-ref', id: 'block-reference-real-ref', line: 11 },
+    { blockId: 'duplicate', id: 'block-reference-duplicate', line: 12 },
+    { blockId: 'duplicate', id: 'block-reference-duplicate', line: 13 },
+  ])
+  assert.equal(markdownBlockReferenceAnchorId('bad id'), null)
+  assert.equal(resolveWikilink([source, target], source, { target: 'annotations', heading: '^missing' }).missingHeading, true)
+  assert.equal(resolveWikilink([source, target], source, { target: 'annotations', heading: '^duplicate' }).missingHeading, true)
+  assert.equal(resolveWikilink([source, target], source, { target: 'annotations', heading: '^bad id' }).missingHeading, true)
 })

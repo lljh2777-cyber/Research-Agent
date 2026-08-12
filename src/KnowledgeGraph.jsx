@@ -29,7 +29,7 @@ import {
 } from 'lucide-react'
 
 import { createKnowledgeGraph } from './knowledgeGraph.js'
-import { buildVaultFileTree, collectVaultTags, DEFAULT_DOCK_LAYOUT, extractMarkdownOutline, filterVaultFileTree, moveDockPanel, normalizeDockLayout, parseWikilinks, resolveWikilink } from './knowledgeWorkspace.js'
+import { buildVaultFileTree, collectVaultTags, DEFAULT_DOCK_LAYOUT, extractMarkdownBlockReferences, extractMarkdownOutline, filterVaultFileTree, markdownBlockReferenceAnchorId, moveDockPanel, normalizeDockLayout, parseWikilinks, resolveWikilink } from './knowledgeWorkspace.js'
 import { AgentConversationPanel } from './features/knowledge/AgentConversationPanel.jsx'
 import { AnnotationEditor, SelectionChooser } from './features/knowledge/KnowledgeRoundTwo.jsx'
 import { createKnowledgeContextFixture } from './features/knowledge/fixtures.js'
@@ -95,17 +95,20 @@ function InlineMarkdown({ value, sourceStart, note, notes, annotations, onNaviga
     const resolved = resolveWikilink(notes, note, segment)
     const unavailable = resolved.missing || resolved.missingHeading
     const linkedAnnotations = activeAnnotationRanges(annotations).filter((annotation) => annotation.relocation.start < mappedStart + mappedLabel.length && annotation.relocation.end > mappedStart)
-    const title = resolved.missing
-      ? `Note not found: ${segment.target}`
-      : resolved.missingHeading
-        ? `Heading not found: ${segment.heading}`
-        : `Open ${resolved.note.title}${segment.heading ? ` · ${segment.heading}` : ''}`
+    const title = linkedAnnotations.length
+      ? `Open ${linkedAnnotations.length === 1 ? 'annotation' : `${linkedAnnotations.length} overlapping annotations`} for ${mappedLabel}`
+      : resolved.missing
+        ? `Note not found: ${segment.target}`
+        : resolved.missingHeading
+          ? `${segment.heading.startsWith('^') ? 'Block reference' : 'Heading'} not found: ${segment.heading}`
+          : `Open ${resolved.note.title}${segment.heading ? ` · ${segment.heading}` : ''}`
+    const opensAnnotation = linkedAnnotations.length > 0
     return <button
       type="button"
       className={`document-wikilink ${unavailable ? 'missing' : ''} ${linkedAnnotations.length ? 'annotated' : ''}`}
-      disabled={unavailable}
+      disabled={unavailable && !opensAnnotation}
       title={title}
-      onClick={() => linkedAnnotations.length ? onOpenAnnotation(linkedAnnotations[0]) : onNavigate(resolved.note, resolved.anchorId)}
+      onClick={() => opensAnnotation ? onOpenAnnotation(linkedAnnotations[0]) : onNavigate(resolved.note, resolved.anchorId)}
       key={`${segment.raw}-${index}`}
     ><SourceMappedText value={mappedLabel} sourceStart={mappedStart} annotations={annotations} onOpenAnnotation={onOpenAnnotation} interactive={false} /></button>
   })
@@ -126,11 +129,26 @@ function metadataText(value) {
   return value
 }
 
+function splitTrailingBlockReference(value = '') {
+  const text = String(value)
+  const match = text.match(/(?:^|\s)\^([A-Za-z0-9-]+)\s*$/)
+  if (!match) return { value: text, anchorId: null }
+  return {
+    value: text.slice(0, match.index).trimEnd(),
+    anchorId: markdownBlockReferenceAnchorId(match[1]),
+  }
+}
+
 function MarkdownDocument({ note, notes, selection, annotations, onNavigate, onSelectPassage, onSelectionAction, onClearSelection, onOpenAnnotation, aiAvailable, aiUnavailableReason }) {
   const documentRef = useRef(null)
   const [chooserPosition, setChooserPosition] = useState(null)
   const blocks = useMemo(() => {
     if (!note?.body) return []
+    const blockReferenceCounts = extractMarkdownBlockReferences(note.body).reduce((counts, reference) => {
+      counts.set(reference.blockId, (counts.get(reference.blockId) || 0) + 1)
+      return counts
+    }, new Map())
+    const uniqueBlockAnchorId = (blockId) => blockReferenceCounts.get(blockId) === 1 ? markdownBlockReferenceAnchorId(blockId) : null
     const lines = note.body.split(/\r?\n/)
     let sourceCursor = 0
     const lineOffsets = lines.map((line) => { const offset = note.body.indexOf(line, sourceCursor); sourceCursor = offset + line.length + (note.body.slice(offset + line.length).startsWith('\r\n') ? 2 : 1); return offset })
@@ -145,16 +163,22 @@ function MarkdownDocument({ note, notes, selection, annotations, onNavigate, onS
     let inComment = false
     let currentHeading = null
     const flushParagraph = () => {
-      if (paragraph.length) output.push({
-        type: 'paragraph',
-        value: note.body.slice(lineOffsets[paragraphStart], lineOffsets[paragraphEnd] + lines[paragraphEnd].length),
-        anchorExact: note.body.slice(lineOffsets[paragraphStart], lineOffsets[paragraphEnd] + lines[paragraphEnd].length),
-        start: lineOffsets[paragraphStart],
-        end: lineOffsets[paragraphEnd] + lines[paragraphEnd].length,
-        heading: paragraphHeading,
-        lineStart: paragraphStart + 1,
-        lineEnd: paragraphEnd + 1,
-      })
+      if (paragraph.length) {
+        const rawValue = note.body.slice(lineOffsets[paragraphStart], lineOffsets[paragraphEnd] + lines[paragraphEnd].length)
+        const mapped = splitTrailingBlockReference(rawValue)
+        const blockId = mapped.anchorId?.replace(/^block-reference-/, '') || ''
+        output.push({
+          type: 'paragraph',
+          value: mapped.value,
+          anchorExact: mapped.value,
+          blockAnchorId: uniqueBlockAnchorId(blockId),
+          start: lineOffsets[paragraphStart],
+          end: lineOffsets[paragraphStart] + mapped.value.length,
+          heading: paragraphHeading,
+          lineStart: paragraphStart + 1,
+          lineEnd: paragraphEnd + 1,
+        })
+      }
       paragraph = []
       paragraphStart = null
       paragraphEnd = null
@@ -186,23 +210,41 @@ function MarkdownDocument({ note, notes, selection, annotations, onNavigate, onS
         code.push(line)
         continue
       }
-      const heading = line.match(/^(#{1,6})\s+(.+)$/)
+      const standaloneBlockReference = line.match(/^\s*\^([A-Za-z0-9-]+)\s*$/)
+      if (standaloneBlockReference) {
+        flushParagraph()
+        output.push({
+          type: 'block-reference',
+          blockId: standaloneBlockReference[1],
+          id: uniqueBlockAnchorId(standaloneBlockReference[1]),
+          start: lineOffsets[index],
+          end: lineOffsets[index] + line.length,
+          lineStart: index + 1,
+          lineEnd: index + 1,
+        })
+        continue
+      }
+      const mappedLine = splitTrailingBlockReference(line)
+      const mappedLineBlockId = mappedLine.anchorId?.replace(/^block-reference-/, '') || ''
+      const mappedLineAnchorId = uniqueBlockAnchorId(mappedLineBlockId)
+      const renderedLine = mappedLine.value
+      const heading = renderedLine.match(/^(#{1,6})\s+(.+)$/)
       if (heading) {
         flushParagraph()
         currentHeading = { text: heading[2], level: heading[1].length, line: index + 1 }
         const isRepeatedTitle = heading[1].length === 1 && heading[2].trim() === note.title.trim() && output.length === 0
-        if (!isRepeatedTitle) output.push({ type: 'heading', level: heading[1].length, value: heading[2], anchorExact: heading[2], start: lineOffsets[index] + heading[1].length + 1, end: lineOffsets[index] + line.length, id: `heading-${index}`, lineStart: index + 1, lineEnd: index + 1, heading: currentHeading })
-      } else if (/^[-*]\s+/.test(line)) {
+        if (!isRepeatedTitle) output.push({ type: 'heading', level: heading[1].length, value: heading[2], anchorExact: heading[2], start: lineOffsets[index] + heading[1].length + 1, end: lineOffsets[index] + renderedLine.length, id: `heading-${index}`, blockAnchorId: mappedLineAnchorId, lineStart: index + 1, lineEnd: index + 1, heading: currentHeading })
+      } else if (/^[-*]\s+/.test(renderedLine)) {
         flushParagraph()
-        const value = line.replace(/^[-*]\s+/, '')
-        const start = lineOffsets[index] + line.indexOf(value)
-        output.push({ type: 'list', value, anchorExact: value, start, end: start + value.length, heading: currentHeading, lineStart: index + 1, lineEnd: index + 1 })
-      } else if (/^>\s?/.test(line)) {
+        const value = renderedLine.replace(/^[-*]\s+/, '')
+        const start = lineOffsets[index] + renderedLine.indexOf(value)
+        output.push({ type: 'list', value, anchorExact: value, blockAnchorId: mappedLineAnchorId, start, end: start + value.length, heading: currentHeading, lineStart: index + 1, lineEnd: index + 1 })
+      } else if (/^>\s?/.test(renderedLine)) {
         flushParagraph()
-        const value = line.replace(/^>\s?/, '')
-        const start = lineOffsets[index] + line.indexOf(value)
-        output.push({ type: 'quote', value, anchorExact: value, start, end: start + value.length, heading: currentHeading, lineStart: index + 1, lineEnd: index + 1 })
-      } else if (!line.trim()) {
+        const value = renderedLine.replace(/^>\s?/, '')
+        const start = lineOffsets[index] + renderedLine.indexOf(value)
+        output.push({ type: 'quote', value, anchorExact: value, blockAnchorId: mappedLineAnchorId, start, end: start + value.length, heading: currentHeading, lineStart: index + 1, lineEnd: index + 1 })
+      } else if (!renderedLine.trim()) {
         flushParagraph()
       } else {
         if (paragraphStart == null) {
@@ -275,10 +317,12 @@ function MarkdownDocument({ note, notes, selection, annotations, onNavigate, onS
           if (block.type === 'list') return <div className="document-list-item"><CircleDot size={9} /> <span><InlineMarkdown value={block.value} sourceStart={block.start} note={note} notes={notes} annotations={annotations} onNavigate={onNavigate} onOpenAnnotation={onOpenAnnotation} /></span></div>
           if (block.type === 'quote') return <blockquote><InlineMarkdown value={block.value} sourceStart={block.start} note={note} notes={notes} annotations={annotations} onNavigate={onNavigate} onOpenAnnotation={onOpenAnnotation} /></blockquote>
           if (block.type === 'code') return <pre><code>{block.value}</code></pre>
+          if (block.type === 'block-reference') return <span className="document-block-reference" id={block.id} aria-label={`Obsidian block ${block.blockId}`} />
           return <p><InlineMarkdown value={block.value} sourceStart={block.start} note={note} notes={notes} annotations={annotations} onNavigate={onNavigate} onOpenAnnotation={onOpenAnnotation} /></p>
           })()
           return <div
             className={`selectable-markdown-block ${block.type === 'code' ? 'not-selectable' : ''}`}
+            id={block.blockAnchorId || undefined}
             key={`${block.id || block.type}-${index}`}
           >
             {content}

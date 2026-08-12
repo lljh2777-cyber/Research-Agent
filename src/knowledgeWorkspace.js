@@ -35,8 +35,65 @@ export function extractMarkdownOutline(markdown = '') {
   return String(markdown).split(/\r?\n/).flatMap((line, lineIndex) => {
     const match = line.match(/^(#{1,6})\s+(.+)$/)
     if (!match) return []
-    return [{ id: `heading-${lineIndex}`, level: match[1].length, title: match[2].replace(/[*_`]/g, '').trim() }]
+    return [{ id: `heading-${lineIndex}`, level: match[1].length, title: match[2].replace(/\s+\^[A-Za-z0-9-]+\s*$/, '').replace(/[*_`]/g, '').trim() }]
   })
+}
+
+const OBSIDIAN_BLOCK_ID_PATTERN = /^[A-Za-z0-9-]+$/
+
+export function markdownBlockReferenceAnchorId(blockId = '') {
+  const normalized = String(blockId).trim().replace(/^\^/, '')
+  return OBSIDIAN_BLOCK_ID_PATTERN.test(normalized) ? `block-reference-${normalized}` : null
+}
+
+export function extractMarkdownBlockReferences(markdown = '') {
+  const references = []
+  let inComment = false
+  let fence = null
+
+  String(markdown).split(/\r?\n/).forEach((line, lineIndex) => {
+    if (fence) {
+      const closingFence = line.match(/^ {0,3}(`{3,}|~{3,})\s*$/)
+      if (closingFence && closingFence[1][0] === fence.marker && closingFence[1].length >= fence.length) fence = null
+      return
+    }
+
+    let visible = ''
+    let cursor = 0
+    while (cursor < line.length) {
+      if (inComment) {
+        const commentEnd = line.indexOf('-->', cursor)
+        if (commentEnd < 0) return
+        inComment = false
+        cursor = commentEnd + 3
+        continue
+      }
+      const commentStart = line.indexOf('<!--', cursor)
+      if (commentStart < 0) {
+        visible += line.slice(cursor)
+        break
+      }
+      visible += line.slice(cursor, commentStart)
+      inComment = true
+      cursor = commentStart + 4
+    }
+
+    const openingFence = visible.match(/^ {0,3}(`{3,}|~{3,})(?:[^`~].*)?$/)
+    if (openingFence) {
+      fence = { marker: openingFence[1][0], length: openingFence[1].length }
+      return
+    }
+
+    const match = visible.match(/(?:^|\s)\^([A-Za-z0-9-]+)\s*$/)
+    if (!match) return
+    references.push({
+      blockId: match[1],
+      id: markdownBlockReferenceAnchorId(match[1]),
+      line: lineIndex + 1,
+    })
+  })
+
+  return references
 }
 
 export function parseWikilinks(value = '') {
@@ -68,15 +125,22 @@ export function resolveWikilink(notes = [], currentNote = null, link = {}) {
   const resolved = resolveVaultWikilink(notes, currentNote, raw)
   const note = resolved.note
   const heading = resolved.heading || String(link.heading || '').trim()
-  const outlineHeading = note && heading
+  const blockId = heading.startsWith('^') ? heading.slice(1) : ''
+  const blockReferences = note && blockId && OBSIDIAN_BLOCK_ID_PATTERN.test(blockId)
+    ? extractMarkdownBlockReferences(note.body).filter((item) => item.blockId === blockId)
+    : []
+  const outlineHeading = note && heading && !blockId
     ? extractMarkdownOutline(note.body).find((item) => item.title.toLocaleLowerCase() === heading.toLocaleLowerCase())
     : null
+  const resolvedAnchorId = blockId
+    ? (blockReferences.length === 1 ? blockReferences[0].id : null)
+    : outlineHeading?.id || null
 
   return {
     note,
-    anchorId: outlineHeading?.id || null,
+    anchorId: resolvedAnchorId,
     missing: !note,
-    missingHeading: Boolean(note && heading && !outlineHeading),
+    missingHeading: Boolean(note && heading && !resolvedAnchorId),
   }
 }
 
