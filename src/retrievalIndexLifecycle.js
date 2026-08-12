@@ -162,6 +162,29 @@ export function normalizeLifecycleResult(result, requestedIdentity, fallbackStat
   }
 }
 
+export function stableVectorNorm(vector) {
+  if (!Array.isArray(vector) || !vector.length) return null
+  let scale = 0
+  let sumSquares = 1
+  for (const value of vector) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null
+    const magnitude = Math.abs(value)
+    if (magnitude === 0) continue
+    if (magnitude > scale) {
+      const ratio = scale === 0 ? 0 : scale / magnitude
+      sumSquares = 1 + (sumSquares * ratio * ratio)
+      scale = magnitude
+    } else {
+      const ratio = magnitude / scale
+      sumSquares += ratio * ratio
+    }
+    if (!Number.isFinite(sumSquares)) return null
+  }
+  if (!(scale > 0) || !Number.isFinite(scale)) return null
+  const norm = scale * Math.sqrt(sumSquares)
+  return Number.isFinite(norm) && norm > 0 ? norm : null
+}
+
 export function validateReadyRetrievalIndex(result, requestedIdentity) {
   if (result?.state !== 'ready' || !identitiesMatch(result.identity, requestedIdentity) || !Array.isArray(result.vectors)) {
     return { ok: false, code: result?.state === 'stale' ? safeLifecycleReason(result, 'manual') : 'identity_mismatch' }
@@ -170,11 +193,16 @@ export function validateReadyRetrievalIndex(result, requestedIdentity) {
     const index = normalizeRetrievalIndexV2(result.index)
     if (index.status !== 'ready' || !identitiesMatch(index.identity, requestedIdentity) || result.vectors.length !== index.chunks.length) throw new Error('not-ready')
     if (!result.provenance || result.provenance.providerId !== requestedIdentity.embedding.providerId || result.provenance.modelId !== requestedIdentity.embedding.modelId) throw new Error('provenance-mismatch')
+    const dimensions = requestedIdentity.embedding.dimensions
     const expectedIds = new Set(index.chunks.map((chunk) => chunk.id))
     const seenIds = new Set()
     const seenIndexes = new Set()
     for (const vector of result.vectors) {
-      if (!expectedIds.has(vector?.chunkId) || seenIds.has(vector.chunkId) || seenIndexes.has(vector.index) || !Number.isInteger(vector.index) || vector.index < 0 || vector.index >= index.chunks.length || !Array.isArray(vector.vector) || vector.vector.length !== requestedIdentity.embedding.dimensions || vector.vector.some((value) => !Number.isFinite(value))) throw new Error('invalid-vector')
+      if (!vector || typeof vector !== 'object' || Array.isArray(vector)) throw new Error('invalid-vector')
+      if (typeof vector.chunkId !== 'string' || !expectedIds.has(vector.chunkId) || seenIds.has(vector.chunkId)) throw new Error('invalid-vector')
+      if (!Number.isSafeInteger(vector.index) || vector.index < 0 || vector.index >= index.chunks.length || seenIndexes.has(vector.index)) throw new Error('invalid-vector')
+      if (index.chunks[vector.index].id !== vector.chunkId) throw new Error('invalid-vector')
+      if (!Array.isArray(vector.vector) || vector.vector.length !== dimensions || stableVectorNorm(vector.vector) === null) throw new Error('invalid-vector')
       seenIds.add(vector.chunkId)
       seenIndexes.add(vector.index)
     }

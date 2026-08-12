@@ -5,6 +5,7 @@ import {
   createRetrievalIndexBuildInput,
   createRetrievalIndexIdentity,
   normalizeLifecycleResult,
+  stableVectorNorm,
   validateReadyRetrievalIndex,
 } from './retrievalIndexLifecycle.js'
 
@@ -62,4 +63,66 @@ test('accepts only exact ready vectors and rejects stale or incomplete reads', (
   assert.equal(validateReadyRetrievalIndex({ state: 'ready', identity, index, vectors: [], provenance: { providerId: 'siliconflow', modelId: 'BAAI/bge-m3' } }, identity).code, 'retrieval_index_invalid')
   assert.equal(validateReadyRetrievalIndex({ state: 'stale', identity, staleReason: 'vault_revision_changed', index: { ...index, status: 'stale', staleReason: 'vault_revision_changed' }, vectors: [] }, identity).code, 'vault_revision_changed')
   assert.equal(validateReadyRetrievalIndex({ state: 'ready', identity, index, vectors: [{ chunkId: 'note::0', index: 0, vector: [0.1, 0.2] }], provenance: { providerId: 'other', modelId: 'BAAI/bge-m3' } }, identity).code, 'retrieval_index_invalid')
+})
+
+const twoChunkIndex = {
+  schemaVersion: 2,
+  kind: 'retrieval-index',
+  identity,
+  status: 'ready',
+  staleReason: null,
+  chunks: [
+    { id: 'note::0', noteId: 'note', sourceId: 'source:note', path: 'note.md', ordinal: 0, heading: 'Methods' },
+    { id: 'note::1', noteId: 'note', sourceId: 'source:note', path: 'note.md', ordinal: 1, heading: 'Results' },
+  ],
+}
+
+function twoChunkEnvelope(vectors) {
+  return {
+    state: 'ready',
+    identity,
+    index: twoChunkIndex,
+    vectors,
+    provenance: { providerId: 'siliconflow', modelId: 'BAAI/bge-m3' },
+  }
+}
+
+const validTwoChunkVectors = [
+  { chunkId: 'note::0', index: 0, vector: [0.1, 0.2] },
+  { chunkId: 'note::1', index: 1, vector: [0.3, 0.4] },
+]
+
+test('rejects the Integration reproductions: swapped bindings and zero-norm vectors', () => {
+  assert.equal(validateReadyRetrievalIndex(twoChunkEnvelope(validTwoChunkVectors), identity).ok, true)
+  const swapped = [
+    { chunkId: 'note::0', index: 1, vector: [0.1, 0.2] },
+    { chunkId: 'note::1', index: 0, vector: [0.3, 0.4] },
+  ]
+  assert.deepEqual(validateReadyRetrievalIndex(twoChunkEnvelope(swapped), identity), { ok: false, code: 'retrieval_index_invalid' })
+  assert.deepEqual(validateReadyRetrievalIndex(twoChunkEnvelope([
+    { chunkId: 'note::0', index: 0, vector: [0, 0] },
+    { chunkId: 'note::1', index: 1, vector: [0.3, 0.4] },
+  ]), identity), { ok: false, code: 'retrieval_index_invalid' })
+})
+
+test('rejects every invalid one-to-one mapping and vector norm shape', () => {
+  const cases = [
+    ['duplicate chunk id', [{ chunkId: 'note::0', index: 0, vector: [0.1, 0.2] }, { chunkId: 'note::0', index: 1, vector: [0.3, 0.4] }]],
+    ['duplicate index', [{ chunkId: 'note::0', index: 0, vector: [0.1, 0.2] }, { chunkId: 'note::1', index: 0, vector: [0.3, 0.4] }]],
+    ['unknown chunk id', [{ chunkId: 'note::0', index: 0, vector: [0.1, 0.2] }, { chunkId: 'unknown', index: 1, vector: [0.3, 0.4] }]],
+    ['out of range index', [{ chunkId: 'note::0', index: 0, vector: [0.1, 0.2] }, { chunkId: 'note::1', index: 2, vector: [0.3, 0.4] }]],
+    ['unsafe index', [{ chunkId: 'note::0', index: 0, vector: [0.1, 0.2] }, { chunkId: 'note::1', index: Number.MAX_SAFE_INTEGER + 1, vector: [0.3, 0.4] }]],
+    ['fractional index', [{ chunkId: 'note::0', index: 0, vector: [0.1, 0.2] }, { chunkId: 'note::1', index: 0.5, vector: [0.3, 0.4] }]],
+    ['missing coverage', [{ chunkId: 'note::0', index: 0, vector: [0.1, 0.2] }]],
+    ['empty vector', [{ chunkId: 'note::0', index: 0, vector: [] }, { chunkId: 'note::1', index: 1, vector: [0.3, 0.4] }]],
+    ['dimension mismatch', [{ chunkId: 'note::0', index: 0, vector: [0.1] }, { chunkId: 'note::1', index: 1, vector: [0.3, 0.4] }]],
+    ['NaN vector', [{ chunkId: 'note::0', index: 0, vector: [Number.NaN, 0.2] }, { chunkId: 'note::1', index: 1, vector: [0.3, 0.4] }]],
+    ['Infinity vector', [{ chunkId: 'note::0', index: 0, vector: [Number.POSITIVE_INFINITY, 0.2] }, { chunkId: 'note::1', index: 1, vector: [0.3, 0.4] }]],
+    ['zero vector', [{ chunkId: 'note::0', index: 0, vector: [0, 0] }, { chunkId: 'note::1', index: 1, vector: [0.3, 0.4] }]],
+  ]
+  for (const [label, vectors] of cases) {
+    assert.deepEqual(validateReadyRetrievalIndex(twoChunkEnvelope(vectors), identity), { ok: false, code: 'retrieval_index_invalid' }, label)
+  }
+  assert.equal(Number.isFinite(stableVectorNorm([1e200, -1e200])), true)
+  assert.equal(stableVectorNorm([0, 0]), null)
 })
