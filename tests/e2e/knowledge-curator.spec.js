@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 import { createRuntimeManifest } from '../../shared/runtime-capabilities.mjs'
 import { parseAnnotationMarkdown } from '../../src/annotations/annotation.js'
 import { createKnowledgeArchiveResult } from '../../src/research/knowledgeArchive.js'
+import { installChatgptAuthStatusRoute } from './helpers/auth-status.js'
 
 const KNOWLEDGE_READ_SERVICE = {
   provider: {
@@ -28,6 +29,10 @@ const ARCHIVE_ACTION_SERVICE = {
 }
 
 const AI_EXPLANATION = '该段证据说明所选结果在重复实验中保持一致。'
+
+test.beforeEach(async ({ page }) => {
+  await installChatgptAuthStatusRoute(page)
+})
 
 async function installKnowledgeReadTransport(page, { text = AI_EXPLANATION, status = 'completed' } = {}) {
   const calls = { creates: [], starts: [] }
