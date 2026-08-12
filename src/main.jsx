@@ -42,7 +42,7 @@ import KnowledgeGraphSection from './KnowledgeGraph.jsx'
 import { PipelinesSection, RunsSection } from './PipelineWorkspace.jsx'
 import SettingsWorkspace from './SettingsWorkspace.jsx'
 import { chatgptCatalogToModels, getModelById, getModelsByRole, loadModelConfig, saveModelConfig } from './modelConfig.js'
-import { getProviderSessionKey, hydrateProviderSessionKeys, loadProviderConfigs, providerConfigsToModels, providerConfigsToRetrievalModels, saveProviderConfigs } from './providerConfig.js'
+import { getProviderSessionKey, hydrateProviderSessionKeys, loadProviderConfigs, providerConfigsToModels, providerConfigsToRetrievalModels, saveProviderConfigs, withProviderModelDimensions } from './providerConfig.js'
 import { getDeepSeekRuntimeOptions } from '../shared/deepseek-provider.mjs'
 import { getBailianRuntimeOptions } from '../shared/bailian-provider.mjs'
 import { streamProviderResponse } from './providerRuntimeClient.js'
@@ -76,9 +76,11 @@ import { retrieveHybridEvidence } from './researchRetrieval.js'
 import {
   createRetrievalIndexBuildInput,
   createRetrievalIndexIdentity,
+  identitiesMatch,
   normalizeLifecycleResult,
   reasonMessage,
   safeProgress,
+  validateEmbeddingDimensionProbe,
   validateReadyRetrievalIndex,
 } from './retrievalIndexLifecycle.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
@@ -181,6 +183,8 @@ const EMPTY_CHATGPT_CATALOG = {
   models: [],
   warning: '',
 }
+
+const EMBEDDING_DIMENSION_PROBE_TEXT = 'BioResearch OS embedding dimension probe.'
 
 function responseForQuestion(question, packet) {
   const evidence = packet?.evidence || []
@@ -741,33 +745,77 @@ function App() {
   }, [applyRetrievalIndexResult, retrievalIndexIdentity, retrievalIndexIdentityResult, runtimeAdapter])
 
   const startRetrievalIndexBuild = useCallback(async (rebuild = false) => {
-    const identity = retrievalIndexIdentity
-    if (!identity) {
+    const embeddingModel = retrievalRuntime.selectedEmbedding
+    if (retrievalRuntime.embedding.available !== true) {
+      setRetrievalIndexLifecycle({ state: 'unavailable', identity: retrievalIndexIdentity, progress: null, reason: 'embedding_capability_unavailable', message: reasonMessage('embedding_capability_unavailable') })
+      return
+    }
+    if (modelConfig.remoteEmbeddingConsent !== true) {
+      setRetrievalIndexLifecycle({ state: 'unavailable', identity: retrievalIndexIdentity, progress: null, reason: 'remote_consent_required', message: reasonMessage('remote_consent_required') })
+      return
+    }
+    const needsDimensionProbe = !retrievalIndexIdentity && retrievalIndexIdentityResult.code === 'embedding_dimensions_unavailable'
+    if (!retrievalIndexIdentity && !needsDimensionProbe) {
       const code = retrievalIndexIdentityResult.ok ? 'vault_chunks_unavailable' : retrievalIndexIdentityResult.code
       setRetrievalIndexLifecycle({ state: 'unavailable', identity: null, progress: null, reason: code, message: reasonMessage(code) })
-      return
-    }
-    if (retrievalRuntime.embedding.available !== true) {
-      setRetrievalIndexLifecycle({ state: 'unavailable', identity, progress: null, reason: 'embedding_capability_unavailable', message: reasonMessage('embedding_capability_unavailable') })
-      return
-    }
-    const buildInput = createRetrievalIndexBuildInput({
-      identity,
-      retrievalIndex,
-      remoteEmbeddingConsent: modelConfig.remoteEmbeddingConsent === true,
-    })
-    if (!buildInput.ok) {
-      setRetrievalIndexLifecycle({ state: 'unavailable', identity, progress: null, reason: buildInput.code, message: reasonMessage(buildInput.code) })
       return
     }
     const previous = retrievalIndexOperationRef.current
     previous.controller?.abort()
     const generation = previous.generation + 1
     const controller = new AbortController()
-    retrievalIndexOperationRef.current = { generation, identity, controller, timer: null, building: true, lastState: 'building' }
+    let identity = retrievalIndexIdentity
+    retrievalIndexOperationRef.current = { generation, identity, controller, timer: null, building: true, lastState: 'building', phase: needsDimensionProbe ? 'dimension-probe' : 'build' }
     setReadyRetrievalIndex(null)
+    if (needsDimensionProbe) {
+      setRetrievalIndexLifecycle({ state: 'building', identity: null, progress: null, reason: 'inspecting_embedding_dimensions', message: reasonMessage('inspecting_embedding_dimensions') })
+      const probeResult = await Promise.resolve()
+        .then(() => retrievalRuntime.embedding.embed({ query: EMBEDDING_DIMENSION_PROBE_TEXT, signal: controller.signal }))
+        .catch((error) => ({ ok: false, code: controller.signal.aborted ? 'cancelled' : error?.code }))
+      if (retrievalIndexOperationRef.current.generation !== generation) return
+      const validatedProbe = validateEmbeddingDimensionProbe(probeResult, { providerId: embeddingModel.providerId, modelId: embeddingModel.apiModelId })
+      if (!validatedProbe.ok) {
+        retrievalIndexOperationRef.current.building = false
+        setRetrievalIndexLifecycle({ state: validatedProbe.code === 'cancelled' ? 'cancelled' : 'failed', identity: null, progress: null, reason: validatedProbe.code, message: reasonMessage(validatedProbe.code) })
+        return
+      }
+      const identityResult = createRetrievalIndexIdentity({
+        vaultId: activeHasVaultScope ? (vaultCapabilityId || vaultName) : '',
+        vaultRevision: activeHasVaultScope ? localRevision : '',
+        chunkSize: modelConfig.chunkSize,
+        chunkOverlap: modelConfig.chunkOverlap,
+        embeddingModel: { ...embeddingModel, dimensions: validatedProbe.dimensions },
+      })
+      if (!identityResult.ok || retrievalIndexOperationRef.current.generation !== generation) {
+        if (retrievalIndexOperationRef.current.generation === generation) {
+          retrievalIndexOperationRef.current.building = false
+          setRetrievalIndexLifecycle({ state: 'failed', identity: null, progress: null, reason: identityResult.code, message: reasonMessage(identityResult.code) })
+        }
+        return
+      }
+      const nextProviderConfigs = withProviderModelDimensions(providerConfigs, embeddingModel.providerId, embeddingModel.apiModelId, validatedProbe.dimensions)
+      if (!nextProviderConfigs || retrievalIndexOperationRef.current.generation !== generation) {
+        if (retrievalIndexOperationRef.current.generation === generation) {
+          retrievalIndexOperationRef.current.building = false
+          setRetrievalIndexLifecycle({ state: 'failed', identity: null, progress: null, reason: 'embedding_dimension_probe_invalid', message: reasonMessage('embedding_dimension_probe_invalid') })
+        }
+        return
+      }
+      identity = identityResult.identity
+      retrievalIndexOperationRef.current.identity = identity
+      retrievalIndexOperationRef.current.phase = 'build'
+      saveProviderConfigs(nextProviderConfigs)
+      setProviderConfigs(nextProviderConfigs)
+    }
+    const buildInput = createRetrievalIndexBuildInput({ identity, retrievalIndex, remoteEmbeddingConsent: true })
+    if (!buildInput.ok || retrievalIndexOperationRef.current.generation !== generation) {
+      if (retrievalIndexOperationRef.current.generation === generation) {
+        retrievalIndexOperationRef.current.building = false
+        setRetrievalIndexLifecycle({ state: 'unavailable', identity, progress: null, reason: buildInput.code, message: reasonMessage(buildInput.code) })
+      }
+      return
+    }
     setRetrievalIndexLifecycle({ state: 'building', identity, progress: { completed: 0, total: buildInput.input.chunks.length, batches: 0 }, reason: null, message: null })
-    const embeddingModel = retrievalRuntime.selectedEmbedding
     const providerConfig = embeddingModel ? providerConfigs[embeddingModel.providerId] : null
     let apiKey = ''
     try {
@@ -800,20 +848,22 @@ function App() {
     retrievalIndexOperationRef.current.timer = null
     retrievalIndexOperationRef.current.building = false
     await applyRetrievalIndexResult(result, identity, generation, controller.signal)
-  }, [applyRetrievalIndexResult, modelConfig.remoteEmbeddingConsent, providerConfigs, refreshRetrievalIndex, retrievalIndex, retrievalIndexIdentity, retrievalIndexIdentityResult, retrievalRuntime.embedding.available, retrievalRuntime.selectedEmbedding, runtimeAdapter])
+  }, [activeHasVaultScope, applyRetrievalIndexResult, localRevision, modelConfig.chunkOverlap, modelConfig.chunkSize, modelConfig.remoteEmbeddingConsent, providerConfigs, refreshRetrievalIndex, retrievalIndex, retrievalIndexIdentity, retrievalIndexIdentityResult, retrievalRuntime.embedding, retrievalRuntime.selectedEmbedding, runtimeAdapter, vaultCapabilityId, vaultName])
 
   const cancelRetrievalIndexBuild = useCallback(async () => {
     const operation = retrievalIndexOperationRef.current
-    if (!operation.identity) return
+    if (!operation.building && !operation.identity) return
     const identity = operation.identity
     const generation = operation.generation
     operation.controller?.abort()
     if (operation.timer) window.clearTimeout(operation.timer)
     const nextGeneration = generation + 1
     retrievalIndexOperationRef.current = { ...operation, generation: nextGeneration, timer: null, building: false, lastState: 'cancelled' }
-    const result = await Promise.resolve()
-      .then(() => runtimeAdapter.retrievalIndexes.cancel({ identity }))
-      .catch(() => ({ ok: false, state: 'cancelled', identity, error: { code: 'cancelled' } }))
+    const result = identity
+      ? await Promise.resolve()
+        .then(() => runtimeAdapter.retrievalIndexes.cancel({ identity }))
+        .catch(() => ({ ok: false, state: 'cancelled', identity, error: { code: 'cancelled' } }))
+      : { ok: true, state: 'cancelled', identity: null, error: { code: 'cancelled' } }
     if (retrievalIndexOperationRef.current.generation !== nextGeneration) return
     setReadyRetrievalIndex(null)
     const cancelState = result?.state === 'failed' && result?.error?.code !== 'cancelled' ? 'failed' : 'cancelled'
@@ -823,6 +873,16 @@ function App() {
 
   useEffect(() => {
     const previous = retrievalIndexOperationRef.current
+    if (previous.building && previous.identity && retrievalIndexIdentity && identitiesMatch(previous.identity, retrievalIndexIdentity)) {
+      const generation = previous.generation
+      return () => {
+        if (retrievalIndexOperationRef.current.generation !== generation) return
+        previous.controller?.abort()
+        if (previous.timer) window.clearTimeout(previous.timer)
+        if (previous.building) void runtimeAdapter.retrievalIndexes.cancel({ identity: previous.identity }).catch(() => {})
+        retrievalIndexOperationRef.current.generation += 1
+      }
+    }
     previous.controller?.abort()
     if (previous.timer) window.clearTimeout(previous.timer)
     if (previous.building && previous.identity) void runtimeAdapter.retrievalIndexes.cancel({ identity: previous.identity }).catch(() => {})

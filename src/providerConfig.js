@@ -49,6 +49,45 @@ function normalizeProviderKeys(value) {
   )))
 }
 
+export function safeEmbeddingDimensions(value) {
+  return Number.isSafeInteger(value) && value > 0 && value <= 16_384 ? value : null
+}
+
+export function retrievalModelRole(model) {
+  if (!model || typeof model !== 'object') return null
+  if (model.kind === 'embedding' || model.capabilities?.embedding || model.capabilities?.embeddings) return 'embedding'
+  if (model.kind === 'rerank' || model.capabilities?.rerank) return 'rerank'
+  return null
+}
+
+export function mergeDiscoveredProviderModels(existingModels, discoveredModels) {
+  const existingById = new Map((Array.isArray(existingModels) ? existingModels : []).map((model) => [model?.id, model]))
+  return (Array.isArray(discoveredModels) ? discoveredModels : []).map((model) => {
+    const { dimensions: _dimensions, embeddingDimensions: _embeddingDimensions, ...safeModel } = model || {}
+    const previous = existingById.get(model?.id)
+    const role = retrievalModelRole(model)
+    const previousRole = retrievalModelRole(previous)
+    const dimensions = role === 'embedding'
+      ? safeEmbeddingDimensions(model?.dimensions ?? model?.embeddingDimensions)
+        || (previousRole === role ? safeEmbeddingDimensions(previous?.dimensions ?? previous?.embeddingDimensions) : null)
+      : null
+    return dimensions ? { ...safeModel, dimensions } : safeModel
+  })
+}
+
+export function withProviderModelDimensions(configs, providerId, modelId, dimensions) {
+  const safeDimensions = safeEmbeddingDimensions(dimensions)
+  const providerConfig = configs?.[providerId]
+  if (!safeDimensions || !providerConfig || !Array.isArray(providerConfig.models)) return null
+  let updated = false
+  const models = providerConfig.models.map((model) => {
+    if (model.id !== modelId || retrievalModelRole(model) !== 'embedding') return model
+    updated = true
+    return { ...model, dimensions: safeDimensions }
+  })
+  return updated ? { ...configs, [providerId]: { ...providerConfig, models } } : null
+}
+
 export function createDefaultProviderConfigs() {
   return Object.fromEntries(PROVIDER_PRESETS.map((provider) => {
     const config = {
@@ -94,14 +133,14 @@ export function normalizeProviderConfigs(value) {
         ...(isDeepSeekEndpointType(model.preferredEndpointType) || isBailianEndpointType(model.preferredEndpointType) ? { preferredEndpointType: model.preferredEndpointType } : {}),
         ...(Number.isFinite(model.contextWindowTokens) ? { contextWindowTokens: model.contextWindowTokens } : {}),
         ...(Number.isFinite(model.maxOutputTokens) ? { maxOutputTokens: model.maxOutputTokens } : {}),
-        ...(Number.isInteger(model.dimensions) ? { dimensions: model.dimensions } : {}),
-        ...(Number.isInteger(model.embeddingDimensions) ? { embeddingDimensions: model.embeddingDimensions } : {}),
+        ...(safeEmbeddingDimensions(model.dimensions) ? { dimensions: safeEmbeddingDimensions(model.dimensions) } : {}),
+        ...(safeEmbeddingDimensions(model.embeddingDimensions) ? { embeddingDimensions: safeEmbeddingDimensions(model.embeddingDimensions) } : {}),
         ...(model.manual ? { manual: true } : {}),
       }))
       : []
     if (provider.id === 'deepseek') models = models.map(withDeepSeekModelProfile)
     if (provider.id === 'bailian') models = models.map(withBailianModelProfile)
-    const validIds = new Set(models.map((model) => model.id))
+    const validIds = new Set(models.filter((model) => model.kind === 'chat').map((model) => model.id))
     const selectedModelIds = Array.isArray(saved.selectedModelIds) ? saved.selectedModelIds.filter((id) => validIds.has(id)) : []
     const normalized = {
       endpoint: typeof saved.endpoint === 'string' && saved.endpoint.trim() ? saved.endpoint : provider.endpoint,
@@ -302,9 +341,7 @@ export function providerConfigsToRetrievalModels(configs) {
     const provider = presets.get(providerId)
     for (const model of config.models) {
       if (model.manual) continue
-      const role = model.kind === 'embedding' || model.capabilities?.embedding || model.capabilities?.embeddings
-        ? 'embedding'
-        : model.kind === 'rerank' || model.capabilities?.rerank ? 'rerank' : null
+      const role = retrievalModelRole(model)
       if (!role) continue
       models.push({
         id: `${providerId}:${model.id}`,
