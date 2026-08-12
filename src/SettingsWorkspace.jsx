@@ -35,7 +35,7 @@ import {
   Wrench,
 } from 'lucide-react'
 
-import { DEFAULT_MODEL_CONFIG, getModelsByRole } from './modelConfig.js'
+import { DEFAULT_MODEL_CONFIG } from './modelConfig.js'
 import {
   DEEPSEEK_ENDPOINT_PROFILES,
   DEEPSEEK_ENDPOINT_TYPES,
@@ -488,8 +488,6 @@ function ModelSelect({ label, description, value, onChange, options, includeNone
 function DefaultModelsPage({ config, chatModels, onSave }) {
   const [draft, setDraft] = useState(config)
   const [saved, setSaved] = useState(false)
-  const embeddingModels = getModelsByRole('embedding')
-  const rerankModels = getModelsByRole('rerank')
   useEffect(() => setDraft(config), [config])
   const update = (key, value) => { setSaved(false); setDraft((current) => ({ ...current, [key]: value })) }
   const handleSave = () => { onSave(draft); setSaved(true) }
@@ -500,8 +498,6 @@ function DefaultModelsPage({ config, chatModels, onSave }) {
     </SettingsPageHeader>
     <section className="settings-form-card">
       <ModelSelect label="Answer and synthesis" description="Used for chat, evidence synthesis, and citation-safe research answers." value={draft.chatModelId} onChange={(value) => update('chatModelId', value)} options={chatModels} />
-      <ModelSelect label="Embedding" description="Creates semantic vectors for Vault retrieval." value={draft.embeddingModelId} onChange={(value) => update('embeddingModelId', value)} options={embeddingModels} includeNone />
-      <ModelSelect label="Reranker" description="Reorders retrieved evidence before answer generation." value={draft.rerankModelId} onChange={(value) => update('rerankModelId', value)} options={rerankModels} includeNone />
     </section>
     <button className="settings-text-button" onClick={() => { setSaved(false); setDraft(DEFAULT_MODEL_CONFIG) }}>Restore defaults</button>
   </div>
@@ -519,23 +515,46 @@ function LocalModelsPage() {
   </div>
 }
 
-function RetrievalSettingsPage({ config, onSave }) {
+function RetrievalSettingsPage({ config, onSave, retrievalModels = [] }) {
   const [draft, setDraft] = useState(config)
   const [saved, setSaved] = useState(false)
+  const [feedback, setFeedback] = useState('')
   useEffect(() => setDraft(config), [config])
-  const update = (key, value) => { setSaved(false); setDraft((current) => ({ ...current, [key]: value })) }
+  const update = (key, value) => { setSaved(false); setFeedback(''); setDraft((current) => ({ ...current, [key]: value })) }
+  const embeddingModels = retrievalModels.filter((model) => model.role === 'embedding')
+  const rerankModels = retrievalModels.filter((model) => model.role === 'rerank')
+  const embeddingEnabled = draft.embeddingModelId !== 'none'
+  const save = () => {
+    if (embeddingEnabled && !draft.remoteEmbeddingConsent) {
+      setFeedback('Review and accept the Vault-content transmission disclosure before enabling remote embeddings.')
+      return
+    }
+    onSave({ ...draft, remoteEmbeddingConsent: embeddingEnabled && draft.remoteEmbeddingConsent })
+    setSaved(true)
+    setFeedback('')
+  }
   return <div className="settings-page">
     <SettingsPageHeader eyebrow="Current Vault" title="检索与索引" description="These settings affect how connected Markdown notes become evidence for the research agent.">
-      <button className="settings-primary-button" onClick={() => { onSave(draft); setSaved(true) }}>{saved ? 'Saved' : 'Save changes'}</button>
+      <button className="settings-primary-button" onClick={save}>{saved ? 'Saved' : 'Save changes'}</button>
     </SettingsPageHeader>
     <section className="settings-form-card">
       <label className="settings-select-row"><span><strong>Document parser</strong><small>Preserve headings, frontmatter, wikilinks, and source paths.</small></span><select value={draft.parserId} onChange={(event) => update('parserId', event.target.value)}><option value="markdown">Markdown-aware parser</option><option value="plain-text">Plain text fallback</option></select></label>
+      <ModelSelect label="Embedding model" description="Optional semantic retrieval. Candidates come only from the account-visible Runtime model catalog." value={draft.embeddingModelId} onChange={(value) => update('embeddingModelId', value)} options={embeddingModels} includeNone />
+      <ModelSelect label="Reranker model" description="Optional bounded reranking of retrieved candidates. Candidates come only from Runtime discovery." value={draft.rerankModelId} onChange={(value) => update('rerankModelId', value)} options={rerankModels} includeNone />
       <label className="settings-range-row"><span><strong>Top K evidence</strong><small>Maximum candidate chunks passed into synthesis.</small></span><output>{draft.topK}</output><input type="range" min="1" max="50" value={draft.topK} onChange={(event) => update('topK', Number(event.target.value))} /></label>
       <label className="settings-number-row"><span><strong>Chunk size</strong><small>Target characters per evidence chunk.</small></span><input type="number" min="200" max="4000" step="50" value={draft.chunkSize} onChange={(event) => update('chunkSize', Number(event.target.value))} /></label>
       <label className="settings-number-row"><span><strong>Chunk overlap</strong><small>Context carried across adjacent chunks.</small></span><input type="number" min="0" max="1000" step="20" value={draft.chunkOverlap} onChange={(event) => update('chunkOverlap', Number(event.target.value))} /></label>
       <label className="settings-toggle-row"><span><strong>Hybrid search</strong><small>Combine lexical and future vector retrieval.</small></span><input type="checkbox" checked={draft.hybridSearch} onChange={(event) => update('hybridSearch', event.target.checked)} /></label>
       <label className="settings-toggle-row"><span><strong>Require citations</strong><small>Keep note paths attached to generated answers.</small></span><input type="checkbox" checked={draft.citations} onChange={(event) => update('citations', event.target.checked)} /></label>
     </section>
+    {embeddingEnabled && <section className="provider-security-note" role="group" aria-labelledby="remote-embedding-disclosure-title">
+      <ShieldCheck size={16} />
+      <span><strong id="remote-embedding-disclosure-title">Remote Vault-content disclosure</strong>Enabling embeddings sends selected Vault chunks to the configured Provider through the Runtime Adapter. API keys remain in the existing session credential boundary; this UI does not persist vectors or credentials.</span>
+      <label className="settings-toggle-row"><span><strong>I understand and consent</strong><small>Required before remote embedding is enabled.</small></span><input type="checkbox" checked={Boolean(draft.remoteEmbeddingConsent)} onChange={(event) => update('remoteEmbeddingConsent', event.target.checked)} /></label>
+    </section>}
+    {feedback && <div className="provider-feedback error" role="alert">{feedback}</div>}
+    {!retrievalModels.length && <div className="provider-security-note"><Info size={16} /><span><strong>No discovered retrieval models</strong>Connect a Provider and refresh its account-visible model catalog before selecting embedding or reranker models.</span></div>}
+    <div className="provider-security-note"><Database size={16} /><span><strong>Index lifecycle</strong>Vector index storage and rebuild/progress controls are not available in this slice. Until Runtime index storage is published, retrieval remains lexical and any remote configuration is shown as not built/degraded.</span></div>
   </div>
 }
 
@@ -706,7 +725,7 @@ function DataManagementPage({ summary, runtimeTarget, actionBlocked, useNativeFi
   </div>
 }
 
-export default function SettingsWorkspace({ authStatus, authBusy, authError, modelCatalog, modelsBusy, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, chatModels, modelConfig, onSaveModelConfig, providerConfigs, onSaveProviderConfigs, mcpConfig, onSaveMcpConfig, mcpRuntime, mcpRuntimeBusy, mcpRuntimeError, onConnectMcpServer, onDisconnectMcpServer, vaultNoteCount, dataSummary, dataActionBlocked, runtimeTarget, useNativeDataFiles, onExportData, onImportData, onImportDataFromDesktop, onClearHistory }) {
+export default function SettingsWorkspace({ authStatus, authBusy, authError, modelCatalog, modelsBusy, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, chatModels, retrievalModels, modelConfig, onSaveModelConfig, providerConfigs, onSaveProviderConfigs, mcpConfig, onSaveMcpConfig, mcpRuntime, mcpRuntimeBusy, mcpRuntimeError, onConnectMcpServer, onDisconnectMcpServer, vaultNoteCount, dataSummary, dataActionBlocked, runtimeTarget, useNativeDataFiles, onExportData, onImportData, onImportDataFromDesktop, onClearHistory }) {
   const [activePage, setActivePage] = useState('providers')
   const [providerQuery, setProviderQuery] = useState('')
   const [selectedProviderId, setSelectedProviderId] = useState(API_PROVIDERS[0].id)
@@ -716,7 +735,7 @@ export default function SettingsWorkspace({ authStatus, authBusy, authError, mod
   else if (activePage === 'defaults') content = <DefaultModelsPage config={modelConfig} chatModels={chatModels} onSave={onSaveModelConfig} />
   else if (activePage === 'local-models') content = <LocalModelsPage />
   else if (activePage === 'mcp') content = <McpSettingsPage config={mcpConfig} onChange={onSaveMcpConfig} runtime={mcpRuntime} runtimeBusy={mcpRuntimeBusy} runtimeError={mcpRuntimeError} onConnectServer={onConnectMcpServer} onDisconnectServer={onDisconnectMcpServer} vaultNoteCount={vaultNoteCount} />
-  else if (activePage === 'retrieval') content = <RetrievalSettingsPage config={modelConfig} onSave={onSaveModelConfig} />
+  else if (activePage === 'retrieval') content = <RetrievalSettingsPage config={modelConfig} retrievalModels={retrievalModels} onSave={onSaveModelConfig} />
   else if (activePage === 'data') content = <DataManagementPage summary={dataSummary} runtimeTarget={runtimeTarget} actionBlocked={dataActionBlocked} useNativeFiles={useNativeDataFiles} onExport={onExportData} onImport={onImportData} onImportFromDesktop={onImportDataFromDesktop} onClearHistory={onClearHistory} />
   else content = <FeaturePreviewPage pageId={activePage} />
 

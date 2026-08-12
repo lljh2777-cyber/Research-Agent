@@ -472,13 +472,16 @@ function ToolApprovalDialog({ approval, onResolve }) {
   </div>
 }
 
-function RetrievalPath({ vaultName, topK, rerankLabel, packet, wikilinksEnabled, presentation }) {
+function RetrievalPath({ vaultName, topK, embeddingLabel, rerankLabel, retrievalIndexState, packet, wikilinksEnabled, presentation }) {
   const evidenceCount = packet?.evidence?.length || 0
   const retrieval = packet?.retrieval
+  const mode = retrieval?.mode || 'lexical'
+  const degradation = packet?.error?.code || ''
   const query = packet?.question || 'Ask a question to retrieve evidence'
   const path = [
     ['Query', query, packet ? 'done' : 'current'],
-    [`${wikilinksEnabled ? 'BM25 + Wikilinks' : 'BM25'} (top-k=${topK})`, vaultName ? `vault: ${vaultName}` : 'no Vault connected', packet ? 'done' : 'current'],
+    [`${mode === 'hybrid' ? 'Hybrid' : 'BM25'}${wikilinksEnabled ? ' + Wikilinks' : ''} (top-k=${topK})`, vaultName ? `vault: ${vaultName}` : 'no Vault connected', packet ? 'done' : 'current'],
+    ['Index and remote stages', packet ? `${retrievalIndexState}; embedding: ${embeddingLabel}; reranker: ${rerankLabel}${degradation ? `; degraded: ${degradation}` : ''}` : 'waiting for a query', packet ? (degradation ? 'current' : 'done') : 'current'],
     ['Graph expansion', wikilinksEnabled ? packet ? `${retrieval?.graphExpanded || 0} one-hop result${retrieval?.graphExpanded === 1 ? '' : 's'} - rerank: ${rerankLabel}` : 'waiting for a query' : 'Disabled for this conversation', packet || !wikilinksEnabled ? 'done' : 'current'],
     [`Selected (${evidenceCount} chunks)`, packet ? `${retrieval?.candidateCount || 0} lexical candidates` : 'no evidence selected yet', packet ? 'done' : 'current'],
     ['Answer model', presentation.answerDetail, presentation.answerStatus],
@@ -535,13 +538,13 @@ function Sources({ sources, onOpenNote }) {
   )
 }
 
-function Inspector({ activeStage, running, hasActivity, onPause, linkedNotes, sources, vaultName, topK, rerankLabel, packet, answerMode, runStatus, wikilinksEnabled, onOpenNote }) {
+function Inspector({ activeStage, running, hasActivity, onPause, linkedNotes, sources, vaultName, topK, embeddingLabel, rerankLabel, retrievalIndexState, packet, answerMode, runStatus, wikilinksEnabled, onOpenNote }) {
   const presentation = getResearchRunPresentation({ runStatus, running, hasActivity, activeStage, stageCount: stages.length, packet, answerMode })
   return (
     <aside className="inspector">
       <div className="inspector-title"><BookOpen size={18} /> <span>Knowledge context</span><ChevronUp size={16} /></div>
       <LinkedNotes notes={linkedNotes} onOpenNote={onOpenNote} />
-      <RetrievalPath vaultName={vaultName} topK={topK} rerankLabel={rerankLabel} packet={packet} wikilinksEnabled={wikilinksEnabled} presentation={presentation} />
+      <RetrievalPath vaultName={vaultName} topK={topK} embeddingLabel={embeddingLabel} rerankLabel={rerankLabel} retrievalIndexState={retrievalIndexState} packet={packet} wikilinksEnabled={wikilinksEnabled} presentation={presentation} />
       <AgentStatus running={running} hasActivity={hasActivity} onPause={onPause} presentation={presentation} />
       <Sources sources={sources} onOpenNote={onOpenNote} />
     </aside>
@@ -553,7 +556,7 @@ export function ResearchWorkspace({ phase, setupProps, conversationProps, knowle
     <AgentConversationPanel variant="full" {...knowledgePanelProps} />
   </div>
   if (phase === 'setup') return <ResearchSetup {...setupProps} />
-  const { config, selectedModel, vaultName, mcpConnected, canEdit, onEdit, messages, running, activeStage, retrievalPacket, input, setInput, onSubmit, disabled, models, authStatus, authBusy, modelCatalog, modelsBusy, onSelectModel, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, onOpenNote, linkedNotes, sources, topK, rerankLabel, answerMode, runStatus, wikilinksEnabled, onPause } = conversationProps
+  const { config, selectedModel, vaultName, mcpConnected, canEdit, onEdit, messages, running, activeStage, retrievalPacket, input, setInput, onSubmit, disabled, models, authStatus, authBusy, modelCatalog, modelsBusy, onSelectModel, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, onOpenNote, linkedNotes, sources, topK, embeddingLabel, rerankLabel, retrievalIndexState, answerMode, runStatus, wikilinksEnabled, onPause } = conversationProps
   const hasActivity = messages.length > 0 || Boolean(retrievalPacket)
   return <>
     <div className="workspace-content">
@@ -569,7 +572,7 @@ export function ResearchWorkspace({ phase, setupProps, conversationProps, knowle
         <EvidenceTrail activeStage={activeStage} running={running} hasActivity={hasActivity} />
         <Composer value={input} setValue={setInput} onSubmit={onSubmit} disabled={disabled} selectedModel={selectedModel} models={models} onSelectModel={onSelectModel} authStatus={authStatus} authBusy={authBusy} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={onConnectChatgpt} onLogoutChatgpt={onLogoutChatgpt} onRefreshModels={onRefreshModels} />
       </div>
-      <Inspector activeStage={activeStage} running={running} hasActivity={hasActivity} onPause={onPause} linkedNotes={linkedNotes} sources={sources} vaultName={vaultName} topK={topK} rerankLabel={rerankLabel} packet={retrievalPacket} answerMode={answerMode} runStatus={runStatus} wikilinksEnabled={wikilinksEnabled} onOpenNote={onOpenNote} />
+      <Inspector activeStage={activeStage} running={running} hasActivity={hasActivity} onPause={onPause} linkedNotes={linkedNotes} sources={sources} vaultName={vaultName} topK={topK} embeddingLabel={embeddingLabel} rerankLabel={rerankLabel} retrievalIndexState={retrievalIndexState} packet={retrievalPacket} answerMode={answerMode} runStatus={runStatus} wikilinksEnabled={wikilinksEnabled} onOpenNote={onOpenNote} />
     </div>
     {note && <NotePreview note={note} onClose={onCloseNote} />}
     <ToolApprovalDialog approval={approval} onResolve={onResolveApproval} />

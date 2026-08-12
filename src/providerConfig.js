@@ -292,3 +292,32 @@ export function providerConfigsToModels(configs) {
   }
   return models
 }
+
+export function providerConfigsToRetrievalModels(configs) {
+  const presets = new Map(PROVIDER_PRESETS.map((provider) => [provider.id, provider]))
+  const models = []
+  for (const [providerId, config] of Object.entries(normalizeProviderConfigs(configs))) {
+    const provider = presets.get(providerId)
+    for (const model of config.models) {
+      if (model.manual) continue
+      const role = model.kind === 'embedding' || model.capabilities?.embedding || model.capabilities?.embeddings
+        ? 'embedding'
+        : model.kind === 'rerank' || model.capabilities?.rerank ? 'rerank' : null
+      if (!role) continue
+      models.push({
+        id: `${providerId}:${model.id}`,
+        apiModelId: model.id,
+        name: model.name || model.id,
+        provider: provider?.name || providerId,
+        providerId,
+        role,
+        endpoint: config.endpoint,
+        discovered: true,
+        ready: true,
+        detail: `Discovered from ${provider?.name || providerId}.`,
+        capabilities: model.capabilities || {},
+      })
+    }
+  }
+  return models
+}

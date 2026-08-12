@@ -41,8 +41,8 @@ import { buildVaultIndex, getVaultName } from './vault.js'
 import KnowledgeGraphSection from './KnowledgeGraph.jsx'
 import { PipelinesSection, RunsSection } from './PipelineWorkspace.jsx'
 import SettingsWorkspace from './SettingsWorkspace.jsx'
-import { chatgptCatalogToModels, getModelById, getModelsByRole, loadModelConfig, MODEL_REGISTRY, saveModelConfig } from './modelConfig.js'
-import { getProviderSessionKey, hydrateProviderSessionKeys, loadProviderConfigs, providerConfigsToModels, saveProviderConfigs } from './providerConfig.js'
+import { chatgptCatalogToModels, getModelById, getModelsByRole, loadModelConfig, saveModelConfig } from './modelConfig.js'
+import { getProviderSessionKey, hydrateProviderSessionKeys, loadProviderConfigs, providerConfigsToModels, providerConfigsToRetrievalModels, saveProviderConfigs } from './providerConfig.js'
 import { getDeepSeekRuntimeOptions } from '../shared/deepseek-provider.mjs'
 import { getBailianRuntimeOptions } from '../shared/bailian-provider.mjs'
 import { streamProviderResponse } from './providerRuntimeClient.js'
@@ -71,7 +71,9 @@ import {
   parseMcpCallArguments,
 } from './mcpRuntimeClient.js'
 import { executePipeline, loadPipelineRuns, savePipelineRuns } from './pipelineEngine.js'
-import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources, retrieveEvidence } from './retrieval.js'
+import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources } from './retrieval.js'
+import { migrateRetrievalIndexV1 } from './retrievalContracts.js'
+import { retrieveHybridEvidence } from './researchRetrieval.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
 import { describeVaultConnection, VAULT_CONNECTION_STATUS } from './vaultConnection.js'
 import { AUTH_SERVICE_UNAVAILABLE, getAuthStatus, getChatgptModels, logoutChatgpt, startChatgptLogin, streamChatgptResponse, waitForChatgptAuth } from './authClient.js'
@@ -185,6 +187,53 @@ function responseForQuestion(question, packet) {
     bullets: [],
     closing: 'Choose a ChatGPT-backed answer model to synthesize the retrieved evidence with inline citations.',
     evidence,
+  }
+}
+
+function createRetrievalRuntime({ runtimeAdapter, providerConfigs, retrievalModels, modelConfig }) {
+  const byId = new Map(retrievalModels.map((model) => [model.id, model]))
+  const selectedEmbedding = byId.get(modelConfig.embeddingModelId) || null
+  const selectedReranker = byId.get(modelConfig.rerankModelId) || null
+
+  const capability = (model, operation, label) => {
+    const providerConfig = model ? providerConfigs[model.providerId] : null
+    const available = Boolean(model && providerConfig?.endpoint && model.apiModelId)
+    const execute = async (input = {}) => {
+      if (!available) return { ok: false, code: `${operation}_unavailable`, error: `${label} is not configured.` }
+      const apiKey = await getProviderSessionKey(model.providerId)
+      if (operation === 'embedding') {
+        return runtimeAdapter.providers.embed({
+          providerId: model.providerId,
+          endpoint: model.endpoint || providerConfig.endpoint,
+          apiKey,
+          model: model.apiModelId,
+          input: input.query,
+          signal: input.signal,
+        })
+      }
+      return runtimeAdapter.providers.rerank({
+        providerId: model.providerId,
+        endpoint: model.endpoint || providerConfig.endpoint,
+        apiKey,
+        model: model.apiModelId,
+        query: input.query,
+        candidates: Array.isArray(input.candidates) ? input.candidates.slice(0, 50) : [],
+        top_n: Math.min(50, Array.isArray(input.candidates) ? input.candidates.length : 0),
+        signal: input.signal,
+      })
+    }
+    return {
+      available,
+      reason: available ? null : `${label} is not configured from an account-visible Runtime model.`,
+      [operation === 'embedding' ? 'embed' : 'rerank']: execute,
+    }
+  }
+
+  return {
+    embedding: capability(selectedEmbedding, 'embedding', 'Embedding'),
+    rerank: capability(selectedReranker, 'rerank', 'Reranker'),
+    selectedEmbedding,
+    selectedReranker,
   }
 }
 
@@ -585,6 +634,17 @@ function App() {
     () => buildRetrievalIndex(vaultNotes, { chunkSize: modelConfig.chunkSize, chunkOverlap: modelConfig.chunkOverlap }),
     [vaultNotes, modelConfig.chunkSize, modelConfig.chunkOverlap],
   )
+  const lexicalRetrievalIndexV2 = useMemo(() => {
+    if (!activeHasVaultScope || !vaultName) return null
+    try {
+      return migrateRetrievalIndexV1(retrievalIndex, {
+        vault: { id: vaultCapabilityId || vaultName, revision: localRevision || 'volatile-local-vault' },
+        chunking: { size: modelConfig.chunkSize, overlap: modelConfig.chunkOverlap },
+      })
+    } catch {
+      return null
+    }
+  }, [activeHasVaultScope, localRevision, modelConfig.chunkOverlap, modelConfig.chunkSize, retrievalIndex, vaultCapabilityId, vaultName])
   const externalMcpEntries = useMemo(() => createExternalMcpToolEntries(mcpRuntime.sessions, async ({ call, approved, serverId, toolName }) => {
     try {
       const payload = await callMcpTool({
@@ -613,9 +673,15 @@ function App() {
     const apiModels = providerConfigsToModels(providerConfigs)
     return [smartModel, ...discoveredModels, ...apiModels, ...futureModels].filter(Boolean)
   }, [modelCatalog.models, providerConfigs, staticChatModels])
+  const retrievalModels = useMemo(() => providerConfigsToRetrievalModels(providerConfigs), [providerConfigs])
+  const retrievalRuntime = useMemo(() => createRetrievalRuntime({ runtimeAdapter, providerConfigs, retrievalModels, modelConfig }), [modelConfig, providerConfigs, retrievalModels, runtimeAdapter])
+  const retrievalIndexState = modelConfig.embeddingModelId === 'none'
+    ? (lexicalRetrievalIndexV2 ? 'ready' : 'unavailable')
+    : lexicalRetrievalIndexV2 ? 'not-built' : 'unavailable'
+  const embeddingLabel = retrievalRuntime.selectedEmbedding?.name || 'Not used'
+  const rerankLabel = retrievalRuntime.selectedReranker?.name || 'Not used'
   const activeChatModelId = activeResearchSession.configSnapshot?.model?.modelId || modelConfig.chatModelId
   const selectedModel = useMemo(() => getModelById(activeChatModelId, chatModels), [activeChatModelId, chatModels])
-  const rerankModel = useMemo(() => MODEL_REGISTRY.find((model) => model.id === modelConfig.rerankModelId), [modelConfig.rerankModelId])
   const notesById = useMemo(() => new Map(vaultNotes.map((note) => [note.id, note])), [vaultNotes])
   const retrievedNotes = useMemo(() => {
     const seen = new Set()
@@ -937,6 +1003,7 @@ function App() {
           pendingRunId: '',
           running: false,
         }))
+        requestAbortControllersRef.current.delete(tabId)
         mockRunTimersRef.current.delete(tabId)
       }).catch((error) => {
         updateResearchSession(tabId, (current) => ({
@@ -952,6 +1019,7 @@ function App() {
           pendingRunId: '',
           running: false,
         }))
+        requestAbortControllersRef.current.delete(tabId)
         mockRunTimersRef.current.delete(tabId)
       })
     })
@@ -1303,10 +1371,17 @@ function App() {
     if (!question) return
     const enabledTools = new Set(session.configSnapshot?.enabledTools || [])
     const hasVaultScope = Boolean(vaultName && session.configSnapshot?.knowledgeScopes?.some((scope) => scope.vaultId === vaultName))
-    const packet = retrieveEvidence(enabledTools.has(TOOL_IDS.VAULT_SEARCH) && hasVaultScope ? retrievalIndex : null, question, {
+    const controller = new AbortController()
+    requestAbortControllersRef.current.set(sessionId, controller)
+    const useRemoteVector = modelConfig.embeddingModelId !== 'none' && modelConfig.remoteEmbeddingConsent === true
+    const packet = await retrieveHybridEvidence(question, {
+      lexicalIndex: enabledTools.has(TOOL_IDS.VAULT_SEARCH) && hasVaultScope ? retrievalIndex : null,
+      retrievalIndex: enabledTools.has(TOOL_IDS.VAULT_SEARCH) && hasVaultScope ? lexicalRetrievalIndexV2 : null,
+      runtime: retrievalRuntime,
       topK: modelConfig.topK,
-      similarityThreshold: modelConfig.similarityThreshold,
-      expandWikilinks: enabledTools.has(TOOL_IDS.VAULT_WIKILINKS),
+      signal: controller.signal,
+      useVector: useRemoteVector,
+      useReranker: useRemoteVector && modelConfig.rerankModelId !== 'none',
     })
     const evidenceContext = buildEvidenceUserContext(packet)
     updateResearchSession(sessionId, { retrievalPacket: packet })
@@ -1351,8 +1426,6 @@ function App() {
     }))
     if (live) {
       const assistantId = `assistant-${Date.now()}`
-      const controller = new AbortController()
-      requestAbortControllersRef.current.set(sessionId, controller)
       updateResearchSession(sessionId, (current) => ({
         ...current,
         runMode: 'live',
@@ -1728,7 +1801,7 @@ function App() {
           <div className="topbar-actions"><button className="icon-button mobile-settings-button" onClick={() => handleOpenSection('settings')} aria-label="Open settings"><Settings2 size={18} /></button></div>
         </header>
 
-        {activeSection === 'launcher' ? <WorkspaceLauncher onOpen={openWorkspaceTab} /> : activeSection === 'settings' ? <SettingsWorkspace key={`settings-${providerCredentialsRevision}`} authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} mcpConfig={mcpConfig} onSaveMcpConfig={handleMcpConfigSave} mcpRuntime={mcpRuntime} mcpRuntimeBusy={mcpRuntimeBusy} mcpRuntimeError={mcpRuntimeError} onConnectMcpServer={handleConnectMcpServer} onDisconnectMcpServer={handleDisconnectMcpServer} vaultNoteCount={vaultNotes.length} dataSummary={localDataSummary} dataActionBlocked={dataActionBlocked} runtimeTarget={runtimeManifest?.target} useNativeDataFiles={supportsDesktopDataFiles} onExportData={handleExportLocalData} onImportData={handleImportLocalData} onImportDataFromDesktop={handleImportLocalDataFromDesktop} onClearHistory={handleClearLocalHistory} /> : activeSection === 'graph' ? <KnowledgeGraphSection
+        {activeSection === 'launcher' ? <WorkspaceLauncher onOpen={openWorkspaceTab} /> : activeSection === 'settings' ? <SettingsWorkspace key={`settings-${providerCredentialsRevision}`} authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} retrievalModels={retrievalModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} mcpConfig={mcpConfig} onSaveMcpConfig={handleMcpConfigSave} mcpRuntime={mcpRuntime} mcpRuntimeBusy={mcpRuntimeBusy} mcpRuntimeError={mcpRuntimeError} onConnectMcpServer={handleConnectMcpServer} onDisconnectMcpServer={handleDisconnectMcpServer} vaultNoteCount={vaultNotes.length} dataSummary={localDataSummary} dataActionBlocked={dataActionBlocked} runtimeTarget={runtimeManifest?.target} useNativeDataFiles={supportsDesktopDataFiles} onExportData={handleExportLocalData} onImportData={handleImportLocalData} onImportDataFromDesktop={handleImportLocalDataFromDesktop} onClearHistory={handleClearLocalHistory} /> : activeSection === 'graph' ? <KnowledgeGraphSection
           key={activeTabId}
           index={vaultIndex}
           onConnectVault={handleConnectVault}
@@ -1763,7 +1836,7 @@ function App() {
             phase={phase}
             knowledgePanelProps={activeResearchSession.knowledgeCurator ? { session: knowledgeAgentSession, contextSummary: knowledgeAgentSession.context, descriptors: knowledgeToolDescriptors, input: knowledgeAgentInput, onInput: setKnowledgeAgentInput, onSubmit: submitKnowledgeQuestion, onAction: handleKnowledgeAction, approval: knowledgeApproval, onResolveApproval: resolveKnowledgeApproval, disabled: !knowledgeAgentSession.context } : null}
             setupProps={{ config: activeResearchSession.configSnapshot, selectedModel, models: chatModels, vaultName, vaultNoteCount: vaultNotes.length, vaultSyncState: syncState, mcpConnected: mcpRuntime.sessions.length > 0, authStatus, authBusy, modelCatalog, modelsBusy, onSelectAgent: handleSelectAgent, onUpdateIdentity: handleUpdateAgentIdentity, onUpdateSystemPrompt: handleUpdateAgentSystemPrompt, onResetSystemPrompt: handleResetAgentSystemPrompt, onSelectModel: handleModelSelect, onSelectVault: handleSelectResearchVault, onToggleTool: handleToggleResearchTool, onConnectVault: handleConnectVault, onConnectChatgpt: handleConnectChatgpt, onLogoutChatgpt: handleLogoutChatgpt, onRefreshModels: refreshChatgptModels, onStart: handleStartResearch }}
-            conversationProps={{ config: activeResearchSession.configSnapshot, selectedModel, vaultName: activeHasVaultScope ? vaultName : '', mcpConnected: mcpRuntime.sessions.length > 0, canEdit: messages.length === 0, onEdit: handleEditResearchSetup, messages, running, activeStage, retrievalPacket, input, setInput, onSubmit: submitQuestion, disabled: anyResearchRunning, models: chatModels, authStatus, authBusy, modelCatalog, modelsBusy, onSelectModel: handleModelSelect, onConnectChatgpt: handleConnectChatgpt, onLogoutChatgpt: handleLogoutChatgpt, onRefreshModels: refreshChatgptModels, onOpenNote: setSelectedNote, linkedNotes: inspectorNotes, sources: inspectorSources, topK: modelConfig.topK, rerankLabel: rerankModel?.name || 'Disabled by profile', answerMode, runStatus, wikilinksEnabled: activeHasVaultScope && activeResearchSession.configSnapshot?.enabledTools?.includes(TOOL_IDS.VAULT_WIKILINKS), onPause: handlePause }}
+             conversationProps={{ config: activeResearchSession.configSnapshot, selectedModel, vaultName: activeHasVaultScope ? vaultName : '', mcpConnected: mcpRuntime.sessions.length > 0, canEdit: messages.length === 0, onEdit: handleEditResearchSetup, messages, running, activeStage, retrievalPacket, input, setInput, onSubmit: submitQuestion, disabled: anyResearchRunning, models: chatModels, authStatus, authBusy, modelCatalog, modelsBusy, onSelectModel: handleModelSelect, onConnectChatgpt: handleConnectChatgpt, onLogoutChatgpt: handleLogoutChatgpt, onRefreshModels: refreshChatgptModels, onOpenNote: setSelectedNote, linkedNotes: inspectorNotes, sources: inspectorSources, topK: modelConfig.topK, embeddingLabel, rerankLabel, retrievalIndexState, answerMode, runStatus, wikilinksEnabled: activeHasVaultScope && activeResearchSession.configSnapshot?.enabledTools?.includes(TOOL_IDS.VAULT_WIKILINKS), onPause: handlePause }}
             note={selectedNote}
             onCloseNote={() => setSelectedNote(null)}
             approval={pendingToolApproval}
