@@ -91,6 +91,9 @@ test('builds bounded SiliconFlow embedding requests without leaking credentials 
   assert.throws(() => buildProviderEmbeddingRequest({
     providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'BAAI/bge-m3', inputs: Array(129).fill('chunk'),
   }), /1 to 128 inputs/)
+  assert.throws(() => buildProviderEmbeddingRequest({
+    providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'BAAI/bge-m3', inputs: Array(128).fill('x'.repeat(4096), 0),
+  }), /262144 bytes in total/)
 })
 
 test('builds bounded SiliconFlow rerank requests with candidate IDs kept outside the upstream body', () => {
