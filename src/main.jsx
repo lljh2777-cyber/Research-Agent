@@ -72,8 +72,15 @@ import {
 } from './mcpRuntimeClient.js'
 import { executePipeline, loadPipelineRuns, savePipelineRuns } from './pipelineEngine.js'
 import { buildEvidenceSystemMessage, buildEvidenceUserContext, buildRetrievalIndex, evidenceSources } from './retrieval.js'
-import { migrateRetrievalIndexV1 } from './retrievalContracts.js'
 import { retrieveHybridEvidence } from './researchRetrieval.js'
+import {
+  createRetrievalIndexBuildInput,
+  createRetrievalIndexIdentity,
+  normalizeLifecycleResult,
+  reasonMessage,
+  safeProgress,
+  validateReadyRetrievalIndex,
+} from './retrievalIndexLifecycle.js'
 import { loadVaultHandle, loadVaultSnapshot, saveVaultHandle, saveVaultSnapshot } from './vaultStorage.js'
 import { describeVaultConnection, VAULT_CONNECTION_STATUS } from './vaultConnection.js'
 import { AUTH_SERVICE_UNAVAILABLE, getAuthStatus, getChatgptModels, logoutChatgpt, startChatgptLogin, streamChatgptResponse, waitForChatgptAuth } from './authClient.js'
@@ -418,6 +425,8 @@ function App() {
   const [pipelineRuns, setPipelineRuns] = useState(loadPipelineRuns)
   const [pipelineRunningId, setPipelineRunningId] = useState(null)
   const [selectedPipelineRunId, setSelectedPipelineRunId] = useState(null)
+  const [retrievalIndexLifecycle, setRetrievalIndexLifecycle] = useState({ state: 'unavailable', identity: null, progress: null, reason: 'no_embedding_model', message: reasonMessage('no_embedding_model') })
+  const [readyRetrievalIndex, setReadyRetrievalIndex] = useState(null)
   const vaultInputRef = useRef(null)
   const requestAbortControllersRef = useRef(new Map())
   const pipelineRunTimerRef = useRef(null)
@@ -428,6 +437,7 @@ function App() {
   const knowledgeApprovalResolvingRef = useRef(false)
   const reattachedResearchRunsRef = useRef(new Set())
   const researchToolRegistryRef = useRef(null)
+  const retrievalIndexOperationRef = useRef({ generation: 0, identity: null, controller: null, timer: null, building: false })
 
   useEffect(() => {
     let cancelled = false
@@ -634,17 +644,6 @@ function App() {
     () => buildRetrievalIndex(vaultNotes, { chunkSize: modelConfig.chunkSize, chunkOverlap: modelConfig.chunkOverlap }),
     [vaultNotes, modelConfig.chunkSize, modelConfig.chunkOverlap],
   )
-  const lexicalRetrievalIndexV2 = useMemo(() => {
-    if (!activeHasVaultScope || !vaultName) return null
-    try {
-      return migrateRetrievalIndexV1(retrievalIndex, {
-        vault: { id: vaultCapabilityId || vaultName, revision: localRevision || 'volatile-local-vault' },
-        chunking: { size: modelConfig.chunkSize, overlap: modelConfig.chunkOverlap },
-      })
-    } catch {
-      return null
-    }
-  }, [activeHasVaultScope, localRevision, modelConfig.chunkOverlap, modelConfig.chunkSize, retrievalIndex, vaultCapabilityId, vaultName])
   const externalMcpEntries = useMemo(() => createExternalMcpToolEntries(mcpRuntime.sessions, async ({ call, approved, serverId, toolName }) => {
     try {
       const payload = await callMcpTool({
@@ -675,11 +674,182 @@ function App() {
   }, [modelCatalog.models, providerConfigs, staticChatModels])
   const retrievalModels = useMemo(() => providerConfigsToRetrievalModels(providerConfigs), [providerConfigs])
   const retrievalRuntime = useMemo(() => createRetrievalRuntime({ runtimeAdapter, providerConfigs, retrievalModels, modelConfig }), [modelConfig, providerConfigs, retrievalModels, runtimeAdapter])
-  const retrievalIndexState = modelConfig.embeddingModelId === 'none'
-    ? (lexicalRetrievalIndexV2 ? 'ready' : 'unavailable')
-    : lexicalRetrievalIndexV2 ? 'not-built' : 'unavailable'
+  const retrievalIndexIdentityResult = useMemo(() => createRetrievalIndexIdentity({
+    vaultId: activeHasVaultScope ? (vaultCapabilityId || vaultName) : '',
+    vaultRevision: activeHasVaultScope ? localRevision : '',
+    chunkSize: modelConfig.chunkSize,
+    chunkOverlap: modelConfig.chunkOverlap,
+    embeddingModel: retrievalRuntime.selectedEmbedding,
+  }), [activeHasVaultScope, localRevision, modelConfig.chunkOverlap, modelConfig.chunkSize, retrievalRuntime.selectedEmbedding, vaultCapabilityId, vaultName])
+  const retrievalIndexIdentity = retrievalIndexIdentityResult.ok ? retrievalIndexIdentityResult.identity : null
   const embeddingLabel = retrievalRuntime.selectedEmbedding?.name || 'Not used'
   const rerankLabel = retrievalRuntime.selectedReranker?.name || 'Not used'
+
+  const applyRetrievalIndexResult = useCallback(async (result, identity, generation, signal) => {
+    if (retrievalIndexOperationRef.current.generation !== generation) return
+    const view = normalizeLifecycleResult(result, identity, 'failed')
+    if (view.state === 'ready') {
+      const readResult = await Promise.resolve()
+        .then(() => runtimeAdapter.retrievalIndexes.read({ identity, signal }))
+        .catch(() => ({ ok: false, state: 'failed', identity, error: { code: 'storage_failed' } }))
+      if (retrievalIndexOperationRef.current.generation !== generation) return
+      if (readResult?.state !== 'ready') {
+        setReadyRetrievalIndex(null)
+        setRetrievalIndexLifecycle(normalizeLifecycleResult(readResult, identity, 'failed'))
+        return
+      }
+      const validated = validateReadyRetrievalIndex(readResult, identity)
+      if (validated.ok) {
+        setReadyRetrievalIndex({
+          state: 'ready',
+          identity: readResult.identity,
+          index: validated.index,
+          vectors: validated.vectors,
+          provenance: readResult.provenance,
+        })
+        setRetrievalIndexLifecycle({ ...normalizeLifecycleResult(readResult, identity, 'ready'), state: 'ready', reason: null, message: null })
+        return
+      }
+      setReadyRetrievalIndex(null)
+      setRetrievalIndexLifecycle({ state: 'degraded', identity, progress: null, reason: validated.code, message: reasonMessage(validated.code) })
+      return
+    }
+    setReadyRetrievalIndex(null)
+    setRetrievalIndexLifecycle(view)
+  }, [runtimeAdapter])
+
+  const refreshRetrievalIndex = useCallback(async ({ identity = retrievalIndexIdentity, generation = retrievalIndexOperationRef.current.generation, signal = retrievalIndexOperationRef.current.controller?.signal, forceStatus = false } = {}) => {
+    if (!identity) {
+      const code = retrievalIndexIdentityResult.ok ? 'vault_chunks_unavailable' : retrievalIndexIdentityResult.code
+      setReadyRetrievalIndex(null)
+      setRetrievalIndexLifecycle({ state: 'unavailable', identity: null, progress: null, reason: code, message: reasonMessage(code) })
+      return
+    }
+    const operation = retrievalIndexOperationRef.current
+    const method = forceStatus || operation.lastState !== 'building' ? runtimeAdapter.retrievalIndexes.status : runtimeAdapter.retrievalIndexes.progress
+    const result = await Promise.resolve()
+      .then(() => method({ identity, signal }))
+      .catch(() => ({ ok: false, state: 'failed', identity, error: { code: 'storage_failed' } }))
+    if (retrievalIndexOperationRef.current.generation !== generation) return
+    await applyRetrievalIndexResult(result, identity, generation, signal)
+    if (retrievalIndexOperationRef.current.generation !== generation) return
+    const nextState = result?.state
+    operation.lastState = nextState
+    if (nextState === 'building') {
+      operation.timer = window.setTimeout(() => void refreshRetrievalIndex({ identity, generation, signal }), 500)
+    }
+  }, [applyRetrievalIndexResult, retrievalIndexIdentity, retrievalIndexIdentityResult, runtimeAdapter])
+
+  const startRetrievalIndexBuild = useCallback(async (rebuild = false) => {
+    const identity = retrievalIndexIdentity
+    if (!identity) {
+      const code = retrievalIndexIdentityResult.ok ? 'vault_chunks_unavailable' : retrievalIndexIdentityResult.code
+      setRetrievalIndexLifecycle({ state: 'unavailable', identity: null, progress: null, reason: code, message: reasonMessage(code) })
+      return
+    }
+    if (retrievalRuntime.embedding.available !== true) {
+      setRetrievalIndexLifecycle({ state: 'unavailable', identity, progress: null, reason: 'embedding_capability_unavailable', message: reasonMessage('embedding_capability_unavailable') })
+      return
+    }
+    const buildInput = createRetrievalIndexBuildInput({
+      identity,
+      retrievalIndex,
+      remoteEmbeddingConsent: modelConfig.remoteEmbeddingConsent === true,
+    })
+    if (!buildInput.ok) {
+      setRetrievalIndexLifecycle({ state: 'unavailable', identity, progress: null, reason: buildInput.code, message: reasonMessage(buildInput.code) })
+      return
+    }
+    const previous = retrievalIndexOperationRef.current
+    previous.controller?.abort()
+    const generation = previous.generation + 1
+    const controller = new AbortController()
+    retrievalIndexOperationRef.current = { generation, identity, controller, timer: null, building: true, lastState: 'building' }
+    setReadyRetrievalIndex(null)
+    setRetrievalIndexLifecycle({ state: 'building', identity, progress: { completed: 0, total: buildInput.input.chunks.length, batches: 0 }, reason: null, message: null })
+    const embeddingModel = retrievalRuntime.selectedEmbedding
+    const providerConfig = embeddingModel ? providerConfigs[embeddingModel.providerId] : null
+    let apiKey = ''
+    try {
+      apiKey = embeddingModel ? await getProviderSessionKey(embeddingModel.providerId) : ''
+    } catch {
+      if (retrievalIndexOperationRef.current.generation !== generation) return
+      retrievalIndexOperationRef.current.building = false
+      setRetrievalIndexLifecycle({ state: 'failed', identity, progress: null, reason: 'authentication_failed', message: reasonMessage('authentication_failed') })
+      return
+    }
+    const provider = embeddingModel && providerConfig?.endpoint ? {
+      endpoint: embeddingModel.endpoint || providerConfig.endpoint,
+      apiKey,
+    } : null
+    if (retrievalIndexOperationRef.current.generation !== generation) return
+    const method = rebuild ? runtimeAdapter.retrievalIndexes.rebuild : runtimeAdapter.retrievalIndexes.build
+    const buildPromise = Promise.resolve().then(() => method({
+      ...buildInput.input,
+      provider,
+      signal: controller.signal,
+      onProgress: (progress) => {
+        if (retrievalIndexOperationRef.current.generation !== generation) return
+        setRetrievalIndexLifecycle({ state: 'building', identity, progress: safeProgress(progress), reason: null, message: null })
+      },
+    }))
+    retrievalIndexOperationRef.current.timer = window.setTimeout(() => void refreshRetrievalIndex({ identity, generation, signal: controller.signal }), 500)
+    const result = await buildPromise.catch((error) => ({ ok: false, state: controller.signal.aborted ? 'cancelled' : 'failed', identity, error: { code: controller.signal.aborted ? 'cancelled' : error?.code } }))
+    if (retrievalIndexOperationRef.current.generation !== generation) return
+    if (retrievalIndexOperationRef.current.timer) window.clearTimeout(retrievalIndexOperationRef.current.timer)
+    retrievalIndexOperationRef.current.timer = null
+    retrievalIndexOperationRef.current.building = false
+    await applyRetrievalIndexResult(result, identity, generation, controller.signal)
+  }, [applyRetrievalIndexResult, modelConfig.remoteEmbeddingConsent, providerConfigs, refreshRetrievalIndex, retrievalIndex, retrievalIndexIdentity, retrievalIndexIdentityResult, retrievalRuntime.embedding.available, retrievalRuntime.selectedEmbedding, runtimeAdapter])
+
+  const cancelRetrievalIndexBuild = useCallback(async () => {
+    const operation = retrievalIndexOperationRef.current
+    if (!operation.identity) return
+    const identity = operation.identity
+    const generation = operation.generation
+    operation.controller?.abort()
+    if (operation.timer) window.clearTimeout(operation.timer)
+    const nextGeneration = generation + 1
+    retrievalIndexOperationRef.current = { ...operation, generation: nextGeneration, timer: null, building: false, lastState: 'cancelled' }
+    const result = await Promise.resolve()
+      .then(() => runtimeAdapter.retrievalIndexes.cancel({ identity }))
+      .catch(() => ({ ok: false, state: 'cancelled', identity, error: { code: 'cancelled' } }))
+    if (retrievalIndexOperationRef.current.generation !== nextGeneration) return
+    setReadyRetrievalIndex(null)
+    const cancelState = result?.state === 'failed' && result?.error?.code !== 'cancelled' ? 'failed' : 'cancelled'
+    const normalized = normalizeLifecycleResult(result, identity, 'cancelled')
+    setRetrievalIndexLifecycle({ ...normalized, state: cancelState, ...(cancelState === 'cancelled' ? { reason: 'cancelled', message: reasonMessage('cancelled') } : {}) })
+  }, [runtimeAdapter])
+
+  useEffect(() => {
+    const previous = retrievalIndexOperationRef.current
+    previous.controller?.abort()
+    if (previous.timer) window.clearTimeout(previous.timer)
+    if (previous.building && previous.identity) void runtimeAdapter.retrievalIndexes.cancel({ identity: previous.identity }).catch(() => {})
+    const generation = previous.generation + 1
+    const controller = new AbortController()
+    retrievalIndexOperationRef.current = { generation, identity: retrievalIndexIdentity, controller, timer: null, building: false, lastState: null }
+    setReadyRetrievalIndex(null)
+    if (!retrievalIndexIdentity || modelConfig.remoteEmbeddingConsent !== true) {
+      const code = !retrievalIndexIdentity ? (retrievalIndexIdentityResult.ok ? 'vault_chunks_unavailable' : retrievalIndexIdentityResult.code) : 'remote_consent_required'
+      setRetrievalIndexLifecycle({ state: 'unavailable', identity: retrievalIndexIdentity, progress: null, reason: code, message: reasonMessage(code) })
+      return () => {
+        controller.abort()
+        if (retrievalIndexOperationRef.current.generation === generation) retrievalIndexOperationRef.current.generation += 1
+      }
+    }
+    void refreshRetrievalIndex({ identity: retrievalIndexIdentity, generation, signal: controller.signal, forceStatus: true })
+    return () => {
+      controller.abort()
+      if (retrievalIndexOperationRef.current.timer) window.clearTimeout(retrievalIndexOperationRef.current.timer)
+      if (retrievalIndexOperationRef.current.generation === generation && retrievalIndexOperationRef.current.building && retrievalIndexIdentity) {
+        void runtimeAdapter.retrievalIndexes.cancel({ identity: retrievalIndexIdentity }).catch(() => {})
+      }
+      if (retrievalIndexOperationRef.current.generation === generation) retrievalIndexOperationRef.current.generation += 1
+    }
+  }, [modelConfig.remoteEmbeddingConsent, refreshRetrievalIndex, retrievalIndexIdentity, retrievalIndexIdentityResult, runtimeAdapter])
+
+  const retrievalIndexState = retrievalIndexLifecycle.state
   const activeChatModelId = activeResearchSession.configSnapshot?.model?.modelId || modelConfig.chatModelId
   const selectedModel = useMemo(() => getModelById(activeChatModelId, chatModels), [activeChatModelId, chatModels])
   const notesById = useMemo(() => new Map(vaultNotes.map((note) => [note.id, note])), [vaultNotes])
@@ -693,7 +863,10 @@ function App() {
   }, [notesById, retrievalPacket])
   const retrievedSources = useMemo(() => evidenceSources(retrievalPacket).map((source) => ({
     ...source,
-    note: notesById.get(source.id) || null,
+    note: notesById.get(source.noteId || source.id) || null,
+    citations: (retrievalPacket?.evidence || [])
+      .filter((item) => item.sourceId === source.id || item.noteId === source.noteId)
+      .map((item) => ({ chunkId: item.chunkId, heading: item.citation?.heading || item.chunk?.heading || item.heading || null, excerpt: item.excerpt || '' })),
   })), [notesById, retrievalPacket])
   const vaultSources = useMemo(() => vaultIndex.sources.map((source) => ({
     ...source,
@@ -1373,10 +1546,11 @@ function App() {
     const hasVaultScope = Boolean(vaultName && session.configSnapshot?.knowledgeScopes?.some((scope) => scope.vaultId === vaultName))
     const controller = new AbortController()
     requestAbortControllersRef.current.set(sessionId, controller)
-    const useRemoteVector = modelConfig.embeddingModelId !== 'none' && modelConfig.remoteEmbeddingConsent === true
+    const useRemoteVector = Boolean(readyRetrievalIndex && modelConfig.remoteEmbeddingConsent === true)
     const packet = await retrieveHybridEvidence(question, {
       lexicalIndex: enabledTools.has(TOOL_IDS.VAULT_SEARCH) && hasVaultScope ? retrievalIndex : null,
-      retrievalIndex: enabledTools.has(TOOL_IDS.VAULT_SEARCH) && hasVaultScope ? lexicalRetrievalIndexV2 : null,
+      vectorIndex: enabledTools.has(TOOL_IDS.VAULT_SEARCH) && hasVaultScope && useRemoteVector ? readyRetrievalIndex : null,
+      requestedIndexIdentity: enabledTools.has(TOOL_IDS.VAULT_SEARCH) && hasVaultScope ? retrievalIndexIdentity : null,
       runtime: retrievalRuntime,
       topK: modelConfig.topK,
       signal: controller.signal,
@@ -1801,7 +1975,7 @@ function App() {
           <div className="topbar-actions"><button className="icon-button mobile-settings-button" onClick={() => handleOpenSection('settings')} aria-label="Open settings"><Settings2 size={18} /></button></div>
         </header>
 
-        {activeSection === 'launcher' ? <WorkspaceLauncher onOpen={openWorkspaceTab} /> : activeSection === 'settings' ? <SettingsWorkspace key={`settings-${providerCredentialsRevision}`} authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} retrievalModels={retrievalModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} mcpConfig={mcpConfig} onSaveMcpConfig={handleMcpConfigSave} mcpRuntime={mcpRuntime} mcpRuntimeBusy={mcpRuntimeBusy} mcpRuntimeError={mcpRuntimeError} onConnectMcpServer={handleConnectMcpServer} onDisconnectMcpServer={handleDisconnectMcpServer} vaultNoteCount={vaultNotes.length} dataSummary={localDataSummary} dataActionBlocked={dataActionBlocked} runtimeTarget={runtimeManifest?.target} useNativeDataFiles={supportsDesktopDataFiles} onExportData={handleExportLocalData} onImportData={handleImportLocalData} onImportDataFromDesktop={handleImportLocalDataFromDesktop} onClearHistory={handleClearLocalHistory} /> : activeSection === 'graph' ? <KnowledgeGraphSection
+        {activeSection === 'launcher' ? <WorkspaceLauncher onOpen={openWorkspaceTab} /> : activeSection === 'settings' ? <SettingsWorkspace key={`settings-${providerCredentialsRevision}`} authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnectChatgpt={handleConnectChatgpt} onLogoutChatgpt={handleLogoutChatgpt} onRefreshModels={refreshChatgptModels} chatModels={chatModels} retrievalModels={retrievalModels} modelConfig={modelConfig} onSaveModelConfig={handleSettingsSave} retrievalIndexLifecycle={retrievalIndexLifecycle} onBuildRetrievalIndex={() => startRetrievalIndexBuild(false)} onCancelRetrievalIndex={cancelRetrievalIndexBuild} onRebuildRetrievalIndex={() => startRetrievalIndexBuild(true)} onRefreshRetrievalIndex={() => refreshRetrievalIndex({ forceStatus: true })} providerConfigs={providerConfigs} onSaveProviderConfigs={handleProviderConfigsSave} mcpConfig={mcpConfig} onSaveMcpConfig={handleMcpConfigSave} mcpRuntime={mcpRuntime} mcpRuntimeBusy={mcpRuntimeBusy} mcpRuntimeError={mcpRuntimeError} onConnectMcpServer={handleConnectMcpServer} onDisconnectMcpServer={handleDisconnectMcpServer} vaultNoteCount={vaultNotes.length} dataSummary={localDataSummary} dataActionBlocked={dataActionBlocked} runtimeTarget={runtimeManifest?.target} useNativeDataFiles={supportsDesktopDataFiles} onExportData={handleExportLocalData} onImportData={handleImportLocalData} onImportDataFromDesktop={handleImportLocalDataFromDesktop} onClearHistory={handleClearLocalHistory} /> : activeSection === 'graph' ? <KnowledgeGraphSection
           key={activeTabId}
           index={vaultIndex}
           onConnectVault={handleConnectVault}
@@ -1836,7 +2010,7 @@ function App() {
             phase={phase}
             knowledgePanelProps={activeResearchSession.knowledgeCurator ? { session: knowledgeAgentSession, contextSummary: knowledgeAgentSession.context, descriptors: knowledgeToolDescriptors, input: knowledgeAgentInput, onInput: setKnowledgeAgentInput, onSubmit: submitKnowledgeQuestion, onAction: handleKnowledgeAction, approval: knowledgeApproval, onResolveApproval: resolveKnowledgeApproval, disabled: !knowledgeAgentSession.context } : null}
             setupProps={{ config: activeResearchSession.configSnapshot, selectedModel, models: chatModels, vaultName, vaultNoteCount: vaultNotes.length, vaultSyncState: syncState, mcpConnected: mcpRuntime.sessions.length > 0, authStatus, authBusy, modelCatalog, modelsBusy, onSelectAgent: handleSelectAgent, onUpdateIdentity: handleUpdateAgentIdentity, onUpdateSystemPrompt: handleUpdateAgentSystemPrompt, onResetSystemPrompt: handleResetAgentSystemPrompt, onSelectModel: handleModelSelect, onSelectVault: handleSelectResearchVault, onToggleTool: handleToggleResearchTool, onConnectVault: handleConnectVault, onConnectChatgpt: handleConnectChatgpt, onLogoutChatgpt: handleLogoutChatgpt, onRefreshModels: refreshChatgptModels, onStart: handleStartResearch }}
-             conversationProps={{ config: activeResearchSession.configSnapshot, selectedModel, vaultName: activeHasVaultScope ? vaultName : '', mcpConnected: mcpRuntime.sessions.length > 0, canEdit: messages.length === 0, onEdit: handleEditResearchSetup, messages, running, activeStage, retrievalPacket, input, setInput, onSubmit: submitQuestion, disabled: anyResearchRunning, models: chatModels, authStatus, authBusy, modelCatalog, modelsBusy, onSelectModel: handleModelSelect, onConnectChatgpt: handleConnectChatgpt, onLogoutChatgpt: handleLogoutChatgpt, onRefreshModels: refreshChatgptModels, onOpenNote: setSelectedNote, linkedNotes: inspectorNotes, sources: inspectorSources, topK: modelConfig.topK, embeddingLabel, rerankLabel, retrievalIndexState, answerMode, runStatus, wikilinksEnabled: activeHasVaultScope && activeResearchSession.configSnapshot?.enabledTools?.includes(TOOL_IDS.VAULT_WIKILINKS), onPause: handlePause }}
+             conversationProps={{ config: activeResearchSession.configSnapshot, selectedModel, vaultName: activeHasVaultScope ? vaultName : '', mcpConnected: mcpRuntime.sessions.length > 0, canEdit: messages.length === 0, onEdit: handleEditResearchSetup, messages, running, activeStage, retrievalPacket, input, setInput, onSubmit: submitQuestion, disabled: anyResearchRunning, models: chatModels, authStatus, authBusy, modelCatalog, modelsBusy, onSelectModel: handleModelSelect, onConnectChatgpt: handleConnectChatgpt, onLogoutChatgpt: handleLogoutChatgpt, onRefreshModels: refreshChatgptModels, onOpenNote: setSelectedNote, linkedNotes: inspectorNotes, sources: inspectorSources, topK: modelConfig.topK, embeddingLabel, rerankLabel, retrievalIndexState, retrievalIndexLifecycle, answerMode, runStatus, wikilinksEnabled: activeHasVaultScope && activeResearchSession.configSnapshot?.enabledTools?.includes(TOOL_IDS.VAULT_WIKILINKS), onPause: handlePause }}
             note={selectedNote}
             onCloseNote={() => setSelectedNote(null)}
             approval={pendingToolApproval}

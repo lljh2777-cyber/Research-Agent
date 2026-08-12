@@ -515,7 +515,18 @@ function LocalModelsPage() {
   </div>
 }
 
-function RetrievalSettingsPage({ config, onSave, retrievalModels = [] }) {
+const RETRIEVAL_INDEX_STATE_COPY = Object.freeze({
+  unavailable: 'The Runtime Retrieval Index is unavailable; lexical retrieval remains available.',
+  'not-built': 'No Runtime Retrieval Index is built yet; lexical retrieval remains available.',
+  building: 'Runtime is building the Retrieval Index from the current Vault snapshot.',
+  ready: 'A validated Runtime Retrieval Index is ready for hybrid retrieval.',
+  stale: 'The Runtime Retrieval Index is stale for the current Vault configuration; rebuild it explicitly.',
+  degraded: 'The Runtime Retrieval Index is degraded; lexical retrieval remains available.',
+  failed: 'The Runtime Retrieval Index failed safely; lexical retrieval remains available.',
+  cancelled: 'The Retrieval Index build was cancelled; rebuild it explicitly when ready.',
+})
+
+function RetrievalSettingsPage({ config, onSave, retrievalModels = [], retrievalIndexLifecycle, onBuildRetrievalIndex, onCancelRetrievalIndex, onRebuildRetrievalIndex, onRefreshRetrievalIndex }) {
   const [draft, setDraft] = useState(config)
   const [saved, setSaved] = useState(false)
   const [feedback, setFeedback] = useState('')
@@ -554,7 +565,21 @@ function RetrievalSettingsPage({ config, onSave, retrievalModels = [] }) {
     </section>}
     {feedback && <div className="provider-feedback error" role="alert">{feedback}</div>}
     {!retrievalModels.length && <div className="provider-security-note"><Info size={16} /><span><strong>No discovered retrieval models</strong>Connect a Provider and refresh its account-visible model catalog before selecting embedding or reranker models.</span></div>}
-    <div className="provider-security-note"><Database size={16} /><span><strong>Index lifecycle</strong>Vector index storage and rebuild/progress controls are not available in this slice. Until Runtime index storage is published, retrieval remains lexical and any remote configuration is shown as not built/degraded.</span></div>
+    <section className="settings-form-card retrieval-index-lifecycle" aria-labelledby="retrieval-index-lifecycle-title">
+      <div className="settings-section-heading"><div><h3 id="retrieval-index-lifecycle-title">Retrieval Index</h3><p>Runtime-owned storage keeps vectors separate from the UI. Only a validated ready index can enable hybrid retrieval.</p></div><span>{retrievalIndexLifecycle?.state || 'unavailable'}</span></div>
+      <div className="provider-security-note">
+        <Database size={16} />
+        <span><strong>{retrievalIndexLifecycle?.message || RETRIEVAL_INDEX_STATE_COPY[retrievalIndexLifecycle?.state] || RETRIEVAL_INDEX_STATE_COPY.unavailable}</strong>{retrievalIndexLifecycle?.progress ? `${retrievalIndexLifecycle.progress.completed} / ${retrievalIndexLifecycle.progress.total} chunks processed` : retrievalIndexLifecycle?.state !== 'ready' ? 'The lexical path remains available.' : 'Hybrid retrieval is enabled only for this validated ready index.'}</span>
+      </div>
+      {retrievalIndexLifecycle?.state === 'building' && <div className="settings-progress" aria-label="Retrieval Index progress"><span style={{ width: `${retrievalIndexLifecycle.progress?.total ? Math.round((retrievalIndexLifecycle.progress.completed / retrievalIndexLifecycle.progress.total) * 100) : 0}%` }} /></div>}
+      <div className="settings-inline-actions">
+        <button className="settings-secondary-button" type="button" onClick={onRefreshRetrievalIndex} disabled={!onRefreshRetrievalIndex || retrievalIndexLifecycle?.state === 'building'}><RefreshCw size={14} />Refresh status</button>
+        {retrievalIndexLifecycle?.state === 'building'
+          ? <button className="settings-secondary-button" type="button" onClick={onCancelRetrievalIndex}><span>Cancel build</span></button>
+          : <button className="settings-primary-button" type="button" onClick={retrievalIndexLifecycle?.state === 'ready' || retrievalIndexLifecycle?.state === 'stale' ? onRebuildRetrievalIndex : onBuildRetrievalIndex} disabled={!onBuildRetrievalIndex || retrievalIndexLifecycle?.state === 'unavailable'}>{retrievalIndexLifecycle?.state === 'ready' || retrievalIndexLifecycle?.state === 'stale' ? 'Rebuild index' : 'Build index'}</button>}
+      </div>
+      {retrievalIndexLifecycle?.reason && <small className="settings-muted-line">Reason: {retrievalIndexLifecycle.message}</small>}
+    </section>
   </div>
 }
 
@@ -725,7 +750,7 @@ function DataManagementPage({ summary, runtimeTarget, actionBlocked, useNativeFi
   </div>
 }
 
-export default function SettingsWorkspace({ authStatus, authBusy, authError, modelCatalog, modelsBusy, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, chatModels, retrievalModels, modelConfig, onSaveModelConfig, providerConfigs, onSaveProviderConfigs, mcpConfig, onSaveMcpConfig, mcpRuntime, mcpRuntimeBusy, mcpRuntimeError, onConnectMcpServer, onDisconnectMcpServer, vaultNoteCount, dataSummary, dataActionBlocked, runtimeTarget, useNativeDataFiles, onExportData, onImportData, onImportDataFromDesktop, onClearHistory }) {
+export default function SettingsWorkspace({ authStatus, authBusy, authError, modelCatalog, modelsBusy, onConnectChatgpt, onLogoutChatgpt, onRefreshModels, chatModels, retrievalModels, modelConfig, onSaveModelConfig, retrievalIndexLifecycle, onBuildRetrievalIndex, onCancelRetrievalIndex, onRebuildRetrievalIndex, onRefreshRetrievalIndex, providerConfigs, onSaveProviderConfigs, mcpConfig, onSaveMcpConfig, mcpRuntime, mcpRuntimeBusy, mcpRuntimeError, onConnectMcpServer, onDisconnectMcpServer, vaultNoteCount, dataSummary, dataActionBlocked, runtimeTarget, useNativeDataFiles, onExportData, onImportDataFromDesktop, onImportData, onClearHistory }) {
   const [activePage, setActivePage] = useState('providers')
   const [providerQuery, setProviderQuery] = useState('')
   const [selectedProviderId, setSelectedProviderId] = useState(API_PROVIDERS[0].id)
@@ -735,7 +760,7 @@ export default function SettingsWorkspace({ authStatus, authBusy, authError, mod
   else if (activePage === 'defaults') content = <DefaultModelsPage config={modelConfig} chatModels={chatModels} onSave={onSaveModelConfig} />
   else if (activePage === 'local-models') content = <LocalModelsPage />
   else if (activePage === 'mcp') content = <McpSettingsPage config={mcpConfig} onChange={onSaveMcpConfig} runtime={mcpRuntime} runtimeBusy={mcpRuntimeBusy} runtimeError={mcpRuntimeError} onConnectServer={onConnectMcpServer} onDisconnectServer={onDisconnectMcpServer} vaultNoteCount={vaultNoteCount} />
-  else if (activePage === 'retrieval') content = <RetrievalSettingsPage config={modelConfig} retrievalModels={retrievalModels} onSave={onSaveModelConfig} />
+  else if (activePage === 'retrieval') content = <RetrievalSettingsPage config={modelConfig} retrievalModels={retrievalModels} onSave={onSaveModelConfig} retrievalIndexLifecycle={retrievalIndexLifecycle} onBuildRetrievalIndex={onBuildRetrievalIndex} onCancelRetrievalIndex={onCancelRetrievalIndex} onRebuildRetrievalIndex={onRebuildRetrievalIndex} onRefreshRetrievalIndex={onRefreshRetrievalIndex} />
   else if (activePage === 'data') content = <DataManagementPage summary={dataSummary} runtimeTarget={runtimeTarget} actionBlocked={dataActionBlocked} useNativeFiles={useNativeDataFiles} onExport={onExportData} onImport={onImportData} onImportFromDesktop={onImportDataFromDesktop} onClearHistory={onClearHistory} />
   else content = <FeaturePreviewPage pageId={activePage} />
 
