@@ -20,6 +20,9 @@ function memoryStorage() {
   return {
     getItem: (key) => values.get(key) || null,
     setItem: (key, value) => values.set(key, String(value)),
+    removeItem: (key) => values.delete(key),
+    key: (index) => [...values.keys()][index] || null,
+    get length() { return values.size },
   }
 }
 
@@ -114,6 +117,50 @@ describe('runtime adapters', () => {
     expect(vaultCall[1].signal).toBeInstanceOf(AbortSignal)
     controller.abort()
     expect(vaultCall[1].signal.aborted).toBe(true)
+  })
+
+  it('exposes Runtime-owned Retrieval Index lifecycle without direct storage access in consumers', async () => {
+    const storage = memoryStorage()
+    const fetchImpl = vi.fn(async (url, options) => {
+      if (url === '/api/providers/embeddings') {
+        const body = JSON.parse(options.body)
+        return new Response(JSON.stringify({
+          ok: true,
+          providerId: body.providerId,
+          modelId: body.model,
+          dimensions: 2,
+          embeddings: body.input.map((text, index) => ({ index, vector: [index + 0.1, text.length / 100] })),
+          provenance: { providerId: body.providerId, modelId: body.model },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+    const adapter = createWebRuntimeAdapter({
+      fetchImpl,
+      env: {},
+      windowRef: { localStorage: storage, setTimeout, clearTimeout },
+    })
+    const identity = {
+      schemaVersion: 2,
+      vault: { id: 'vault-runtime', revision: 'rev-1' },
+      chunking: { algorithm: 'section-window-v1', size: 900, overlap: 120 },
+      embedding: { providerId: 'siliconflow', modelId: 'BAAI/bge-m3', dimensions: 2 },
+    }
+    const chunks = [{ id: 'note::0', noteId: 'note', sourceId: 'source:note', path: 'note.md', ordinal: 0, heading: null }]
+    const built = await adapter.retrievalIndexes.build({
+      identity,
+      chunks,
+      texts: ['bounded Vault text'],
+      provider: { endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'session-only' },
+    })
+    expect(built.state).toBe('ready')
+    await expect(adapter.retrievalIndexes.status({ identity })).resolves.toMatchObject({ state: 'ready' })
+    await expect(adapter.retrievalIndexes.progress({ identity })).resolves.toMatchObject({ state: 'ready' })
+    await expect(adapter.retrievalIndexes.read({ identity })).resolves.toMatchObject({ state: 'ready', vectors: [{ chunkId: 'note::0' }] })
+    const persisted = Array.from({ length: storage.length }, (_, index) => storage.getItem(storage.key(index))).join('\n')
+    expect(persisted).not.toContain('session-only')
+    expect(persisted).not.toContain('api.siliconflow')
+    expect(fetchImpl.mock.calls).toHaveLength(1)
   })
 
   it('exposes bounded embedding and rerank operations through the same abortable Provider boundary', async () => {

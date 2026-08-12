@@ -1,6 +1,7 @@
 import { getVaultServiceBaseUrl } from './services.js'
 import { getVaultName, parseVaultDirectory, parseVaultFiles, parseVaultTextEntries } from '../vault.js'
 import { RUNTIME_ANNOTATION_REQUEST_MAX_BYTES } from '../../shared/runtime-action-contracts.mjs'
+import { createRetrievalIndexStorage, createRetrievalIndexStore } from './retrieval-index-store.js'
 
 function browserWindow() {
   return globalThis.window
@@ -237,6 +238,11 @@ export function createWebRuntimeAdapter({
     },
   })
 
+  const retrievalIndexes = createRetrievalIndexStore({
+    storage: createRetrievalIndexStorage({ windowRef }),
+    embed: (input) => providers.embed(input),
+  })
+
   const mcp = Object.freeze({
     bootstrap({ signal } = {}) {
       return api.fetch('/api/mcp/bootstrap', {
@@ -388,6 +394,7 @@ export function createWebRuntimeAdapter({
     vault,
     dataFiles,
     providers,
+    retrievalIndexes,
     mcp,
     researchRuns,
     annotations,
