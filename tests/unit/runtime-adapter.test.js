@@ -116,6 +116,31 @@ describe('runtime adapters', () => {
     expect(vaultCall[1].signal.aborted).toBe(true)
   })
 
+  it('exposes bounded embedding and rerank operations through the same abortable Provider boundary', async () => {
+    const fetchImpl = vi.fn(async (url) => new Response(
+      url === '/api/providers/embeddings'
+        ? JSON.stringify({ ok: true, providerId: 'siliconflow', modelId: 'BAAI/bge-m3', dimensions: 2, embeddings: [{ index: 0, vector: [0.1, 0.2] }], provenance: { providerId: 'siliconflow', modelId: 'BAAI/bge-m3' } })
+        : JSON.stringify({ ok: true, providerId: 'siliconflow', modelId: 'BAAI/bge-reranker-v2-m3', scores: [{ chunkId: 'chunk-1', score: 0.8 }], provenance: { providerId: 'siliconflow', modelId: 'BAAI/bge-reranker-v2-m3' } }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ))
+    const adapter = createWebRuntimeAdapter({ fetchImpl, env: {}, windowRef: { setTimeout, clearTimeout } })
+    const controller = new AbortController()
+
+    await expect(adapter.providers.embed({
+      providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'session-key', model: 'BAAI/bge-m3', input: 'text', signal: controller.signal,
+    })).resolves.toMatchObject({ dimensions: 2, provenance: { providerId: 'siliconflow' } })
+    await expect(adapter.providers.rerank({
+      providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'session-key', model: 'BAAI/bge-reranker-v2-m3', query: 'q', candidates: [{ chunkId: 'chunk-1', excerpt: 'text' }], signal: controller.signal,
+    })).resolves.toMatchObject({ scores: [{ chunkId: 'chunk-1', score: 0.8 }] })
+
+    const embeddingCall = fetchImpl.mock.calls.find(([url]) => url === '/api/providers/embeddings')
+    const rerankCall = fetchImpl.mock.calls.find(([url]) => url === '/api/providers/rerank')
+    expect(embeddingCall[1].signal).toBe(controller.signal)
+    expect(rerankCall[1].signal).toBe(controller.signal)
+    expect(JSON.parse(embeddingCall[1].body)).toMatchObject({ providerId: 'siliconflow', apiKey: 'session-key', model: 'BAAI/bge-m3', input: 'text' })
+    expect(JSON.parse(rerankCall[1].body)).toMatchObject({ providerId: 'siliconflow', apiKey: 'session-key', model: 'BAAI/bge-reranker-v2-m3', query: 'q' })
+  })
+
   it('replaces only runtime operations when an Electron preload bridge exists', async () => {
     const manifest = createRuntimeManifest({ target: RUNTIME_TARGETS.DESKTOP })
     const calls = []

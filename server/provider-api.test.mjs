@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
 import test from 'node:test'
 
-import { discoverProviderModels, inferModelCapabilities, manageBailianResponse, normalizeProviderModels } from './provider-api.mjs'
+import { createProviderApiMiddleware, discoverProviderModels, inferModelCapabilities, manageBailianResponse, normalizeProviderModels } from './provider-api.mjs'
 
 test('normalizes OpenAI-compatible model payloads and infers roles', () => {
   const models = normalizeProviderModels('openai', {
@@ -168,4 +169,46 @@ test('retrieves and deletes stored Bailian Responses through the local adapter b
   assert.equal(deleted.deleted, true)
   assert.equal(captured[0].options.headers.Authorization, 'Bearer secret')
   assert.equal(captured[1].options.method, 'DELETE')
+})
+
+test('routes SiliconFlow embedding and rerank operations through the server Provider boundary', async () => {
+  const upstream = []
+  const middleware = createProviderApiMiddleware({
+    fetchImpl: async (url, options) => {
+      upstream.push({ url, options })
+      return new Response(url.endsWith('/embeddings')
+        ? JSON.stringify({ data: [{ index: 0, embedding: [0.1, 0.2] }] })
+        : JSON.stringify({ results: [{ index: 0, relevance_score: 0.8 }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    },
+  })
+  const server = createServer((request, response) => {
+    void middleware(request, response, () => { response.writeHead(404); response.end() })
+  })
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const origin = `http://127.0.0.1:${server.address().port}`
+  try {
+    const embeddingResponse = await fetch(`${origin}/api/providers/embeddings`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'embed', input: 'text', dimensions: 2 }),
+    })
+    assert.equal(embeddingResponse.status, 200)
+    assert.deepEqual((await embeddingResponse.json()).embeddings, [{ index: 0, vector: [0.1, 0.2] }])
+
+    const rerankResponse = await fetch(`${origin}/api/providers/rerank`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ providerId: 'siliconflow', endpoint: 'https://api.siliconflow.cn/v1', apiKey: 'secret', model: 'rerank', query: 'q', candidates: [{ chunkId: 'chunk-1', excerpt: 'text' }] }),
+    })
+    assert.equal(rerankResponse.status, 200)
+    assert.deepEqual((await rerankResponse.json()).scores, [{ chunkId: 'chunk-1', score: 0.8 }])
+    assert.equal(upstream[0].url, 'https://api.siliconflow.cn/v1/embeddings')
+    assert.equal(upstream[1].url, 'https://api.siliconflow.cn/v1/rerank')
+    assert.equal(upstream[0].options.headers.Authorization, 'Bearer secret')
+    assert.equal(JSON.parse(upstream[1].options.body).documents[0], 'text')
+    assert.equal(JSON.parse(upstream[1].options.body).documents.includes('chunk-1'), false)
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  }
 })

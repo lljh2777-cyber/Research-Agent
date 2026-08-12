@@ -193,6 +193,25 @@ export function createWebRuntimeAdapter({
     },
   })
 
+  async function providerJsonOperation(path, { signal, ...input } = {}) {
+    const response = await api.fetch(path, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+      signal,
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      return {
+        ok: false,
+        code: payload.code || 'runtime_request_failed',
+        error: payload.error || payload.message || 'Provider operation failed.',
+        ...payload,
+      }
+    }
+    return payload
+  }
+
   const providers = Object.freeze({
     discoverModels({ providerId, endpoint, apiKey, signal }) {
       return api.fetch('/api/providers/models', {
@@ -209,6 +228,12 @@ export function createWebRuntimeAdapter({
         body: JSON.stringify({ providerId, endpoint, endpointType, apiKey, model, messages, options }),
         signal,
       })
+    },
+    embed(input = {}) {
+      return providerJsonOperation('/api/providers/embeddings', input)
+    },
+    rerank(input = {}) {
+      return providerJsonOperation('/api/providers/rerank', input)
     },
   })
 

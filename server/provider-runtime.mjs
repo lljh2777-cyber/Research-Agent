@@ -6,6 +6,13 @@ import { SILICONFLOW_PROVIDER_DESCRIPTOR } from '../shared/siliconflow-provider.
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 4096
 const REQUEST_TIMEOUT_MS = 120_000
+export const PROVIDER_EMBEDDING_MAX_INPUTS = 128
+export const PROVIDER_EMBEDDING_MAX_ITEM_BYTES = 16_384
+export const PROVIDER_EMBEDDING_MAX_TOTAL_BYTES = 256 * 1024
+export const PROVIDER_EMBEDDING_MAX_DIMENSIONS = 16_384
+export const PROVIDER_RERANK_MAX_CANDIDATES = 50
+export const PROVIDER_RERANK_MAX_TEXT_BYTES = 16_384
+export const PROVIDER_RERANK_MAX_TOP_K = 50
 
 export const PROVIDER_REGISTRY = Object.freeze({
   openai: { protocol: 'openai-responses', auth: 'bearer', chatRoute: 'responses' },
@@ -18,8 +25,8 @@ export const PROVIDER_REGISTRY = Object.freeze({
   compatible: { protocol: 'openai-chat-completions', auth: 'optional-bearer', chatRoute: 'chat/completions' },
 })
 
-function runtimeError(message, statusCode = 400) {
-  return Object.assign(new Error(message), { statusCode })
+function runtimeError(message, statusCode = 400, code) {
+  return Object.assign(new Error(message), { statusCode, ...(code ? { code } : {}) })
 }
 
 export function cleanProviderBaseUrl(value) {
@@ -42,12 +49,12 @@ export function appendProviderRoute(baseUrl, route) {
   return `${baseUrl}/${normalizedRoute}`
 }
 
-function providerHeaders(providerId, protocol, apiKey = '') {
+function providerHeaders(providerId, protocol, apiKey = '', accept = 'text/event-stream') {
   const provider = PROVIDER_REGISTRY[providerId]
   if (!provider) throw runtimeError(`Unsupported provider: ${providerId}`)
   const key = String(apiKey || '').trim()
   if (provider.auth !== 'optional-bearer' && !key) throw runtimeError('Enter an API key before using this provider.')
-  const headers = { Accept: 'text/event-stream', 'Content-Type': 'application/json' }
+  const headers = { Accept: accept, 'Content-Type': 'application/json' }
   const auth = (providerId === 'deepseek' || providerId === 'bailian') && protocol === 'anthropic-messages' ? 'anthropic' : provider.auth
   if (auth === 'bearer' || (auth === 'optional-bearer' && key)) headers.Authorization = `Bearer ${key}`
   if (auth === 'anthropic') {
@@ -331,6 +338,225 @@ export function buildBailianResponseResourceRequest({ endpoint, apiKey, response
   }
 }
 
+function byteLength(value) {
+  return new TextEncoder().encode(value).length
+}
+
+function requireSiliconFlowCapability(providerId, operation) {
+  if (providerId !== 'siliconflow') {
+    throw runtimeError(`Provider ${providerId || 'unknown'} does not expose ${operation}.`, 400, 'capability_unavailable')
+  }
+}
+
+function normalizeEmbeddingInputs(value) {
+  const source = value?.inputs ?? value?.input ?? value?.query
+  const inputs = Array.isArray(source) ? source : [source]
+  if (!inputs.length || inputs.length > PROVIDER_EMBEDDING_MAX_INPUTS) {
+    throw runtimeError(`Embedding accepts 1 to ${PROVIDER_EMBEDDING_MAX_INPUTS} inputs.`)
+  }
+  let totalBytes = 0
+  const normalized = inputs.map((item) => {
+    const text = typeof item === 'string' ? item : ''
+    const bytes = byteLength(text)
+    if (!text.trim()) throw runtimeError('Embedding inputs must contain text.')
+    if (bytes > PROVIDER_EMBEDDING_MAX_ITEM_BYTES) {
+      throw runtimeError(`Each embedding input must be at most ${PROVIDER_EMBEDDING_MAX_ITEM_BYTES} bytes.`)
+    }
+    totalBytes += bytes
+    return text
+  })
+  if (totalBytes > PROVIDER_EMBEDDING_MAX_TOTAL_BYTES) {
+    throw runtimeError(`Embedding inputs must be at most ${PROVIDER_EMBEDDING_MAX_TOTAL_BYTES} bytes in total.`)
+  }
+  return normalized
+}
+
+function normalizeDimensions(value) {
+  if (value === undefined || value === null || value === '') return undefined
+  const dimensions = Number(value)
+  if (!Number.isInteger(dimensions) || dimensions < 1 || dimensions > PROVIDER_EMBEDDING_MAX_DIMENSIONS) {
+    throw runtimeError(`Embedding dimensions must be an integer from 1 to ${PROVIDER_EMBEDDING_MAX_DIMENSIONS}.`)
+  }
+  return dimensions
+}
+
+export function buildProviderEmbeddingRequest({ providerId, endpoint, apiKey, model, input, inputs, query, dimensions }) {
+  requireSiliconFlowCapability(providerId, 'embedding')
+  const cleanEndpoint = cleanProviderBaseUrl(endpoint)
+  const cleanModel = String(model || '').trim()
+  if (!cleanModel) throw runtimeError('Choose an embedding model before starting the request.')
+  const normalizedInputs = normalizeEmbeddingInputs({ input, inputs, query })
+  const normalizedDimensions = normalizeDimensions(dimensions)
+  return {
+    url: appendProviderRoute(cleanEndpoint, 'embeddings'),
+    body: {
+      model: cleanModel,
+      input: normalizedInputs,
+      ...(normalizedDimensions ? { dimensions: normalizedDimensions } : {}),
+    },
+    headers: providerHeaders(providerId, 'openai-chat-completions', apiKey, 'application/json'),
+    providerId,
+    modelId: cleanModel,
+  }
+}
+
+function normalizeRerankCandidates(value) {
+  if (!Array.isArray(value) || !value.length || value.length > PROVIDER_RERANK_MAX_CANDIDATES) {
+    throw runtimeError(`Rerank accepts 1 to ${PROVIDER_RERANK_MAX_CANDIDATES} candidates.`)
+  }
+  return value.map((candidate) => {
+    const candidateId = String(candidate?.candidateId ?? candidate?.chunkId ?? candidate?.id ?? '').trim()
+    const text = String(candidate?.text ?? candidate?.excerpt ?? candidate?.content ?? '').trim()
+    if (!candidateId || !text) throw runtimeError('Rerank candidates require an ID and text.')
+    if (byteLength(text) > PROVIDER_RERANK_MAX_TEXT_BYTES) {
+      throw runtimeError(`Each rerank candidate must be at most ${PROVIDER_RERANK_MAX_TEXT_BYTES} bytes.`)
+    }
+    return { candidateId, text }
+  })
+}
+
+function normalizeRerankTopK(value, candidateCount) {
+  if (value === undefined || value === null || value === '') return Math.min(candidateCount, PROVIDER_RERANK_MAX_TOP_K)
+  const topK = Number(value)
+  if (!Number.isInteger(topK) || topK < 1 || topK > PROVIDER_RERANK_MAX_TOP_K) {
+    throw runtimeError(`Rerank topK must be an integer from 1 to ${PROVIDER_RERANK_MAX_TOP_K}.`)
+  }
+  return Math.min(topK, candidateCount)
+}
+
+export function buildProviderRerankRequest({ providerId, endpoint, apiKey, model, query, candidates, topK, top_n }) {
+  requireSiliconFlowCapability(providerId, 'rerank')
+  const cleanEndpoint = cleanProviderBaseUrl(endpoint)
+  const cleanModel = String(model || '').trim()
+  if (!cleanModel) throw runtimeError('Choose a reranker model before starting the request.')
+  const cleanQuery = String(query || '').trim()
+  if (!cleanQuery) throw runtimeError('Rerank requires a non-empty query.')
+  if (byteLength(cleanQuery) > PROVIDER_RERANK_MAX_TEXT_BYTES) {
+    throw runtimeError(`The rerank query must be at most ${PROVIDER_RERANK_MAX_TEXT_BYTES} bytes.`)
+  }
+  const normalizedCandidates = normalizeRerankCandidates(candidates)
+  const normalizedTopK = normalizeRerankTopK(topK ?? top_n, normalizedCandidates.length)
+  return {
+    url: appendProviderRoute(cleanEndpoint, 'rerank'),
+    body: {
+      model: cleanModel,
+      query: cleanQuery,
+      documents: normalizedCandidates.map(({ text }) => text),
+      top_n: normalizedTopK,
+      return_documents: false,
+    },
+    headers: providerHeaders(providerId, 'openai-chat-completions', apiKey, 'application/json'),
+    providerId,
+    modelId: cleanModel,
+    candidates: normalizedCandidates,
+  }
+}
+
+function malformedProviderResponse(message) {
+  return Object.assign(new Error(message), { statusCode: 502, code: 'malformed_response' })
+}
+
+function finiteVector(value, dimensions) {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.length <= PROVIDER_EMBEDDING_MAX_DIMENSIONS
+    && (dimensions === undefined || value.length === dimensions)
+    && value.every((item) => Number.isFinite(Number(item)))
+}
+
+export function normalizeProviderEmbeddingResponse(payload, { providerId, modelId, requestedDimensions } = {}) {
+  const records = Array.isArray(payload?.data) ? payload.data : null
+  if (!records || !records.length || records.length > PROVIDER_EMBEDDING_MAX_INPUTS) {
+    throw malformedProviderResponse('The provider returned an invalid embedding response.')
+  }
+  const vectors = records.map((record, position) => {
+    const index = record?.index === undefined ? position : Number(record.index)
+    const vector = record?.embedding
+    if (!Number.isInteger(index) || index < 0 || index >= records.length || !finiteVector(vector, requestedDimensions)) {
+      throw malformedProviderResponse('The provider returned invalid embedding vectors.')
+    }
+    return { index, vector: vector.map(Number) }
+  })
+  const dimensions = vectors[0].vector.length
+  if (vectors.some(({ vector }) => vector.length !== dimensions) || new Set(vectors.map(({ index }) => index)).size !== vectors.length) {
+    throw malformedProviderResponse('The provider returned embedding vectors with inconsistent dimensions or indexes.')
+  }
+  return {
+    ok: true,
+    providerId,
+    modelId,
+    dimensions,
+    embeddings: vectors.sort((left, right) => left.index - right.index),
+    provenance: { providerId, modelId },
+  }
+}
+
+export function normalizeProviderRerankResponse(payload, { providerId, modelId, candidates, topK } = {}) {
+  const records = Array.isArray(payload?.results) ? payload.results : null
+  if (!records || records.length > candidates.length) throw malformedProviderResponse('The provider returned an invalid rerank response.')
+  const seen = new Set()
+  const results = records.map((record, rank) => {
+    const index = Number(record?.index)
+    const score = Number(record?.relevance_score ?? record?.score)
+    if (!Number.isInteger(index) || index < 0 || index >= candidates.length || seen.has(index) || !Number.isFinite(score) || score < 0 || score > 1) {
+      throw malformedProviderResponse('The provider returned invalid rerank indexes or scores.')
+    }
+    seen.add(index)
+    return { candidateId: candidates[index].candidateId, score: Number(score.toFixed(6)), rank }
+  }).slice(0, topK)
+  return {
+    ok: true,
+    providerId,
+    modelId,
+    results,
+    scores: results.map(({ candidateId, score }) => ({ chunkId: candidateId, score })),
+    provenance: { providerId, modelId },
+  }
+}
+
+async function executeProviderJson(request, input, fetchImpl) {
+  let response
+  const { signal: requestSignal, timeoutSignal } = createProviderRequestSignal(input.signal)
+  try {
+    response = await fetchImpl(request.url, {
+      method: 'POST',
+      headers: request.headers,
+      body: JSON.stringify(request.body),
+      signal: requestSignal,
+    })
+  } catch (error) {
+    if (input.signal?.aborted) throw Object.assign(new Error('Provider operation cancelled.'), { name: 'AbortError' })
+    if (timeoutSignal.aborted || error?.name === 'TimeoutError') throw runtimeError('The provider operation timed out.', 504)
+    throw runtimeError(`Could not reach the provider endpoint: ${error?.message || 'network request failed'}`, 502)
+  }
+  if (!response.ok) throw await providerResponseError(response)
+  const payload = await response.json().catch(() => {
+    throw malformedProviderResponse('The provider returned invalid JSON.')
+  })
+  return payload
+}
+
+export async function executeProviderEmbedding(input, fetchImpl = fetch) {
+  const request = buildProviderEmbeddingRequest(input)
+  const payload = await executeProviderJson(request, input, fetchImpl)
+  return normalizeProviderEmbeddingResponse(payload, {
+    providerId: request.providerId,
+    modelId: request.modelId,
+    requestedDimensions: input.dimensions === undefined || input.dimensions === '' || input.dimensions === null ? undefined : Number(input.dimensions),
+  })
+}
+
+export async function executeProviderRerank(input, fetchImpl = fetch) {
+  const request = buildProviderRerankRequest(input)
+  const payload = await executeProviderJson(request, input, fetchImpl)
+  return normalizeProviderRerankResponse(payload, {
+    providerId: request.providerId,
+    modelId: request.modelId,
+    candidates: request.candidates,
+    topK: normalizeRerankTopK(input.topK ?? input.top_n, request.candidates.length),
+  })
+}
+
 export async function* parseServerSentEvents(body) {
   if (!body) throw runtimeError('The provider returned an empty response stream.', 502)
   const reader = body.getReader()
@@ -463,7 +689,11 @@ function extractProtocolEvents(protocol, event) {
 async function providerResponseError(response) {
   const payload = await response.json().catch(() => null)
   const detail = payload?.error?.message || payload?.message || `${response.status} ${response.statusText}`
-  return runtimeError(`Provider request failed: ${String(detail).slice(0, 500)}`, response.status >= 400 && response.status < 500 ? 400 : 502)
+  return runtimeError(
+    `Provider request failed: ${String(detail).slice(0, 500)}`,
+    response.status,
+    response.status === 404 ? 'provider_unavailable' : undefined,
+  )
 }
 
 export function createProviderRequestSignal(signal, timeoutMs = REQUEST_TIMEOUT_MS) {

@@ -1,4 +1,11 @@
-import { appendProviderRoute, buildBailianResponseResourceRequest, cleanProviderBaseUrl, streamProviderChat } from './provider-runtime.mjs'
+import {
+  appendProviderRoute,
+  buildBailianResponseResourceRequest,
+  cleanProviderBaseUrl,
+  executeProviderEmbedding,
+  executeProviderRerank,
+  streamProviderChat,
+} from './provider-runtime.mjs'
 import { normalizeProviderError } from './provider-errors.mjs'
 import { withDeepSeekModelProfile } from '../shared/deepseek-provider.mjs'
 import { BAILIAN_OFFICIAL_MODELS, withBailianModelProfile } from '../shared/bailian-provider.mjs'
@@ -198,7 +205,7 @@ function sendEvent(response, event) {
 export function createProviderApiMiddleware({ fetchImpl = fetch, credentialResolver, allowStreaming = true } = {}) {
   return async function providerApiMiddleware(request, response, next) {
     const path = new URL(request.url || '/', 'http://localhost').pathname
-    if (!['/api/providers/models', '/api/providers/responses/stream', '/api/providers/bailian/responses/resource'].includes(path)) return next()
+    if (!['/api/providers/models', '/api/providers/responses/stream', '/api/providers/bailian/responses/resource', '/api/providers/embeddings', '/api/providers/rerank'].includes(path)) return next()
     if (path === '/api/providers/responses/stream' && !allowStreaming) return sendJson(response, 404, { error: 'Desktop provider streams use the protected IPC runtime.' })
     if (request.method !== 'POST') {
       response.setHeader('Allow', 'POST')
@@ -231,11 +238,20 @@ export function createProviderApiMiddleware({ fetchImpl = fetch, credentialResol
         if (!response.destroyed) response.end()
         return
       }
+      if (path === '/api/providers/embeddings' || path === '/api/providers/rerank') {
+        const controller = new AbortController()
+        response.once('close', () => controller.abort())
+        const result = path === '/api/providers/embeddings'
+          ? await executeProviderEmbedding({ ...authorizedBody, signal: controller.signal }, fetchImpl)
+          : await executeProviderRerank({ ...authorizedBody, signal: controller.signal }, fetchImpl)
+        return sendJson(response, 200, result)
+      }
       const result = await discoverProviderModels(authorizedBody, fetchImpl)
       return sendJson(response, 200, result)
     } catch (error) {
-      const statusCode = Number(error?.statusCode) || (error?.name === 'TimeoutError' ? 504 : 502)
-      return sendJson(response, statusCode, { error: error?.message || 'Model discovery failed.' })
+      const normalized = normalizeProviderError(error)
+      const statusCode = Number(error?.statusCode) || normalized.statusCode || (error?.name === 'TimeoutError' ? 504 : 502)
+      return sendJson(response, statusCode, { error: normalized.message, ...normalized })
     }
   }
 }
