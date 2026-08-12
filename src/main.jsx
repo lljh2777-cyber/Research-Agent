@@ -76,7 +76,6 @@ import { retrieveHybridEvidence } from './researchRetrieval.js'
 import {
   createRetrievalIndexBuildInput,
   createRetrievalIndexIdentity,
-  identitiesMatch,
   normalizeLifecycleResult,
   reasonMessage,
   safeProgress,
@@ -765,6 +764,7 @@ function App() {
     const generation = previous.generation + 1
     const controller = new AbortController()
     let identity = retrievalIndexIdentity
+    let probedProviderConfigs = null
     retrievalIndexOperationRef.current = { generation, identity, controller, timer: null, building: true, lastState: 'building', phase: needsDimensionProbe ? 'dimension-probe' : 'build' }
     setReadyRetrievalIndex(null)
     if (needsDimensionProbe) {
@@ -793,8 +793,8 @@ function App() {
         }
         return
       }
-      const nextProviderConfigs = withProviderModelDimensions(providerConfigs, embeddingModel.providerId, embeddingModel.apiModelId, validatedProbe.dimensions)
-      if (!nextProviderConfigs || retrievalIndexOperationRef.current.generation !== generation) {
+      probedProviderConfigs = withProviderModelDimensions(providerConfigs, embeddingModel.providerId, embeddingModel.apiModelId, validatedProbe.dimensions)
+      if (!probedProviderConfigs || retrievalIndexOperationRef.current.generation !== generation) {
         if (retrievalIndexOperationRef.current.generation === generation) {
           retrievalIndexOperationRef.current.building = false
           setRetrievalIndexLifecycle({ state: 'failed', identity: null, progress: null, reason: 'embedding_dimension_probe_invalid', message: reasonMessage('embedding_dimension_probe_invalid') })
@@ -804,8 +804,7 @@ function App() {
       identity = identityResult.identity
       retrievalIndexOperationRef.current.identity = identity
       retrievalIndexOperationRef.current.phase = 'build'
-      saveProviderConfigs(nextProviderConfigs)
-      setProviderConfigs(nextProviderConfigs)
+      saveProviderConfigs(probedProviderConfigs)
     }
     const buildInput = createRetrievalIndexBuildInput({ identity, retrievalIndex, remoteEmbeddingConsent: true })
     if (!buildInput.ok || retrievalIndexOperationRef.current.generation !== generation) {
@@ -848,6 +847,9 @@ function App() {
     retrievalIndexOperationRef.current.timer = null
     retrievalIndexOperationRef.current.building = false
     await applyRetrievalIndexResult(result, identity, generation, controller.signal)
+    if (probedProviderConfigs && retrievalIndexOperationRef.current.generation === generation) {
+      setProviderConfigs(probedProviderConfigs)
+    }
   }, [activeHasVaultScope, applyRetrievalIndexResult, localRevision, modelConfig.chunkOverlap, modelConfig.chunkSize, modelConfig.remoteEmbeddingConsent, providerConfigs, refreshRetrievalIndex, retrievalIndex, retrievalIndexIdentity, retrievalIndexIdentityResult, retrievalRuntime.embedding, retrievalRuntime.selectedEmbedding, runtimeAdapter, vaultCapabilityId, vaultName])
 
   const cancelRetrievalIndexBuild = useCallback(async () => {
@@ -873,16 +875,6 @@ function App() {
 
   useEffect(() => {
     const previous = retrievalIndexOperationRef.current
-    if (previous.building && previous.identity && retrievalIndexIdentity && identitiesMatch(previous.identity, retrievalIndexIdentity)) {
-      const generation = previous.generation
-      return () => {
-        if (retrievalIndexOperationRef.current.generation !== generation) return
-        previous.controller?.abort()
-        if (previous.timer) window.clearTimeout(previous.timer)
-        if (previous.building) void runtimeAdapter.retrievalIndexes.cancel({ identity: previous.identity }).catch(() => {})
-        retrievalIndexOperationRef.current.generation += 1
-      }
-    }
     previous.controller?.abort()
     if (previous.timer) window.clearTimeout(previous.timer)
     if (previous.building && previous.identity) void runtimeAdapter.retrievalIndexes.cancel({ identity: previous.identity }).catch(() => {})
