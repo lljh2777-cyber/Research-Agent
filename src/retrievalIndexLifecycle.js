@@ -15,6 +15,10 @@ export const RETRIEVAL_INDEX_REASON_MESSAGES = Object.freeze({
   missing_vault_revision: 'The current Vault has no authoritative revision.',
   no_embedding_model: 'Select an account-visible embedding model to build a vector index.',
   embedding_dimensions_unavailable: 'The selected embedding capability does not expose dimensions.',
+  inspecting_embedding_dimensions: 'Inspecting embedding dimensions…',
+  embedding_dimension_probe_failed: 'Embedding dimensions could not be inspected safely.',
+  embedding_dimension_probe_mismatch: 'Embedding dimension inspection did not match the selected Provider and model.',
+  embedding_dimension_probe_invalid: 'Embedding dimension inspection returned invalid vector metadata.',
   remote_consent_required: 'Consent is required before Vault chunks can be sent for remote embedding.',
   embedding_capability_unavailable: 'The selected embedding capability is unavailable.',
   vault_chunks_unavailable: 'Authoritative Vault chunks are unavailable for index construction.',
@@ -183,6 +187,28 @@ export function stableVectorNorm(vector) {
   if (!(scale > 0) || !Number.isFinite(scale)) return null
   const norm = scale * Math.sqrt(sumSquares)
   return Number.isFinite(norm) && norm > 0 ? norm : null
+}
+
+export function validateEmbeddingDimensionProbe(result, { providerId, modelId } = {}) {
+  if (!result || result.ok !== true) {
+    return { ok: false, code: asReasonCode(result?.code || result?.error?.code, 'embedding_dimension_probe_failed') }
+  }
+  if (result.providerId !== providerId || result.modelId !== modelId
+    || result.provenance?.providerId !== providerId || result.provenance?.modelId !== modelId) {
+    return { ok: false, code: 'embedding_dimension_probe_mismatch' }
+  }
+  const dimensions = result.dimensions
+  if (!Number.isSafeInteger(dimensions) || dimensions <= 0 || dimensions > 16_384
+    || !Array.isArray(result.embeddings) || result.embeddings.length !== 1) {
+    return { ok: false, code: 'embedding_dimension_probe_invalid' }
+  }
+  const embedding = result.embeddings[0]
+  if (!embedding || !Number.isSafeInteger(embedding.index) || embedding.index !== 0
+    || !Array.isArray(embedding.vector) || embedding.vector.length !== dimensions
+    || stableVectorNorm(embedding.vector) === null) {
+    return { ok: false, code: 'embedding_dimension_probe_invalid' }
+  }
+  return { ok: true, dimensions }
 }
 
 export function validateReadyRetrievalIndex(result, requestedIdentity) {

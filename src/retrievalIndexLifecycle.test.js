@@ -6,6 +6,7 @@ import {
   createRetrievalIndexIdentity,
   normalizeLifecycleResult,
   stableVectorNorm,
+  validateEmbeddingDimensionProbe,
   validateReadyRetrievalIndex,
 } from './retrievalIndexLifecycle.js'
 
@@ -125,4 +126,34 @@ test('rejects every invalid one-to-one mapping and vector norm shape', () => {
   }
   assert.equal(Number.isFinite(stableVectorNorm([1e200, -1e200])), true)
   assert.equal(stableVectorNorm([0, 0]), null)
+})
+
+test('validates a single exact embedding dimension probe and rejects malformed or mismatched results', () => {
+  const expected = { providerId: 'siliconflow', modelId: 'BAAI/bge-m3' }
+  const valid = {
+    ok: true,
+    ...expected,
+    dimensions: 3,
+    embeddings: [{ index: 0, vector: [0.1, -0.2, 0.3] }],
+    provenance: expected,
+  }
+  assert.deepEqual(validateEmbeddingDimensionProbe(valid, expected), { ok: true, dimensions: 3 })
+  const invalidCases = [
+    ['missing', null, 'embedding_dimension_probe_failed'],
+    ['provider mismatch', { ...valid, providerId: 'other' }, 'embedding_dimension_probe_mismatch'],
+    ['model mismatch', { ...valid, modelId: 'other' }, 'embedding_dimension_probe_mismatch'],
+    ['provenance mismatch', { ...valid, provenance: { ...expected, modelId: 'other' } }, 'embedding_dimension_probe_mismatch'],
+    ['multiple embeddings', { ...valid, embeddings: [...valid.embeddings, { index: 1, vector: [0.1, 0.2, 0.3] }] }, 'embedding_dimension_probe_invalid'],
+    ['wrong index', { ...valid, embeddings: [{ index: 1, vector: [0.1, 0.2, 0.3] }] }, 'embedding_dimension_probe_invalid'],
+    ['dimension mismatch', { ...valid, embeddings: [{ index: 0, vector: [0.1, 0.2] }] }, 'embedding_dimension_probe_invalid'],
+    ['dimension over bound', { ...valid, dimensions: 16_385 }, 'embedding_dimension_probe_invalid'],
+    ['dimension string', { ...valid, dimensions: '3' }, 'embedding_dimension_probe_invalid'],
+    ['NaN vector', { ...valid, embeddings: [{ index: 0, vector: [0.1, Number.NaN, 0.3] }] }, 'embedding_dimension_probe_invalid'],
+    ['infinite vector', { ...valid, embeddings: [{ index: 0, vector: [0.1, Number.POSITIVE_INFINITY, 0.3] }] }, 'embedding_dimension_probe_invalid'],
+    ['zero vector', { ...valid, embeddings: [{ index: 0, vector: [0, 0, 0] }] }, 'embedding_dimension_probe_invalid'],
+  ]
+  for (const [label, result, code] of invalidCases) {
+    assert.deepEqual(validateEmbeddingDimensionProbe(result, expected), { ok: false, code }, label)
+  }
+  assert.deepEqual(validateEmbeddingDimensionProbe({ ok: false, code: 'authentication_failed' }, expected), { ok: false, code: 'authentication_failed' })
 })

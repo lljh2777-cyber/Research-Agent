@@ -52,8 +52,10 @@ import {
   DESKTOP_STORED_KEY,
   fetchProviderModels,
   loadProviderSessionKeys,
+  mergeDiscoveredProviderModels,
   providerCredentialEndpoints,
   PROVIDER_PRESETS,
+  retrievalModelRole,
   saveProviderSessionKeys,
 } from './providerConfig.js'
 import { getRuntimeAdapter } from './runtime/adapter.js'
@@ -314,7 +316,7 @@ function BailianThinkingSettings({ config, onUpdate }) {
   </section>
 }
 
-function ProvidersPage({ selectedId, configs, onChange }) {
+function ProvidersPage({ selectedId, configs, onChange, onConfigureRetrieval }) {
   const selected = API_PROVIDERS.find((provider) => provider.id === selectedId) || API_PROVIDERS[0]
   const SelectedIcon = selected.icon
   const config = configs[selected.id]
@@ -375,7 +377,7 @@ function ProvidersPage({ selectedId, configs, onChange }) {
     try {
       const result = await fetchProviderModels({ providerId: selected.id, endpoint: discoveryEndpoint, apiKey })
       const manualModels = config.models.filter((model) => model.manual && !result.models.some((remote) => remote.id === model.id))
-      const nextModels = [...result.models, ...manualModels]
+      const nextModels = [...mergeDiscoveredProviderModels(config.models, result.models), ...manualModels]
       const nextIds = new Set(nextModels.map((model) => model.id))
       const nextSelectedModelIds = config.selectedModelIds.filter((id) => nextIds.has(id))
       updateConfig({
@@ -455,7 +457,7 @@ function ProvidersPage({ selectedId, configs, onChange }) {
     {feedback && <div className={`provider-feedback ${feedback.type}`} role={feedback.type === 'error' ? 'alert' : 'status'}>{feedback.type === 'success' ? <CheckCircle2 size={15} /> : <Info size={15} />}<span>{feedback.message}</span></div>}
 
     <section className="provider-model-section">
-      <div className="provider-model-heading"><div><strong>Models</strong><small>{config.models.length ? `${config.selectedModelIds.length} added · ${config.models.length} discovered${config.lastFetchedAt ? ` · updated ${new Date(config.lastFetchedAt).toLocaleString()}` : ''}` : 'Fetch the live catalog, then choose which models appear in Research.'}</small></div><div className="provider-model-actions"><button className="settings-secondary-button" onClick={() => setShowManualModel((current) => !current)}><Plus size={14} />Add manually</button><button className="settings-primary-button" onClick={() => handleFetchModels('fetch')} disabled={modelsBusy || (selected.requiresKey && !hasApiKey)}><RefreshCw className={modelsBusy ? 'spin' : ''} size={14} />{modelsBusy ? 'Fetching…' : 'Fetch model list'}</button></div></div>
+      <div className="provider-model-heading"><div><strong>Models</strong><small>{config.models.length ? `${config.selectedModelIds.length} chat models added · ${config.models.length} discovered${config.lastFetchedAt ? ` · updated ${new Date(config.lastFetchedAt).toLocaleString()}` : ''}. Choose embedding and rerank models in Retrieval & Indexing.` : 'Fetch the live catalog, add chat models here, and configure retrieval models in Retrieval & Indexing.'}</small></div><div className="provider-model-actions"><button className="settings-secondary-button" onClick={() => setShowManualModel((current) => !current)}><Plus size={14} />Add manually</button><button className="settings-primary-button" onClick={() => handleFetchModels('fetch')} disabled={modelsBusy || (selected.requiresKey && !hasApiKey)}><RefreshCw className={modelsBusy ? 'spin' : ''} size={14} />{modelsBusy ? 'Fetching…' : 'Fetch model list'}</button></div></div>
       {showManualModel && <div className="provider-manual-model"><input value={manualModelId} onChange={(event) => setManualModelId(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') addManualModel() }} placeholder="Model ID, e.g. organization/model-name" autoFocus /><button className="settings-primary-button" onClick={addManualModel} disabled={!manualModelId.trim()}>Add model</button></div>}
       {config.models.length ? <div className="provider-model-catalog">
         <div className="provider-model-tools"><label className="settings-search"><Search size={14} /><input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder="Search discovered models…" /></label><button className="settings-text-button" onClick={selectAllChatModels}>Add all chat models</button></div>
@@ -464,7 +466,8 @@ function ProvidersPage({ selectedId, configs, onChange }) {
             const capabilityLabels = Object.entries(model.capabilities || {}).filter(([key, enabled]) => enabled && !['chat', 'embeddings'].includes(key)).map(([key]) => key === 'webSearch' ? 'web' : key)
             const endpointProfiles = selected.id === 'bailian' ? BAILIAN_ENDPOINT_PROFILES : DEEPSEEK_ENDPOINT_PROFILES
             const endpointLabels = (model.endpointTypes || []).map((endpointType) => endpointProfiles[endpointType]?.shortLabel).filter(Boolean)
-            return <div className={selectedIds.has(model.id) ? 'selected' : ''} key={model.id}><span className={`provider-model-kind ${model.kind}`}>{model.kind}</span><div><strong>{model.name}</strong><small>{model.id}{model.manual ? ' · manual' : ''}{capabilityLabels.length ? ` · ${capabilityLabels.join(' · ')}` : ''}</small>{endpointLabels.length > 0 && <span className="provider-model-endpoints">{endpointLabels.map((label) => <i key={label}>{label}</i>)}</span>}</div><button onClick={() => toggleModel(model.id)} disabled={model.kind !== 'chat'}>{selectedIds.has(model.id) ? 'Remove' : model.kind === 'chat' ? 'Add' : 'Not used yet'}</button></div>
+            const retrievalRole = retrievalModelRole(model)
+            return <div className={model.kind === 'chat' && selectedIds.has(model.id) ? 'selected' : ''} key={model.id}><span className={`provider-model-kind ${model.kind}`}>{model.kind}</span><div><strong>{model.name}</strong><small>{model.id}{model.manual ? ' · manual' : ''}{capabilityLabels.length ? ` · ${capabilityLabels.join(' · ')}` : ''}</small>{endpointLabels.length > 0 && <span className="provider-model-endpoints">{endpointLabels.map((label) => <i key={label}>{label}</i>)}</span>}</div>{model.kind === 'chat' ? <button onClick={() => toggleModel(model.id)}>{selectedIds.has(model.id) ? 'Remove' : 'Add'}</button> : retrievalRole ? <button onClick={onConfigureRetrieval}>Use in Retrieval</button> : <button disabled>Unsupported here</button>}</div>
           })}
           {!filteredModels.length && <div className="provider-model-no-results">No models match “{modelQuery}”.</div>}
         </div>
@@ -535,6 +538,8 @@ function RetrievalSettingsPage({ config, onSave, retrievalModels = [], retrieval
   const embeddingModels = retrievalModels.filter((model) => model.role === 'embedding')
   const rerankModels = retrievalModels.filter((model) => model.role === 'rerank')
   const embeddingEnabled = draft.embeddingModelId !== 'none'
+  const canInspectDimensions = retrievalIndexLifecycle?.reason === 'embedding_dimensions_unavailable'
+    && embeddingEnabled && config.remoteEmbeddingConsent === true
   const save = () => {
     if (embeddingEnabled && !draft.remoteEmbeddingConsent) {
       setFeedback('Review and accept the Vault-content transmission disclosure before enabling remote embeddings.')
@@ -576,7 +581,7 @@ function RetrievalSettingsPage({ config, onSave, retrievalModels = [], retrieval
         <button className="settings-secondary-button" type="button" onClick={onRefreshRetrievalIndex} disabled={!onRefreshRetrievalIndex || retrievalIndexLifecycle?.state === 'building'}><RefreshCw size={14} />Refresh status</button>
         {retrievalIndexLifecycle?.state === 'building'
           ? <button className="settings-secondary-button" type="button" onClick={onCancelRetrievalIndex}><span>Cancel build</span></button>
-          : <button className="settings-primary-button" type="button" onClick={retrievalIndexLifecycle?.state === 'ready' || retrievalIndexLifecycle?.state === 'stale' ? onRebuildRetrievalIndex : onBuildRetrievalIndex} disabled={!onBuildRetrievalIndex || retrievalIndexLifecycle?.state === 'unavailable'}>{retrievalIndexLifecycle?.state === 'ready' || retrievalIndexLifecycle?.state === 'stale' ? 'Rebuild index' : 'Build index'}</button>}
+          : <button className="settings-primary-button" type="button" onClick={retrievalIndexLifecycle?.state === 'ready' || retrievalIndexLifecycle?.state === 'stale' ? onRebuildRetrievalIndex : onBuildRetrievalIndex} disabled={!onBuildRetrievalIndex || (retrievalIndexLifecycle?.state === 'unavailable' && !canInspectDimensions)}>{retrievalIndexLifecycle?.state === 'ready' || retrievalIndexLifecycle?.state === 'stale' ? 'Rebuild index' : 'Build index'}</button>}
       </div>
       {retrievalIndexLifecycle?.reason && <small className="settings-muted-line">Reason: {retrievalIndexLifecycle.message}</small>}
     </section>
@@ -756,7 +761,7 @@ export default function SettingsWorkspace({ authStatus, authBusy, authError, mod
   const [selectedProviderId, setSelectedProviderId] = useState(API_PROVIDERS[0].id)
   let content
   if (activePage === 'subscription') content = <SubscriptionPage authStatus={authStatus} authBusy={authBusy} authError={authError} modelCatalog={modelCatalog} modelsBusy={modelsBusy} onConnect={onConnectChatgpt} onLogout={onLogoutChatgpt} onRefreshModels={onRefreshModels} />
-  else if (activePage === 'providers') content = <ProvidersPage selectedId={selectedProviderId} configs={providerConfigs} onChange={onSaveProviderConfigs} />
+  else if (activePage === 'providers') content = <ProvidersPage selectedId={selectedProviderId} configs={providerConfigs} onChange={onSaveProviderConfigs} onConfigureRetrieval={() => setActivePage('retrieval')} />
   else if (activePage === 'defaults') content = <DefaultModelsPage config={modelConfig} chatModels={chatModels} onSave={onSaveModelConfig} />
   else if (activePage === 'local-models') content = <LocalModelsPage />
   else if (activePage === 'mcp') content = <McpSettingsPage config={mcpConfig} onChange={onSaveMcpConfig} runtime={mcpRuntime} runtimeBusy={mcpRuntimeBusy} runtimeError={mcpRuntimeError} onConnectServer={onConnectMcpServer} onDisconnectServer={onDisconnectMcpServer} vaultNoteCount={vaultNoteCount} />

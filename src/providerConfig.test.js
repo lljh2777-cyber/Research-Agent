@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { createDefaultProviderConfigs, DESKTOP_STORED_KEY, fetchProviderModels, getProviderSessionKey, hydrateProviderSessionKeys, loadProviderSessionKeys, normalizeProviderConfigs, providerConfigsToModels, providerConfigsToRetrievalModels, providerCredentialEndpoints, saveProviderSessionKeys } from './providerConfig.js'
+import { createDefaultProviderConfigs, DESKTOP_STORED_KEY, fetchProviderModels, getProviderSessionKey, hydrateProviderSessionKeys, loadProviderSessionKeys, mergeDiscoveredProviderModels, normalizeProviderConfigs, providerConfigsToModels, providerConfigsToRetrievalModels, providerCredentialEndpoints, saveProviderSessionKeys, withProviderModelDimensions } from './providerConfig.js'
 
 test('hydrates and persists desktop provider keys through the narrow credential bridge', async () => {
   const credentials = new Map([['deepseek', 'desktop-secret']])
@@ -83,6 +83,21 @@ test('exposes only enabled, selected chat models to the application model picker
   }])
 })
 
+test('never persists retrieval models in chat selectedModelIds', () => {
+  const configs = normalizeProviderConfigs({
+    siliconflow: {
+      enabled: true,
+      models: [
+        { id: 'chat', kind: 'chat', capabilities: { chat: true } },
+        { id: 'embed', kind: 'embedding', capabilities: { embeddings: true } },
+        { id: 'rerank', kind: 'rerank', capabilities: { rerank: true } },
+      ],
+      selectedModelIds: ['chat', 'embed', 'rerank'],
+    },
+  })
+  assert.deepEqual(configs.siliconflow.selectedModelIds, ['chat'])
+})
+
 test('exposes discovered embedding and rerank models by normalized capability without hard-coded catalogs', () => {
   const configs = createDefaultProviderConfigs()
   configs.siliconflow = {
@@ -106,6 +121,31 @@ test('preserves account-visible embedding dimensions for exact index identity co
     models: [{ id: 'BAAI/bge-m3', name: 'BGE M3', kind: 'embedding', dimensions: 1024, capabilities: { embedding: true, embeddings: true } }],
   }
   assert.equal(providerConfigsToRetrievalModels(configs)[0].dimensions, 1024)
+})
+
+test('persists only safe embedding dimensions and preserves them across same-model catalog refresh', () => {
+  const configs = createDefaultProviderConfigs()
+  configs.siliconflow.models = [
+    { id: 'BAAI/bge-m3', name: 'BGE M3', kind: 'embedding', dimensions: 1024, capabilities: { embeddings: true } },
+    { id: 'same-id', name: 'Old embedding', kind: 'embedding', dimensions: 768, capabilities: { embeddings: true } },
+  ]
+  const updated = withProviderModelDimensions(configs, 'siliconflow', 'BAAI/bge-m3', 1536)
+  assert.equal(updated.siliconflow.models[0].dimensions, 1536)
+  assert.equal(withProviderModelDimensions(configs, 'siliconflow', 'BAAI/bge-m3', 0), null)
+  assert.equal(withProviderModelDimensions(configs, 'siliconflow', 'BAAI/bge-m3', '1024'), null)
+  assert.equal(withProviderModelDimensions(configs, 'siliconflow', 'missing', 1024), null)
+
+  const refreshed = mergeDiscoveredProviderModels(updated.siliconflow.models, [
+    { id: 'BAAI/bge-m3', name: 'BGE M3 refreshed', kind: 'embedding', capabilities: { embeddings: true } },
+    { id: 'same-id', name: 'Now chat', kind: 'chat', capabilities: { chat: true } },
+    { id: 'provider-dimension', name: 'Provider dimension', kind: 'embedding', dimensions: 2048, capabilities: { embeddings: true } },
+    { id: 'unsafe-dimension', name: 'Unsafe dimension', kind: 'embedding', dimensions: 20_000, capabilities: { embeddings: true } },
+  ])
+  assert.equal(refreshed[0].dimensions, 1536)
+  assert.equal('dimensions' in refreshed[1], false)
+  assert.equal(refreshed[2].dimensions, 2048)
+  assert.equal('dimensions' in refreshed[3], false)
+  assert.equal(normalizeProviderConfigs({ siliconflow: { models: refreshed } }).siliconflow.models[0].dimensions, 1536)
 })
 
 test('explains when the local provider adapter route is missing', async () => {
