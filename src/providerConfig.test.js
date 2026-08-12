@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { createDefaultProviderConfigs, DESKTOP_STORED_KEY, fetchProviderModels, getProviderSessionKey, hydrateProviderSessionKeys, loadProviderSessionKeys, normalizeProviderConfigs, providerConfigsToModels, providerCredentialEndpoints, saveProviderSessionKeys } from './providerConfig.js'
+import { createDefaultProviderConfigs, DESKTOP_STORED_KEY, fetchProviderModels, getProviderSessionKey, hydrateProviderSessionKeys, loadProviderSessionKeys, normalizeProviderConfigs, providerConfigsToModels, providerConfigsToRetrievalModels, providerCredentialEndpoints, saveProviderSessionKeys } from './providerConfig.js'
 
 test('hydrates and persists desktop provider keys through the narrow credential bridge', async () => {
   const credentials = new Map([['deepseek', 'desktop-secret']])
@@ -81,6 +81,22 @@ test('exposes only enabled, selected chat models to the application model picker
     discovered: true,
     capabilities: { chat: true },
   }])
+})
+
+test('exposes discovered embedding and rerank models by normalized capability without hard-coded catalogs', () => {
+  const configs = createDefaultProviderConfigs()
+  configs.siliconflow = {
+    ...configs.siliconflow,
+    models: [
+      { id: 'BAAI/bge-m3', name: 'BGE M3', kind: 'embedding', capabilities: { embedding: true, embeddings: true } },
+      { id: 'BAAI/bge-reranker-v2-m3', name: 'BGE Reranker', kind: 'rerank', capabilities: { rerank: true } },
+      { id: 'Qwen/Qwen3-8B', name: 'Qwen', kind: 'chat', capabilities: { chat: true } },
+    ],
+  }
+  assert.deepEqual(providerConfigsToRetrievalModels(configs).map(({ id, apiModelId, providerId, role }) => ({ id, apiModelId, providerId, role })), [
+    { id: 'siliconflow:BAAI/bge-m3', apiModelId: 'BAAI/bge-m3', providerId: 'siliconflow', role: 'embedding' },
+    { id: 'siliconflow:BAAI/bge-reranker-v2-m3', apiModelId: 'BAAI/bge-reranker-v2-m3', providerId: 'siliconflow', role: 'rerank' },
+  ])
 })
 
 test('explains when the local provider adapter route is missing', async () => {

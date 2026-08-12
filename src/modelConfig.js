@@ -52,6 +52,7 @@ export const DEFAULT_MODEL_CONFIG = {
   chunkOverlap: 120,
   hybridSearch: true,
   citations: true,
+  remoteEmbeddingConsent: false,
 }
 
 const STORAGE_KEY = 'bioresearch-os:model-config'
